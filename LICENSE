@@ -1,0 +1,40 @@
+ALIEN AI TRADER — PROPRIETARY SOFTWARE LICENSE
+Copyright (c) 2026 Troy Walker / T-Dub's Apps. All rights reserved.
+
+This software and all associated source code, documentation, and assets
+("the Software") are the exclusive intellectual property of Troy Walker
+/ T-Dub's Apps.
+
+PERMITTED USE
+  A valid purchased license grants the licensee the right to:
+  - Install and run one instance of the Software for personal or
+    business trading purposes.
+  - Modify configuration files (keys.bat, environment variables) for
+    their own deployment.
+
+RESTRICTIONS
+  The licensee may NOT:
+  - Copy, redistribute, resell, sublicense, or share the Software or
+    any portion of it with any third party without written permission.
+  - Reverse engineer, decompile, or create derivative works based on
+    the Software for commercial distribution.
+  - Remove or alter this license notice or any attribution tags within
+    the source files.
+  - Use the Software to build a competing product or service.
+
+NO WARRANTY
+  THE SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND.
+  THE AUTHOR SHALL NOT BE LIABLE FOR ANY TRADING LOSSES, DAMAGES, OR
+  FINANCIAL OUTCOMES RESULTING FROM USE OF THIS SOFTWARE. ALWAYS TEST
+  IN PAPER MODE BEFORE TRADING WITH REAL MONEY.
+
+PURCHASING A LICENSE
+  Contact: T-Dub's Apps
+  Licensing is handled via Stripe through the app's built-in
+  license activation system.
+
+UNAUTHORIZED USE
+  Unauthorized copying or distribution of this Software is a violation
+  of copyright law and may result in civil and criminal penalties.
+
+Built by Troy Walker of T-Dub's Apps -- 2026-04-23
