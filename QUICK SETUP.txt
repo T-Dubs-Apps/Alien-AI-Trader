@@ -1,0 +1,76 @@
+=====================================================
+  ALIEN AI TRADER -- QUICK SETUP GUIDE
+  Sent to you by Troy Walker / T-Dub's Apps
+=====================================================
+
+REQUIREMENTS
+------------
+- Windows 10 or 11
+- Python 3.10 or newer
+  Download free at: https://www.python.org/downloads/
+  (Check "Add Python to PATH" during install!)
+
+FIRST TIME SETUP (do this once)
+--------------------------------
+1. Unzip this folder anywhere on your PC
+2. Double-click:  SETUP.bat
+   - Creates a virtual environment
+   - Installs all required Python packages
+   - Creates your keys.bat file
+
+3. Open keys.bat in Notepad and fill in your API keys:
+
+   ALPACA_KEY        -- Get free at: https://alpaca.markets  (paper account is free)
+   ALPACA_SECRET     -- Same Alpaca account page
+   ALPHA_VANTAGE_KEY -- Get free at: https://www.alphavantage.co/support/#api-key
+   PUSHBULLET_TOKEN  -- Get free at: https://www.pushbullet.com (for phone alerts, optional)
+
+   OPTIONAL -- PUSHOVER (breaks Do Not Disturb on your phone):
+   Sign up FREE at https://pushover.net, create an app called "Alien AI Trader", then add:
+   PUSHOVER_TOKEN    -- your Pushover application API token
+   PUSHOVER_USER     -- your Pushover user key
+   Crash alerts REPEAT every 60 seconds until you tap acknowledge on your phone.
+
+   OPTIONAL -- TWILIO (AI voice call for after-hours crashes):
+   Sign up at https://www.twilio.com (free trial), then add:
+   TWILIO_ACCOUNT_SID   -- from your Twilio console
+   TWILIO_AUTH_TOKEN    -- from your Twilio console
+   TWILIO_FROM_NUMBER   -- your Twilio number e.g. +12065550100
+   TWILIO_TO_NUMBER     -- YOUR cell number e.g. +12065551234
+
+   OPTIONAL -- AFTER-HOURS PROTECTION thresholds:
+   AFTERHOURS_DROP_PCT  -- alert + auto stop-order trigger % (default 3)
+   ROCKET_ALERT_PCT     -- celebratory push when stock surges this % (default 5)
+
+   Save and close keys.bat when done.
+
+STARTING THE APP
+----------------
+Double-click:  start-alien-ai-trader.bat
+
+Then open your browser to:  http://localhost:5000
+
+USING THE TRADER
+----------------
+1. Go to the TRADE tab in the dashboard
+2. Set your Starting Capital $ (e.g. 100)
+3. Adjust Trailing Stop % (default 3%)
+4. Turn on "Scan Entire Market" to hunt all US stocks
+5. Click "Save & Push to AI Engine"
+6. Click "Start AI Trader" on the main panel
+7. Watch it scan, find rising stocks, buy, trail, and reinvest automatically
+
+TRADING MODES
+-------------
+- Paper mode (default, safe): uses fake money to test
+- Live mode: set TRADING_MODE=live and LIVE_TRADING_ENABLED=true in keys.bat
+  (only do this when you are ready to trade real money!)
+
+MORE INFO
+---------
+See README.md in this folder for the full explanation of how the AI works,
+including the trailing stop system, capital pool, and market scanning.
+
+=====================================================
+Built by Troy Walker of T-Dub's Apps -- 2026-04-22
+=====================================================

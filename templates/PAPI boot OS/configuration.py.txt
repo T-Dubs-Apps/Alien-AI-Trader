@@ -1,0 +1,31 @@
+# universal_ai/config.py
+from pydantic import BaseSettings, Field
+from typing import List, Optional
+
+class Settings(BaseSettings):
+    # API keys
+    openai_api_key: Optional[str] = None
+    anthropic_api_key: Optional[str] = None
+    google_api_key: Optional[str] = None
+    huggingface_token: Optional[str] = None
+
+    # Routing
+    default_models: List[str] = Field(
+        default=["openai:gpt-4o", "anthropic:claude-3-5-sonnet", "google:gemini-1.5-pro"]
+    )
+    max_tokens: int = 2048
+    temperature: float = 0.7
+
+    # Memory
+    enable_vector_memory: bool = True
+    vector_dim: int = 1536
+    memory_store_path: str = "data/memory.db"
+
+    # Server
+    host: str = "0.0.0.0"
+    port: int = 8000
+
+    class Config:
+        env_file = ".env"
+
+settings = Settings()

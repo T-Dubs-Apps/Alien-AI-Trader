@@ -1,0 +1,304 @@
+{
+  "ai-assistant-pro": {
+    "monthly": {
+      "priceId": "price_replace_me",
+      "mode": "subscription",
+      "billingType": "monthly",
+      "durationDays": 30,
+      "price": 19.99
+    }
+  },
+  "cortex-app-studio": {
+    "monthly": {
+      "priceId": "price_replace_me",
+      "mode": "subscription",
+      "billingType": "monthly",
+      "durationDays": 30,
+      "price": 29.99
+    }
+  },
+  "smart-ai-app-builder": {
+    "monthly": {
+      "priceId": "price_replace_me",
+      "mode": "subscription",
+      "billingType": "monthly",
+      "durationDays": 30,
+      "price": 19.99
+    }
+  },
+  "smart-ai-app": {
+    "monthly": {
+      "priceId": "price_replace_me",
+      "mode": "subscription",
+      "billingType": "monthly",
+      "durationDays": 30,
+      "price": 18.99
+    }
+  },
+  "automation-hub": {
+    "monthly": {
+      "priceId": "price_replace_me",
+      "mode": "subscription",
+      "billingType": "monthly",
+      "durationDays": 30,
+      "price": 19.99
+    }
+  },
+  "universal-live-editor": {
+    "monthly": {
+      "priceId": "price_replace_me",
+      "mode": "subscription",
+      "billingType": "monthly",
+      "durationDays": 30,
+      "price": 18.99
+    }
+  },
+  "intent-learner": {
+    "monthly": {
+      "priceId": "price_replace_me",
+      "mode": "subscription",
+      "billingType": "monthly",
+      "durationDays": 30,
+      "price": 18.99
+    }
+  },
+  "app-health-scanner": {
+    "monthly": {
+      "priceId": "price_replace_me",
+      "mode": "subscription",
+      "billingType": "monthly",
+      "durationDays": 30,
+      "price": 18.99
+    }
+  },
+  "app-integrity-scanner": {
+    "monthly": {
+      "priceId": "price_replace_me",
+      "mode": "subscription",
+      "billingType": "monthly",
+      "durationDays": 30,
+      "price": 18.99
+    }
+  },
+  "app-upgrader-pro": {
+    "monthly": {
+      "priceId": "price_replace_me",
+      "mode": "subscription",
+      "billingType": "monthly",
+      "durationDays": 30,
+      "price": 18.99
+    }
+  },
+  "call-sentry": {
+    "monthly": {
+      "priceId": "price_replace_me",
+      "mode": "subscription",
+      "billingType": "monthly",
+      "durationDays": 30,
+      "price": 18.99
+    }
+  },
+  "papiseyes": {
+    "monthly": {
+      "priceId": "price_replace_me",
+      "mode": "subscription",
+      "billingType": "monthly",
+      "durationDays": 30,
+      "price": 18.99
+    }
+  },
+  "aegis-security-suite": {
+    "annual": {
+      "priceId": "price_replace_me",
+      "mode": "payment",
+      "billingType": "one_time",
+      "durationDays": 365,
+      "price": 18.99
+    },
+    "ai-addon": {
+      "priceId": "price_replace_me",
+      "mode": "subscription",
+      "billingType": "monthly",
+      "durationDays": 30,
+      "price": 18.99
+    }
+  },
+  "aegis-enterprise": {
+    "annual": {
+      "priceId": "price_replace_me",
+      "mode": "payment",
+      "billingType": "one_time",
+      "durationDays": 365,
+      "price": 99.0
+    },
+    "ai-addon": {
+      "priceId": "price_replace_me",
+      "mode": "subscription",
+      "billingType": "monthly",
+      "durationDays": 30,
+      "price": 18.99
+    }
+  },
+  "key-controller": {
+    "one_time": {
+      "priceId": "price_replace_me",
+      "mode": "payment",
+      "billingType": "one_time",
+      "durationDays": 365,
+      "price": 9.99
+    }
+  },
+  "key-generator-pro": {
+    "one_time": {
+      "priceId": "price_replace_me",
+      "mode": "payment",
+      "billingType": "one_time",
+      "durationDays": 365,
+      "price": 9.99
+    }
+  },
+  "key-generator": {
+    "one_time": {
+      "priceId": "price_replace_me",
+      "mode": "payment",
+      "billingType": "one_time",
+      "durationDays": 365,
+      "price": 4.99
+    }
+  },
+  "secure-deploy-auth": {
+    "one_time": {
+      "priceId": "price_replace_me",
+      "mode": "payment",
+      "billingType": "one_time",
+      "durationDays": 365,
+      "price": 9.99
+    }
+  },
+  "file-arranger-pro": {
+    "one_time": {
+      "priceId": "price_replace_me",
+      "mode": "payment",
+      "billingType": "one_time",
+      "durationDays": 365,
+      "price": 9.99
+    }
+  },
+  "code-cargo": {
+    "one_time": {
+      "priceId": "price_replace_me",
+      "mode": "payment",
+      "billingType": "one_time",
+      "durationDays": 365,
+      "price": 9.99
+    }
+  },
+  "stripe-setup": {
+    "one_time": {
+      "priceId": "price_replace_me",
+      "mode": "payment",
+      "billingType": "one_time",
+      "durationDays": 365,
+      "price": 4.99
+    }
+  },
+  "link-generator": {
+    "one_time": {
+      "priceId": "price_replace_me",
+      "mode": "payment",
+      "billingType": "one_time",
+      "durationDays": 365,
+      "price": 4.99
+    }
+  },
+  "trial-link-generator": {
+    "one_time": {
+      "priceId": "price_replace_me",
+      "mode": "payment",
+      "billingType": "one_time",
+      "durationDays": 365,
+      "price": 4.99
+    }
+  },
+  "trial-activate": {
+    "one_time": {
+      "priceId": "price_replace_me",
+      "mode": "payment",
+      "billingType": "one_time",
+      "durationDays": 365,
+      "price": 4.99
+    }
+  },
+  "health-monitor": {
+    "one_time": {
+      "priceId": "price_replace_me",
+      "mode": "payment",
+      "billingType": "one_time",
+      "durationDays": 365,
+      "price": 4.99
+    }
+  },
+  "cortex-desktop-bridge": {
+    "one_time": {
+      "priceId": "price_replace_me",
+      "mode": "payment",
+      "billingType": "one_time",
+      "durationDays": 365,
+      "price": 9.99
+    }
+  },
+  "no-knowledge-kit": {
+    "one_time": {
+      "priceId": "price_replace_me",
+      "mode": "payment",
+      "billingType": "one_time",
+      "durationDays": 365,
+      "price": 19.99
+    }
+  },
+  "licenses": {
+    "free": {
+      "priceId": "",
+      "mode": "free",
+      "billingType": "free",
+      "durationDays": 0,
+      "price": 0
+    }
+  },
+  "landing": {
+    "free": {
+      "priceId": "",
+      "mode": "free",
+      "billingType": "free",
+      "durationDays": 0,
+      "price": 0
+    }
+  },
+  "index": {
+    "free": {
+      "priceId": "",
+      "mode": "free",
+      "billingType": "free",
+      "durationDays": 0,
+      "price": 0
+    }
+  },
+  "success": {
+    "free": {
+      "priceId": "",
+      "mode": "free",
+      "billingType": "free",
+      "durationDays": 0,
+      "price": 0
+    }
+  },
+  "cancel": {
+    "free": {
+      "priceId": "",
+      "mode": "free",
+      "billingType": "free",
+      "durationDays": 0,
+      "price": 0
+    }
+  }
+}

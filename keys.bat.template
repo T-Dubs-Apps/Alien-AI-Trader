@@ -1,0 +1,81 @@
+@echo off
+:: ═══════════════════════════════════════════════════════════════
+::  ALIEN AI TRADER — YOUR PERSONAL API KEYS
+::  Copy this file to  keys.bat  and fill in your keys.
+::  keys.bat is gitignored so it NEVER gets uploaded to GitHub.
+::
+::  HOW TO GET YOUR KEYS:
+::   Alpaca (trading):     https://app.alpaca.markets
+::                         Account → Paper Trading → API Keys  (practice)
+::                         Account → Live Trading  → API Keys  (real money)
+::   Alpha Vantage (data): https://alphavantage.co → Get Free API Key
+::   Pushbullet (alerts):  https://www.pushbullet.com/#settings/account
+::                         (optional - only needed for phone notifications)
+:: ═══════════════════════════════════════════════════════════════
+
+set ALPACA_KEY=YOUR_ALPACA_KEY_HERE
+set ALPACA_SECRET=YOUR_ALPACA_SECRET_HERE
+set ALPHA_VANTAGE_KEY=YOUR_ALPHA_VANTAGE_KEY_HERE
+set AV_KEY=%ALPHA_VANTAGE_KEY%
+set PUSHBULLET_TOKEN=YOUR_PUSHBULLET_TOKEN_HERE
+
+:: ─────────────────────────────────────────────────────────────
+::  TRADING MODE
+::
+::    paper = practice only, no real money (default, safe to start here)
+::    live  = REAL MONEY will be traded
+::
+::  Both TRADING_MODE and LIVE_TRADING_ENABLED must be changed
+::  together — this is a deliberate double safety gate.
+:: ─────────────────────────────────────────────────────────────
+set TRADING_MODE=paper
+set LIVE_TRADING_ENABLED=false
+
+:: ─────────────────────────────────────────────────────────────
+::  TO SWITCH TO REAL MONEY TRADING:
+::
+::    Step 1.  Fund your Alpaca brokerage account at alpaca.markets
+::    Step 2.  Go to Account → Live Trading → API Keys
+::             (these are DIFFERENT keys from your Paper Trading keys)
+::    Step 3.  Replace ALPACA_KEY and ALPACA_SECRET above with
+::             your LIVE keys
+::    Step 4.  Change:  set TRADING_MODE=live
+::    Step 5.  Change:  set LIVE_TRADING_ENABLED=true
+::
+::  Alpaca requires a funded account and approved brokerage status
+::  before live keys will work.
+:: ─────────────────────────────────────────────────────────────
+
+:: ─────────────────────────────────────────────────────────────
+::  STOCKS TO MONITOR (comma-separated, no spaces between tickers)
+::  Add or remove any US stock symbols you want the engine to watch.
+:: ─────────────────────────────────────────────────────────────
+set STOCK_LIST=AAPL,GOOG,TSLA,MSFT,AMZN
+set ENGINE_MODE=AI
+
+:: ─────────────────────────────────────────────────────────────
+::  PUSHOVER (DND-breaking push alerts)
+::  Sign up FREE at https://pushover.net
+::  Create an Application called "Alien AI Trader"
+::  Crash alerts REPEAT every 60 seconds until you tap acknowledge.
+:: ─────────────────────────────────────────────────────────────
+set PUSHOVER_TOKEN=YOUR_PUSHOVER_APP_TOKEN_HERE
+set PUSHOVER_USER=YOUR_PUSHOVER_USER_KEY_HERE
+
+:: ─────────────────────────────────────────────────────────────
+::  TWILIO (AI voice calls your phone during after-hours crashes)
+::  Sign up at https://www.twilio.com (free trial available)
+:: ─────────────────────────────────────────────────────────────
+set TWILIO_ACCOUNT_SID=YOUR_TWILIO_ACCOUNT_SID_HERE
+set TWILIO_AUTH_TOKEN=YOUR_TWILIO_AUTH_TOKEN_HERE
+set TWILIO_FROM_NUMBER=+1XXXXXXXXXX
+set TWILIO_TO_NUMBER=+1XXXXXXXXXX
+
+:: ─────────────────────────────────────────────────────────────
+::  AFTER-HOURS + ALERT THRESHOLDS
+:: ─────────────────────────────────────────────────────────────
+set AFTERHOURS_DROP_PCT=3
+set ROCKET_ALERT_PCT=5
+
+:: Built by Troy Walker of T-Dub's Apps -- 2026-04-23
+

@@ -1,0 +1,23 @@
+# universal_ai/core/orchestrator.py
+from universal_ai.providers.openai_provider import OpenAIProvider
+from universal_ai.providers.anthropic_provider import AnthropicProvider
+from universal_ai.providers.gemini_provider import GeminiProvider
+from universal_ai.core.router import Router
+from universal_ai.core.memory import MemoryStore
+from universal_ai.core.tools import ToolRegistry, calculator, keyword_extract
+from universal_ai.config import settings
+
+def build_system():
+    models = [
+        OpenAIProvider("gpt-4o", settings.openai_api_key),
+        AnthropicProvider("claude-3-5-sonnet", settings.anthropic_api_key),
+        GeminiProvider("gemini-1.5-pro", settings.google_api_key),
+    ]
+    router = Router(models=models)
+    memory = MemoryStore(settings.memory_store_path)
+
+    tools = ToolRegistry()
+    tools.register("calculator", calculator)
+    tools.register("keyword_extract", keyword_extract)
+
+    return router, memory, tools

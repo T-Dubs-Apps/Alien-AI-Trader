@@ -1,0 +1,24 @@
+# universal_ai/core/tools.py
+from typing import Dict, Any
+
+class ToolRegistry:
+    def __init__(self):
+        self.tools = {}
+
+    def register(self, name: str, fn):
+        self.tools[name] = fn
+
+    def call(self, name: str, **kwargs) -> Dict[str, Any]:
+        if name not in self.tools:
+            return {"error": f"Tool {name} not found"}
+        try:
+            return {"result": self.tools[name](**kwargs)}
+        except Exception as e:
+            return {"error": str(e)}
+
+# Example tools
+def calculator(expression: str) -> float:
+    return eval(expression, {"__builtins__": {}}, {})
+
+def keyword_extract(text: str) -> list[str]:
+    return sorted(set(w.lower() for w in text.split()))

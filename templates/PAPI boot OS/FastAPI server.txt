@@ -1,0 +1,29 @@
+# universal_ai/api/server.py
+from fastapi import FastAPI
+from pydantic import BaseModel
+import uvicorn
+from universal_ai.core.orchestrator import build_system
+from universal_ai.core.agent import Agent
+from universal_ai.config import settings
+
+app = FastAPI(title="Universal AI")
+router, memory, tools = build_system()
+
+class ChatRequest(BaseModel):
+    session_id: str
+    message: str
+    temperature: float | None = None
+    max_tokens: int | None = None
+
+@app.post("/chat")
+def chat(req: ChatRequest):
+    agent = Agent(router=router, memory=memory, tools=tools, session_id=req.session_id)
+    result = agent.chat(
+        req.message,
+        temperature=req.temperature or settings.temperature,
+        max_tokens=req.max_tokens or settings.max_tokens,
+    )
+    return result
+
+if __name__ == "__main__":
+    uvicorn.run(app, host=settings.host, port=settings.port)

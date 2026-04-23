@@ -1,0 +1,41 @@
+# universal_ai/core/memory.py
+from typing import Dict, List, Optional
+import sqlite3
+import json
+import os
+
+class MemoryStore:
+    def __init__(self, path: str = "data/memory.db"):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        self.conn = sqlite3.connect(path)
+        self._init()
+
+    def _init(self):
+        cur = self.conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS memories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT,
+                role TEXT,
+                content TEXT,
+                meta TEXT
+            )
+        """)
+        self.conn.commit()
+
+    def add(self, session_id: str, role: str, content: str, meta: Optional[Dict] = None):
+        cur = self.conn.cursor()
+        cur.execute(
+            "INSERT INTO memories (session_id, role, content, meta) VALUES (?, ?, ?, ?)",
+            (session_id, role, content, json.dumps(meta or {}))
+        )
+        self.conn.commit()
+
+    def get(self, session_id: str, limit: int = 50) -> List[Dict]:
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT role, content, meta FROM memories WHERE session_id=? ORDER BY id DESC LIMIT ?",
+            (session_id, limit)
+        )
+        rows = cur.fetchall()
+        return [{"role": r, "content": c, "meta": json.loads(m)} for r, c, m in rows][::-1]

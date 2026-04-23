@@ -1,0 +1,34 @@
+# universal_ai/core/agent.py
+from typing import List, Dict, Optional
+from universal_ai.core.router import Router
+from universal_ai.core.memory import MemoryStore
+from universal_ai.core.tools import ToolRegistry
+
+SYSTEM_PROMPT = (
+    "You are a universal AI agent. Use tools when helpful, "
+    "cite reasoning succinctly, and ask clarifying questions when needed."
+)
+
+class Agent:
+    def __init__(self, router: Router, memory: MemoryStore, tools: ToolRegistry, session_id: str):
+        self.router = router
+        self.memory = memory
+        self.tools = tools
+        self.session_id = session_id
+
+    def _build_messages(self, user_input: str) -> List[Dict]:
+        history = self.memory.get(self.session_id, limit=30)
+        return [{"role": "system", "content": SYSTEM_PROMPT}] + history + [{"role": "user", "content": user_input}]
+
+    def _postprocess(self, results: List[Dict]) -> Dict:
+        # Simple “best pick” by length; replace with scoring, majority vote, or evaluator model
+        best = max((r for r in results if "content" in r), key=lambda r: len(r["content"]), default=results[0])
+        return {"best": best, "all": results}
+
+    def chat(self, user_input: str, **kwargs) -> Dict:
+        self.memory.add(self.session_id, "user", user_input)
+        messages = self._build_messages(user_input)
+        results = self.router.generate(messages, **kwargs)
+        choice = self._postprocess(results)
+        self.memory.add(self.session_id, "assistant", choice["best"].get("content", str(choice["best"])))
+        return choice

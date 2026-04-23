@@ -1,0 +1,4 @@
+[autorun]
+label=Alien AI Trader
+open=DISC_SETUP.bat
+action=Install Alien AI Trader

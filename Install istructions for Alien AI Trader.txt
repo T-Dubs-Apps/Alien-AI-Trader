@@ -1,0 +1,15 @@
+Zip for sending:
+
+E:\Users\troyw\Desktop\Alien AI Trader for Win.zip — 29 KB compressed, ready to attach to an email.
+
+Your brother's workflow: 
+
+1) Install Python, 
+
+2) Unzip,
+
+3) Run SETUP.bat once, 
+
+4) Fill in config.json with his Alpaca/Alpha Vantage keys, 
+
+5) Double-click the Desktop shortcut.
