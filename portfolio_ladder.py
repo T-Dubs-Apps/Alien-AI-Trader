@@ -459,17 +459,35 @@ def integrate_ladder_with_engine(engine, ladder_scanner: PortfolioLadderScanner)
     """
     Patches the engine's _get_signal method to gate buy signals
     through the ladder scanner. Only TOP_TIER symbols can generate
-    a BUY verdict — everything else is held to HOLD even if the
-    raw signal says BUY.
+    a BUY verdict — everything else is downgraded to HOLD even if
+    the raw signal says BUY.
 
     Call this AFTER creating both engine and scanner:
 
         scanner = PortfolioLadderScanner(symbols, engine=engine)
         integrate_ladder_with_engine(engine, scanner)
+
+    Fix note: _get_signal is a bound instance method, so we must
+    store it as a bound method reference (engine._get_signal) and
+    replace it on the instance -- NOT on the class -- using a
+    wrapper that accepts the same (self, symbol) signature via
+    a closure over the bound original. This avoids the
+    "takes 1 positional argument but 2 were given" error that
+    occurs when Python passes the instance as the first arg to
+    a plain function assigned as an instance attribute.
     """
+    # Store the BOUND method -- already has 'self' baked in
+    # so calling original_get_signal(symbol) works correctly.
     original_get_signal = engine._get_signal
 
-    def ladder_gated_signal(symbol: str) -> dict:
+    import types
+
+    def ladder_gated_signal(self_ref, symbol: str) -> dict:
+        """
+        Wrapper with correct (self, symbol) signature for instance method binding.
+        self_ref is the engine instance -- we ignore it and use the closure instead.
+        """
+        # Call original bound method -- no need to pass self_ref
         signal = original_get_signal(symbol)
 
         # Only allow BUY if the ladder confirms this symbol is TOP tier
@@ -478,7 +496,7 @@ def integrate_ladder_with_engine(engine, ladder_scanner: PortfolioLadderScanner)
                 ladder_entry = ladder_scanner._ladder.get(symbol.upper())
                 tier  = ladder_entry.tier  if ladder_entry else "UNKNOWN"
                 score = ladder_entry.score if ladder_entry else 0.0
-                signal["verdict"] = "HOLD"
+                signal["verdict"]        = "HOLD"
                 signal["ladder_blocked"] = True
                 signal["ladder_tier"]    = tier
                 signal["ladder_score"]   = score
@@ -486,13 +504,14 @@ def integrate_ladder_with_engine(engine, ladder_scanner: PortfolioLadderScanner)
         # Inject ladder data into signal for dashboard display
         if symbol.upper() in ladder_scanner._ladder:
             entry = ladder_scanner._ladder[symbol.upper()]
-            signal["ladder_score"] = entry.score
-            signal["ladder_tier"]  = entry.tier
+            signal["ladder_score"]    = entry.score
+            signal["ladder_tier"]     = entry.tier
             signal["score_breakdown"] = entry.score_breakdown
 
         return signal
 
-    engine._get_signal = ladder_gated_signal
+    # Bind the wrapper as a proper instance method on the engine object
+    engine._get_signal = types.MethodType(ladder_gated_signal, engine)
     logger.info(f"[LADDER] Integrated with engine. {len(ladder_scanner.symbols)} symbols "
                 f"will be ladder-gated on every scan cycle.")
 
