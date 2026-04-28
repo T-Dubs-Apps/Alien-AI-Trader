@@ -147,7 +147,11 @@ class TradingEngine:
         self._capital_hwm = self.initial_capital   # highest total portfolio value ever seen
 
         # Dashboard heartbeat (optional)
-        self.dashboard_base_url = os.environ.get("DASHBOARD_BASE_URL", "").rstrip("/")
+        # Accept either DASHBOARD_BASE_URL or DASHBOARD_URL for flexibility
+        self.dashboard_base_url = (
+            os.environ.get("DASHBOARD_BASE_URL") or
+            os.environ.get("DASHBOARD_URL") or ""
+        ).rstrip("/")
         self.heartbeat_path = os.environ.get("HEARTBEAT_PATH", "/api/worker/heartbeat")
         self.heartbeat_every = int(os.environ.get("HEARTBEAT_EVERY_SECONDS", "10"))
         self._last_heartbeat = 0
@@ -614,6 +618,20 @@ class TradingEngine:
         if not holding:
             # Only enter if we have an open position slot
             if signal["verdict"] == "BUY" and len(self.current_holdings) < self.max_positions:
+                # Check ladder approval if scanner is attached
+                # is_ladder_approved is attached by integrate_ladder_with_engine()
+                ladder_check = getattr(self, 'is_ladder_approved', None)
+                if ladder_check and not ladder_check(symbol):
+                    entry = getattr(self, 'ladder_scanner', None)
+                    score = entry._ladder.get(symbol.upper()) if entry else None
+                    tier  = score.tier if score else 'UNKNOWN'
+                    sc    = score.score if score else 0.0
+                    signal["verdict"]        = "HOLD"
+                    signal["ladder_blocked"] = True
+                    signal["ladder_tier"]    = tier
+                    signal["ladder_score"]   = sc
+                    return  # Skip buy -- not in top ladder tier
+
                 if self.initial_capital > 0:
                     if self._available_capital >= price:
                         self.buy(symbol, price, signal=signal)

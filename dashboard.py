@@ -24,8 +24,19 @@ allowed_origins = os.environ.get("ALLOWED_ORIGINS", "*")
 origins = [o.strip() for o in allowed_origins.split(",")] if allowed_origins else ["*"]
 CORS(app, resources={r"/api/*": {"origins": origins}})
 
-# WebSocket via SocketIO (async_mode=threading for Render/gunicorn compatibility)
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading", logger=False, engineio_logger=False)
+# WebSocket via SocketIO
+# gevent mode required for Render/gunicorn production deployment.
+# Uses gevent which is already in requirements.txt.
+_async_mode = os.environ.get("SOCKETIO_ASYNC_MODE", "gevent")
+socketio = SocketIO(
+    app,
+    cors_allowed_origins="*",
+    async_mode=_async_mode,
+    logger=False,
+    engineio_logger=False,
+    ping_timeout=60,
+    ping_interval=25,
+)
 
 # License routes
 register_license_routes(app)

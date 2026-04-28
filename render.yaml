@@ -1,13 +1,16 @@
 services:
-  # ── Web Dashboard ──────────────────────────────────────────────────────────
+  # -- Web Dashboard -------------------------------------------------------
   - type: web
     name: alien-ai-trader-dashboard
     runtime: python
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn --worker-class gthread --workers 1 --threads 4 --bind 0.0.0.0:$PORT dashboard:app
+    # gevent worker class is REQUIRED for Socket.IO WebSocket support.
+    # gthread does not support WebSockets and will break live dashboard updates.
+    startCommand: gunicorn --worker-class gevent --workers 1 --bind 0.0.0.0:$PORT dashboard:app
     envVars:
       - key: FLASK_SECRET
         generateValue: true
+      # -- API Keys (set manually in Render dashboard) ----------------------
       - key: ALPACA_KEY
         sync: false
       - key: ALPACA_SECRET
@@ -28,24 +31,25 @@ services:
         sync: false
       - key: TWILIO_TO_NUMBER
         sync: false
+      # -- Trading mode -----------------------------------------------------
       - key: TRADING_MODE
         value: paper
       - key: LIVE_TRADING_ENABLED
         value: "false"
-      - key: STOCK_LIST
-        value: AAPL,GOOG,TSLA,MSFT,AMZN
       - key: ENGINE_MODE
         value: AI
+      # -- Stock list -------------------------------------------------------
+      - key: STOCK_LIST
+        value: AAPL,GOOG,TSLA,MSFT,AMZN
+      # -- Scan & execution -------------------------------------------------
       - key: POLL_SECONDS
         value: "15"
       - key: SCAN_WORKERS
-        value: "8"
+        value: "12"
       - key: TRAILING_STOP_PCT
         value: "3.0"
       - key: LOSS_THRESHOLD
         value: "5.0"
-      - key: INITIAL_CAPITAL
-        value: "0"
       - key: MAX_POSITIONS
         value: "5"
       - key: SCAN_ALL_MARKET
@@ -56,6 +60,34 @@ services:
         value: "30"
       - key: ORDER_QTY
         value: "1"
+      # -- Capital & position sizing (NEW) ----------------------------------
+      - key: INITIAL_CAPITAL
+        value: "0"
+      - key: RISK_PER_TRADE_PCT
+        value: "2.0"
+      - key: MAX_POSITION_PCT
+        value: "20.0"
+      - key: MIN_POSITIONS
+        value: "5"
+      - key: RISK_PER_TRADE_USD
+        value: "0"
+      # -- Signal filters (NEW) ---------------------------------------------
+      - key: RSI_BUY_MAX
+        value: "50.0"
+      - key: RSI_SELL_MIN
+        value: "70.0"
+      - key: SMA_SPREAD_MIN
+        value: "0.1"
+      # -- Portfolio ladder (NEW) -------------------------------------------
+      - key: LADDER_INTERVAL
+        value: "60"
+      - key: MIN_SCORE_TO_BUY
+        value: "45.0"
+      - key: TOP_TIER_PCT
+        value: "0.20"
+      - key: BOTTOM_TIER_PCT
+        value: "0.20"
+      # -- Alerts & heartbeat -----------------------------------------------
       - key: AFTERHOURS_DROP_PCT
         value: "3"
       - key: ROCKET_ALERT_PCT
@@ -67,13 +99,14 @@ services:
       - key: ALLOWED_ORIGINS
         value: "*"
 
-  # ── Background Worker ───────────────────────────────────────────────────────
+  # -- Background Worker ---------------------------------------------------
   - type: worker
     name: alien-ai-trader-worker
     runtime: python
     buildCommand: pip install -r requirements.txt
     startCommand: python worker.py
     envVars:
+      # -- API Keys (set manually in Render dashboard) ----------------------
       - key: ALPACA_KEY
         sync: false
       - key: ALPACA_SECRET
@@ -94,24 +127,25 @@ services:
         sync: false
       - key: TWILIO_TO_NUMBER
         sync: false
+      # -- Trading mode -----------------------------------------------------
       - key: TRADING_MODE
         value: paper
       - key: LIVE_TRADING_ENABLED
         value: "false"
-      - key: STOCK_LIST
-        value: AAPL,GOOG,TSLA,MSFT,AMZN
       - key: ENGINE_MODE
         value: AI
+      # -- Stock list -------------------------------------------------------
+      - key: STOCK_LIST
+        value: AAPL,GOOG,TSLA,MSFT,AMZN
+      # -- Scan & execution -------------------------------------------------
       - key: POLL_SECONDS
         value: "15"
       - key: SCAN_WORKERS
-        value: "8"
+        value: "12"
       - key: TRAILING_STOP_PCT
         value: "3.0"
       - key: LOSS_THRESHOLD
         value: "5.0"
-      - key: INITIAL_CAPITAL
-        value: "0"
       - key: MAX_POSITIONS
         value: "5"
       - key: SCAN_ALL_MARKET
@@ -122,11 +156,42 @@ services:
         value: "30"
       - key: ORDER_QTY
         value: "1"
+      # -- Capital & position sizing (NEW) ----------------------------------
+      - key: INITIAL_CAPITAL
+        value: "0"
+      - key: RISK_PER_TRADE_PCT
+        value: "2.0"
+      - key: MAX_POSITION_PCT
+        value: "20.0"
+      - key: MIN_POSITIONS
+        value: "5"
+      - key: RISK_PER_TRADE_USD
+        value: "0"
+      # -- Signal filters (NEW) ---------------------------------------------
+      - key: RSI_BUY_MAX
+        value: "50.0"
+      - key: RSI_SELL_MIN
+        value: "70.0"
+      - key: SMA_SPREAD_MIN
+        value: "0.1"
+      # -- Portfolio ladder (NEW) -------------------------------------------
+      - key: LADDER_INTERVAL
+        value: "60"
+      - key: MIN_SCORE_TO_BUY
+        value: "45.0"
+      - key: TOP_TIER_PCT
+        value: "0.20"
+      - key: BOTTOM_TIER_PCT
+        value: "0.20"
+      # -- Worker runtime ---------------------------------------------------
+      - key: RUN_SECONDS
+        value: "21540"
       - key: AFTERHOURS_DROP_PCT
         value: "3"
       - key: ROCKET_ALERT_PCT
         value: "5"
+      # -- Dashboard connection (CRITICAL - worker posts heartbeats here) ---
       - key: DASHBOARD_BASE_URL
-        sync: false
+        value: https://alien-ai-trader-dashboard.onrender.com
 
-# Built by Troy Walker of T-Dub's Apps -- 2026-04-23
+# Built by Troy Walker of T-Dub's Apps -- 2026-04-28
