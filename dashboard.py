@@ -47,13 +47,26 @@ _ai_trader_enabled = True
 
 # Live trading settings — the engine polls this endpoint every cycle
 _trading_settings: dict = {
-    "poll_seconds":       int(os.environ.get("POLL_SECONDS",       "15")),
-    "trailing_stop_pct":  float(os.environ.get("TRAILING_STOP_PCT", "3.0")),
-    "loss_threshold":     float(os.environ.get("LOSS_THRESHOLD",   "5.0")),
-    "max_trades_per_hour":int(os.environ.get("MAX_TRADES_PER_HOUR","30")),
-    "scan_all_market":    os.environ.get("SCAN_ALL_MARKET", "false").lower() == "true",
-    "max_positions":      int(os.environ.get("MAX_POSITIONS",      "5")),
-    "initial_capital":    float(os.environ.get("INITIAL_CAPITAL",  "0")),
+    # ── Core scan / execution settings ──────────────────────────────────────
+    "poll_seconds":        int(os.environ.get("POLL_SECONDS",        "15")),
+    "trailing_stop_pct":   float(os.environ.get("TRAILING_STOP_PCT", "3.0")),
+    "loss_threshold":      float(os.environ.get("LOSS_THRESHOLD",    "5.0")),
+    "max_trades_per_hour": int(os.environ.get("MAX_TRADES_PER_HOUR", "30")),
+    "scan_all_market":     os.environ.get("SCAN_ALL_MARKET", "false").lower() == "true",
+    "max_positions":       int(os.environ.get("MAX_POSITIONS",       "5")),
+    "initial_capital":     float(os.environ.get("INITIAL_CAPITAL",   "0")),
+    # ── Position sizing / risk controls ─────────────────────────────────────
+    # These scale automatically to whatever INITIAL_CAPITAL the user sets.
+    # A user with $100 gets small trades; a user with $50,000 gets larger ones.
+    # All values are adjustable live from the dashboard without restarting.
+    "risk_per_trade_pct":  float(os.environ.get("RISK_PER_TRADE_PCT",  "2.0")),   # % of capital per trade
+    "max_position_pct":    float(os.environ.get("MAX_POSITION_PCT",    "20.0")),  # % max in one stock
+    "min_positions":       int(os.environ.get("MIN_POSITIONS",         "5")),     # min spread across N stocks
+    "risk_per_trade_usd":  float(os.environ.get("RISK_PER_TRADE_USD",  "0")),     # hard $ cap (0=off)
+    # ── Signal quality filters ───────────────────────────────────────────────
+    "rsi_buy_max":         float(os.environ.get("RSI_BUY_MAX",    "50.0")),  # RSI must be below this to BUY
+    "rsi_sell_min":        float(os.environ.get("RSI_SELL_MIN",   "70.0")),  # RSI must be above this to SELL
+    "sma_spread_min":      float(os.environ.get("SMA_SPREAD_MIN", "0.1")),   # min SMA20/50 spread % for signal
 }
 
 # In-memory notifications log
@@ -127,18 +140,24 @@ def worker_heartbeat():
     try:
         payload = request.json or {}
         _worker_status.update({
-            "running":     bool(payload.get("running", True)),
-            "mode":        payload.get("mode",       _worker_status.get("mode")),
-            "stocks":      payload.get("stock_list", payload.get("stocks", _worker_status.get("stocks"))),
-            "profit":      payload.get("profit",     _worker_status.get("profit")),
-            "positions":   payload.get("positions",  _worker_status.get("positions")),
-            "signals":     payload.get("signals",    _worker_status.get("signals")),
-            "trade_count": payload.get("trade_count",_worker_status.get("trade_count")),
-            "capital":     payload.get("capital",    _worker_status.get("capital")),
-            "trailing_stop_pct": payload.get("trailing_stop_pct", _worker_status.get("trailing_stop_pct")),
-            "scan_all_market":   payload.get("scan_all_market",   _worker_status.get("scan_all_market")),
-            "max_positions":     payload.get("max_positions",     _worker_status.get("max_positions")),
-            "message":     payload.get("message", "ok"),
+            "running":      bool(payload.get("running", True)),
+            "mode":         payload.get("mode",        _worker_status.get("mode")),
+            "stocks":       payload.get("stock_list",  payload.get("stocks", _worker_status.get("stocks"))),
+            "profit":       payload.get("profit",      _worker_status.get("profit")),
+            "positions":    payload.get("positions",   _worker_status.get("positions")),
+            "signals":      payload.get("signals",     _worker_status.get("signals")),
+            "trade_count":  payload.get("trade_count", _worker_status.get("trade_count")),
+            "capital":      payload.get("capital",     _worker_status.get("capital")),
+            "trailing_stop_pct":    payload.get("trailing_stop_pct",    _worker_status.get("trailing_stop_pct")),
+            "loss_threshold":       payload.get("loss_threshold",       _worker_status.get("loss_threshold")),
+            "scan_all_market":      payload.get("scan_all_market",      _worker_status.get("scan_all_market")),
+            "max_positions":        payload.get("max_positions",        _worker_status.get("max_positions")),
+            "min_positions":        payload.get("min_positions",        _worker_status.get("min_positions")),
+            # New: live/paper mode status and risk settings snapshot from engine
+            "trading_mode":         payload.get("trading_mode",         _worker_status.get("trading_mode")),
+            "live_trading_enabled": payload.get("live_trading_enabled", _worker_status.get("live_trading_enabled", False)),
+            "risk_settings":        payload.get("risk_settings",        _worker_status.get("risk_settings", {})),
+            "message":      payload.get("message", "ok"),
             "last_heartbeat": int(time.time()),
         })
         # Push live worker status to all browser clients
@@ -401,8 +420,13 @@ def update_trading_settings():
     global _trading_settings
     payload = request.json or {}
     allowed = {
+        # Core execution
         "poll_seconds", "trailing_stop_pct", "loss_threshold",
         "max_trades_per_hour", "scan_all_market", "max_positions", "initial_capital",
+        # Position sizing / risk controls
+        "risk_per_trade_pct", "max_position_pct", "min_positions", "risk_per_trade_usd",
+        # Signal quality filters
+        "rsi_buy_max", "rsi_sell_min", "sma_spread_min",
     }
     for k, v in payload.items():
         if k in allowed:

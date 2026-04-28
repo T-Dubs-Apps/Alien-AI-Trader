@@ -61,6 +61,38 @@ class TradingEngine:
         # Max simultaneous open positions
         self.max_positions = int(os.environ.get("MAX_POSITIONS", "5"))
 
+        # ── Position sizing / risk-per-trade controls ──────────────────────────
+        #
+        # RISK_PER_TRADE_PCT  — what % of total capital to risk on a single trade.
+        #   Default: 2.0  →  $100 capital = max $2.00 risked per position.
+        #   This is the PRIMARY knob. Lower = more conservative, more positions.
+        #
+        # MAX_POSITION_PCT    — hard ceiling: no single position > X% of capital.
+        #   Default: 20.0  →  $100 capital = max $20 in any one stock.
+        #   Prevents the engine from putting too much in one winner.
+        #
+        # MIN_POSITIONS       — minimum number of positions to spread capital across.
+        #   Default: 5   →  $100 split into at least 5 trades (~$20 each max).
+        #   Works together with max_positions to enforce diversification.
+        #
+        # RISK_PER_TRADE_USD  — optional hard dollar cap per trade (0 = disabled).
+        #   Example: RISK_PER_TRADE_USD=10 caps every trade at $10 regardless of %.
+        #   Useful during testing when you want absolute dollar control.
+        #
+        self.risk_per_trade_pct  = float(os.environ.get("RISK_PER_TRADE_PCT",  "2.0"))   # % of capital
+        self.max_position_pct    = float(os.environ.get("MAX_POSITION_PCT",    "20.0"))  # % of capital
+        self.min_positions       = int(os.environ.get("MIN_POSITIONS",         "5"))
+        self.risk_per_trade_usd  = float(os.environ.get("RISK_PER_TRADE_USD",  "0"))     # 0 = disabled
+
+        # ── Signal strength filter ──────────────────────────────────────────────
+        # Require RSI to be genuinely oversold (not just "not overbought") before buying.
+        # Default: RSI must be BELOW 50 to enter — catching dips, not chasing tops.
+        # Raise this value (e.g. 60) for more trades; lower (e.g. 40) for fewer, higher-quality entries.
+        self.rsi_buy_max    = float(os.environ.get("RSI_BUY_MAX",    "50.0"))  # RSI ceiling to BUY
+        self.rsi_sell_min   = float(os.environ.get("RSI_SELL_MIN",   "70.0"))  # RSI floor to SELL
+        # Minimum SMA20/SMA50 spread % before a golden cross is "real enough"
+        self.sma_spread_min = float(os.environ.get("SMA_SPREAD_MIN", "0.1"))   # 0.1% spread required
+
         # ── Full-market scan ──
         self.scan_all_market         = os.environ.get("SCAN_ALL_MARKET", "false").lower() == "true"
         self._market_scan_candidates = int(os.environ.get("MARKET_SCAN_CANDIDATES", "30"))
@@ -190,12 +222,26 @@ class TradingEngine:
             if r.status_code != 200:
                 return
             s = r.json()
-            if "poll_seconds"       in s: self.poll_seconds       = max(5, int(s["poll_seconds"]))
-            if "trailing_stop_pct"  in s: self.trailing_stop_pct  = max(0.001, float(s["trailing_stop_pct"]) / 100.0)
-            if "loss_threshold"     in s: self.loss_threshold      = max(0.001, float(s["loss_threshold"])    / 100.0)
-            if "max_trades_per_hour" in s: self.max_trades_per_hour = max(1, int(s["max_trades_per_hour"]))
-            if "scan_all_market"    in s: self.scan_all_market     = bool(s["scan_all_market"])
-            if "max_positions"      in s: self.max_positions       = max(1, int(s["max_positions"]))
+            if "poll_seconds"        in s: self.poll_seconds        = max(5, int(s["poll_seconds"]))
+            if "trailing_stop_pct"   in s: self.trailing_stop_pct   = max(0.001, float(s["trailing_stop_pct"]) / 100.0)
+            if "loss_threshold"      in s: self.loss_threshold       = max(0.001, float(s["loss_threshold"])    / 100.0)
+            if "max_trades_per_hour" in s: self.max_trades_per_hour  = max(1, int(s["max_trades_per_hour"]))
+            if "scan_all_market"     in s: self.scan_all_market      = bool(s["scan_all_market"])
+            if "max_positions"       in s: self.max_positions        = max(1, int(s["max_positions"]))
+            # Live-updatable position sizing / risk knobs from dashboard settings box
+            if "initial_capital"     in s:
+                new_cap = max(0.0, float(s["initial_capital"]))
+                if new_cap != self.initial_capital:
+                    self.initial_capital = new_cap
+                    if not self.current_holdings:   # only reset if no open positions
+                        self._available_capital = new_cap
+            if "risk_per_trade_pct"  in s: self.risk_per_trade_pct  = max(0.1,  float(s["risk_per_trade_pct"]))
+            if "max_position_pct"    in s: self.max_position_pct     = max(1.0,  float(s["max_position_pct"]))
+            if "min_positions"       in s: self.min_positions        = max(1,    int(s["min_positions"]))
+            if "risk_per_trade_usd"  in s: self.risk_per_trade_usd   = max(0.0,  float(s["risk_per_trade_usd"]))
+            if "rsi_buy_max"         in s: self.rsi_buy_max          = max(20.0, float(s["rsi_buy_max"]))
+            if "rsi_sell_min"        in s: self.rsi_sell_min         = max(50.0, float(s["rsi_sell_min"]))
+            if "sma_spread_min"      in s: self.sma_spread_min       = max(0.0,  float(s["sma_spread_min"]))
         except Exception:
             pass
 
@@ -524,13 +570,28 @@ class TradingEngine:
         signal["sma20"] = round(sma20, 4) if sma20 else None
         signal["sma50"] = round(sma50, 4) if sma50 else None
 
-        # BUY: SMA20 > SMA50 (golden cross) AND RSI not overbought (<70)
+        # ── Signal quality filter ─────────────────────────────────────────────
+        # BUY requires ALL of:
+        #   1. Golden cross: SMA20 > SMA50 by at least sma_spread_min %
+        #      (avoids triggering on a razor-thin, unstable crossover)
+        #   2. RSI below rsi_buy_max (default 50) — catching dips, not chasing tops
+        #      RSI < 30 = deeply oversold (strong signal)
+        #      RSI < 50 = mild pullback (default — decent entries)
+        #      RSI < 70 = original (too loose — enters near tops)
+        # SELL requires ANY of:
+        #   1. Death cross: SMA20 < SMA50, or
+        #   2. RSI overbought above rsi_sell_min (default 70), but only while in profit
         if sma20 and sma50 and rsi is not None:
-            if sma20 > sma50 and rsi < 70:
+            spread_pct = abs(sma20 - sma50) / sma50 * 100
+            golden_cross = sma20 > sma50 and spread_pct >= self.sma_spread_min
+            death_cross  = sma20 < sma50
+
+            if golden_cross and rsi < self.rsi_buy_max:
                 signal["verdict"] = "BUY"
-            # SELL: SMA20 < SMA50 (death cross) OR RSI overbought
-            elif sma20 < sma50 or rsi > 75:
+                signal["spread_pct"] = round(spread_pct, 3)
+            elif death_cross or rsi > self.rsi_sell_min:
                 signal["verdict"] = "SELL"
+                signal["spread_pct"] = round(spread_pct, 3)
 
         return signal
 
@@ -612,23 +673,76 @@ class TradingEngine:
             self.send_alert(f"Trade throttled (max/hour). Skipped buy for {symbol}.", level="warn")
             return
 
-        # ── Position sizing ──
+        # ── Position sizing ──────────────────────────────────────────────────
+        #
+        # Capital pool mode (INITIAL_CAPITAL > 0):
+        #   Spreads capital using risk-per-trade % with two hard caps:
+        #     1. RISK_PER_TRADE_PCT  — e.g. 2% of $100 = $2.00 max risk per trade
+        #     2. MAX_POSITION_PCT    — e.g. 20% of $100 = $20.00 max position size
+        #     3. RISK_PER_TRADE_USD  — optional hard dollar cap (e.g. $10 max)
+        #     4. MIN_POSITIONS slot  — ensures capital spreads across ≥ min_positions
+        #   Example with $100, 5 max positions, 2% risk, 20% max position:
+        #     → slot_alloc = $100 / 5 = $20 per slot
+        #     → risk_cap   = $100 * 2% = $2.00 per trade
+        #     → actual alloc = min($20, $2 * (price / stop_distance)) ≈ small slice
+        #     → Result: several $2-$20 positions, never one $99 bet!
+        #
         if self.initial_capital > 0:
-            # Capital pool mode: spread available capital evenly across remaining slots
-            open_slots = max(1, self.max_positions - len(self.current_holdings))
-            alloc      = self._available_capital / open_slots
-            qty        = max(1, int(alloc / price))
-            cost       = qty * price
-            if cost > self._available_capital:
-                qty  = max(1, int(self._available_capital / price))
-                cost = qty * price
-            if qty < 1 or cost > self._available_capital:
+            total_capital = self._available_capital + sum(
+                h["qty"] * h["price"] for h in self.current_holdings.values()
+            )
+
+            # Slot-based allocation: spread across max(max_positions, min_positions) slots
+            effective_slots = max(self.max_positions, self.min_positions)
+            open_slots      = max(1, effective_slots - len(self.current_holdings))
+            slot_alloc      = self._available_capital / open_slots
+
+            # Risk-per-trade cap (% of total capital)
+            risk_alloc = total_capital * (self.risk_per_trade_pct / 100.0)
+
+            # Max position cap (% of total capital)
+            max_alloc  = total_capital * (self.max_position_pct  / 100.0)
+
+            # Hard USD cap (if set)
+            if self.risk_per_trade_usd > 0:
+                risk_alloc = min(risk_alloc, self.risk_per_trade_usd)
+
+            # Final allocation = most conservative of slot, risk, and max caps
+            alloc = min(slot_alloc, risk_alloc, max_alloc)
+            alloc = min(alloc, self._available_capital)   # never exceed what we have
+
+            qty  = max(1, int(alloc / price))
+            cost = qty * price
+
+            # Final safety: if even 1 share costs more than available capital, skip
+            if price > self._available_capital:
                 self.send_alert(
-                    f"Insufficient capital (${self._available_capital:.2f}) to buy "
-                    f"{symbol} @ ${price:.2f}",
+                    f"Insufficient capital (${self._available_capital:.2f}) to buy even "
+                    f"1x {symbol} @ ${price:.2f} — skipping.",
                     level="warn",
                 )
                 return
+
+            # Clamp qty so cost never exceeds available capital
+            while cost > self._available_capital and qty > 1:
+                qty  -= 1
+                cost  = qty * price
+
+            if qty < 1:
+                self.send_alert(
+                    f"Position sizing produced qty=0 for {symbol} @ ${price:.2f} "
+                    f"(available: ${self._available_capital:.2f}, alloc: ${alloc:.2f}). Skipping.",
+                    level="warn",
+                )
+                return
+
+            self.send_alert(
+                f"SIZING: {symbol} @ ${price:.2f} | "
+                f"slots={open_slots} slot_alloc=${slot_alloc:.2f} "
+                f"risk_alloc=${risk_alloc:.2f} max_alloc=${max_alloc:.2f} "
+                f"→ buying {qty}x (${cost:.2f})",
+                level="info", symbol=symbol,
+            )
         else:
             qty  = int(os.environ.get("ORDER_QTY", "1"))
             cost = qty * price
@@ -804,8 +918,20 @@ class TradingEngine:
                 "mode":      "pool" if self.initial_capital > 0 else "fixed_qty",
             },
             "trailing_stop_pct": round(self.trailing_stop_pct * 100, 2),
+            "loss_threshold":    round(self.loss_threshold * 100, 2),
             "scan_all_market":   self.scan_all_market,
             "max_positions":     self.max_positions,
+            "min_positions":     self.min_positions,
+            "risk_settings": {
+                "risk_per_trade_pct": self.risk_per_trade_pct,
+                "max_position_pct":   self.max_position_pct,
+                "risk_per_trade_usd": self.risk_per_trade_usd,
+                "rsi_buy_max":        self.rsi_buy_max,
+                "rsi_sell_min":       self.rsi_sell_min,
+                "sma_spread_min":     self.sma_spread_min,
+            },
+            "live_trading_enabled": self.live_enabled,
+            "trading_mode":         self.trading_mode,
         }
         try:
             requests.post(
@@ -821,15 +947,30 @@ class TradingEngine:
     # -------------------------------
 
     def session_roi(self) -> Dict[str, Any]:
-        """Returns a session P&L / ROI snapshot."""
-        invested = sum(h["qty"] * h["price"] for h in self.current_holdings.values())
+        """Returns a session P&L / ROI snapshot including risk settings."""
+        invested     = sum(h["qty"] * h["price"] for h in self.current_holdings.values())
+        total_value  = self._available_capital + invested
+        roi_pct      = 0.0
+        if self.initial_capital > 0:
+            roi_pct = round((total_value - self.initial_capital) / self.initial_capital * 100, 2)
         return {
-            "session_profit_usd": round(self.profit, 4),
-            "open_positions":     len(self.current_holdings),
-            "total_trades":       len(self.trade_log),
-            "mode":               self.trading_mode,
-            "available_capital":  round(self._available_capital, 2),
-            "total_value":        round(self._available_capital + invested, 2),
+            "session_profit_usd":  round(self.profit, 4),
+            "open_positions":      len(self.current_holdings),
+            "total_trades":        len(self.trade_log),
+            "mode":                self.trading_mode,
+            "live_enabled":        self.live_enabled,
+            "available_capital":   round(self._available_capital, 2),
+            "invested":            round(invested, 2),
+            "total_value":         round(total_value, 2),
+            "initial_capital":     round(self.initial_capital, 2),
+            "roi_pct":             roi_pct,
+            "capital_hwm":         round(self._capital_hwm, 2),
+            "risk_per_trade_pct":  self.risk_per_trade_pct,
+            "max_position_pct":    self.max_position_pct,
+            "min_positions":       self.min_positions,
+            "risk_per_trade_usd":  self.risk_per_trade_usd,
+            "rsi_buy_max":         self.rsi_buy_max,
+            "rsi_sell_min":        self.rsi_sell_min,
         }
 
 # Built by Troy Walker of T-Dub's Apps — 2026-04-22

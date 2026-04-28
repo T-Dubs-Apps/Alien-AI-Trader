@@ -1,0 +1,50 @@
+Alien AI Trader — Quick Startup Instructions
+============================================
+
+1. Clone the Repo
+-----------------
+Location: https://github.com/T-Dubs-Apps/Alien-AI-Trader
+
+2. Install Python 3.10+ and pip (if not already installed)
+
+3. Create and Activate Virtual Environment (Windows)
+---------------------------------------------------
+cd "Alien AI Trader disc"
+python -m venv .venv
+.venv\Scripts\activate
+
+4. Install Requirements
+----------------------
+pip install -r requirements.txt
+
+5. Set Up Your Keys and Env Vars
+--------------------------------
+You need the following keys:
+
+- ALPACA_KEY, ALPACA_SECRET (https://alpaca.markets/ — sign up, get API keys)
+- ALPHA_VANTAGE_KEY (https://www.alphavantage.co/support/#api-key)
+- PUSHOVER_TOKEN, PUSHOVER_USER (https://pushover.net/ — create account, create app, get User Key and API Token)
+- TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER, TWILIO_TO_NUMBER (https://twilio.com/ — sign up, get Console SID/Auth Token, buy a number, verify your cell)
+
+Where to enter them:
+- **Local:** Edit `keys.bat` (copy from `keys.bat.template`)
+- **Render:** Enter each as an Environment Variable for both the web and worker services
+
+6. Start the App (Local)
+------------------------
+Run:
+    SETUP.bat
+    start-alien-ai-trader.bat
+
+7. Access the Dashboard
+----------------------
+- Local: http://localhost:5000
+- Render: https://alien-ai-trader-dashboard.onrender.com
+
+8. For Help
+-----------
+- README.md in the repo
+- QUICK SETUP.txt in the repo
+
+
+# Built by Troy Walker of T-Dub's Apps — 2026-04-23

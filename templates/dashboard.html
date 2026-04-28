@@ -293,6 +293,20 @@
           <div class="stat-sub" id="statPositionsSub">AI holdings</div>
         </div>
       </div>
+      <div class="col-6 col-md-3">
+        <div class="stat-card">
+          <div class="stat-label">Session ROI</div>
+          <div class="stat-value" id="statROI">—</div>
+          <div class="stat-sub" id="statROISub">vs starting capital</div>
+        </div>
+      </div>
+      <div class="col-6 col-md-3">
+        <div class="stat-card">
+          <div class="stat-label">All-Time High</div>
+          <div class="stat-value up" id="statHWM">—</div>
+          <div class="stat-sub">Portfolio peak 🏆</div>
+        </div>
+      </div>
     </div>
 
     <!-- ═══ TABS ═══ -->
@@ -536,6 +550,59 @@
                       <span class="small-muted ms-1" style="font-size:.72rem;">— AI hunts all US stocks for momentum, not just your watchlist</span>
                     </label>
                   </div>
+                </div>
+              </div>
+
+              <!-- Position Sizing & Signal Controls -->
+              <hr style="border-color:var(--border);margin:1rem 0 .75rem">
+              <div class="section-title" style="font-size:.8rem;margin-bottom:.5rem;">
+                <i class="fa-solid fa-scale-balanced me-1"></i>Position Sizing &amp; Signal Filters
+                <span class="small-muted ms-1" style="font-size:.68rem;font-weight:400;">— scales automatically to your capital amount</span>
+              </div>
+              <div class="row g-2">
+                <div class="col-6">
+                  <label class="form-label" title="% of total capital to risk per trade. $100 capital at 2% = $2 max per trade. Scales to any capital amount.">Risk Per Trade % <i class="fa-solid fa-circle-info fa-xs" style="color:var(--muted)"></i></label>
+                  <div class="input-group">
+                    <input class="form-control" type="number" id="riskPerTradePct" value="2" min="0.1" max="100" step="0.1">
+                    <span class="input-group-text" style="background:var(--card);border-color:var(--border);color:var(--muted);">%</span>
+                  </div>
+                  <div class="small-muted mt-1" style="font-size:.68rem;">2% of $100 = $2/trade · 2% of $10k = $200/trade</div>
+                </div>
+                <div class="col-6">
+                  <label class="form-label" title="Max % of capital in any single stock. Prevents over-concentrating in one winner.">Max Position % <i class="fa-solid fa-circle-info fa-xs" style="color:var(--muted)"></i></label>
+                  <div class="input-group">
+                    <input class="form-control" type="number" id="maxPositionPct" value="20" min="1" max="100" step="1">
+                    <span class="input-group-text" style="background:var(--card);border-color:var(--border);color:var(--muted);">%</span>
+                  </div>
+                  <div class="small-muted mt-1" style="font-size:.68rem;">No single stock gets more than this</div>
+                </div>
+                <div class="col-6">
+                  <label class="form-label" title="Minimum number of positions to spread capital across. Works together with Max Positions.">Min Positions <i class="fa-solid fa-circle-info fa-xs" style="color:var(--muted)"></i></label>
+                  <input class="form-control" type="number" id="minPositions" value="5" min="1" max="50">
+                  <div class="small-muted mt-1" style="font-size:.68rem;">Capital spreads across at least this many stocks</div>
+                </div>
+                <div class="col-6">
+                  <label class="form-label" title="Hard dollar cap per trade. Set to 0 to disable — uses % rules only. Useful when testing with small amounts.">Hard $ Cap / Trade <i class="fa-solid fa-circle-info fa-xs" style="color:var(--muted)"></i></label>
+                  <div class="input-group">
+                    <span class="input-group-text" style="background:var(--card);border-color:var(--border);color:var(--muted);">$</span>
+                    <input class="form-control" type="number" id="riskPerTradeUSD" value="0" min="0" step="1" placeholder="0 = off">
+                  </div>
+                  <div class="small-muted mt-1" style="font-size:.68rem;">0 = disabled · overrides % rules when set</div>
+                </div>
+                <div class="col-4">
+                  <label class="form-label" title="RSI must be below this value to trigger a BUY. Lower = fewer but better entries. Default 50 catches dips.">RSI Buy Max <i class="fa-solid fa-circle-info fa-xs" style="color:var(--muted)"></i></label>
+                  <input class="form-control" type="number" id="rsiBuyMax" value="50" min="20" max="80" step="1">
+                  <div class="small-muted mt-1" style="font-size:.68rem;">&lt;30=oversold · &lt;50=dip · &lt;70=loose</div>
+                </div>
+                <div class="col-4">
+                  <label class="form-label" title="RSI must be above this value to trigger a SELL. Higher = let winners run longer.">RSI Sell Min <i class="fa-solid fa-circle-info fa-xs" style="color:var(--muted)"></i></label>
+                  <input class="form-control" type="number" id="rsiSellMin" value="70" min="50" max="95" step="1">
+                  <div class="small-muted mt-1" style="font-size:.68rem;">70+ = overbought zone</div>
+                </div>
+                <div class="col-4">
+                  <label class="form-label" title="Minimum % spread between SMA20 and SMA50 before a golden cross counts. Filters out weak, razor-thin crossovers.">SMA Spread Min % <i class="fa-solid fa-circle-info fa-xs" style="color:var(--muted)"></i></label>
+                  <input class="form-control" type="number" id="smaSpreadMin" value="0.1" min="0" max="5" step="0.05">
+                  <div class="small-muted mt-1" style="font-size:.68rem;">0.1% filters noise crossovers</div>
                 </div>
               </div>
 
@@ -1221,6 +1288,28 @@
         posSub.textContent = d.scan_all_market ? 'Full market scan ON' : 'Watchlist scan';
       }
 
+      // ROI % display
+      const cap = d.capital;
+      const roiEl  = document.getElementById('statROI');
+      const roiSub = document.getElementById('statROISub');
+      const hwmEl  = document.getElementById('statHWM');
+      if (roiEl && cap && cap.mode === 'pool') {
+        const initial = cap.initial || 0;
+        const total   = cap.total   || 0;
+        if (initial > 0) {
+          const roi = ((total - initial) / initial * 100).toFixed(2);
+          roiEl.textContent = (roi >= 0 ? '+' : '') + roi + '%';
+          roiEl.className   = 'stat-value ' + (roi >= 0 ? 'up' : 'down');
+          roiSub.textContent = fmtMoney(initial) + ' → ' + fmtMoney(total);
+        } else {
+          roiEl.textContent = '—';
+          roiSub.textContent = 'Set capital to track ROI';
+        }
+      }
+      if (hwmEl && d.capital_hwm != null) {
+        hwmEl.textContent = fmtMoney(d.capital_hwm);
+      }
+
       document.getElementById('engineStatus').textContent = JSON.stringify(d, null, 2);
     }
 
@@ -1244,20 +1333,30 @@
 
     function saveRiskSettings() {
       const settings = {
-        trailing_stop_pct:  parseFloat(document.getElementById('trailingStop').value)  || 3,
-        loss_threshold:     parseFloat(document.getElementById('stopLoss').value)       || 5,
-        max_trades_per_hour:parseInt(document.getElementById('maxTrades').value)        || 30,
-        poll_seconds:       parseInt(document.getElementById('scanInterval').value)     || 15,
-        initial_capital:    parseFloat(document.getElementById('initialCapital').value) || 0,
-        max_positions:      parseInt(document.getElementById('maxPositions').value)     || 5,
+        // ── Core execution ──────────────────────────────────────────────────
+        trailing_stop_pct:  parseFloat(document.getElementById('trailingStop').value)    || 3,
+        loss_threshold:     parseFloat(document.getElementById('stopLoss').value)         || 5,
+        max_trades_per_hour:parseInt(document.getElementById('maxTrades').value)          || 30,
+        poll_seconds:       parseInt(document.getElementById('scanInterval').value)       || 15,
+        initial_capital:    parseFloat(document.getElementById('initialCapital').value)   || 0,
+        max_positions:      parseInt(document.getElementById('maxPositions').value)       || 5,
         scan_all_market:    document.getElementById('scanAllMarket').checked,
         qty:                document.getElementById('defaultQty').value,
         stocks:             document.getElementById('stockList').value,
-        // Alert settings saved locally only (not sent to server \u2014 sensitive)
+        // ── Position sizing / risk controls ─────────────────────────────────
+        risk_per_trade_pct: parseFloat(document.getElementById('riskPerTradePct').value)  || 2,
+        max_position_pct:   parseFloat(document.getElementById('maxPositionPct').value)   || 20,
+        min_positions:      parseInt(document.getElementById('minPositions').value)        || 5,
+        risk_per_trade_usd: parseFloat(document.getElementById('riskPerTradeUSD').value)  || 0,
+        // ── Signal quality filters ───────────────────────────────────────────
+        rsi_buy_max:        parseFloat(document.getElementById('rsiBuyMax').value)        || 50,
+        rsi_sell_min:       parseFloat(document.getElementById('rsiSellMin').value)       || 70,
+        sma_spread_min:     parseFloat(document.getElementById('smaSpreadMin').value)     || 0.1,
+        // ── Alert settings (saved locally only — sensitive) ──────────────────
         _pushover_user:     document.getElementById('pushoverUser').value,
         _twilio_to:         document.getElementById('twilioTo').value,
-        _afterhours_drop:   parseFloat(document.getElementById('afterhoursDrop').value) || 3,
-        _rocket_alert:      parseFloat(document.getElementById('rocketAlert').value)    || 5,
+        _afterhours_drop:   parseFloat(document.getElementById('afterhoursDrop').value)   || 3,
+        _rocket_alert:      parseFloat(document.getElementById('rocketAlert').value)      || 5,
         _afterhours_on:     document.getElementById('afterhoursProtect').checked,
       };
       // Persist locally
@@ -1272,6 +1371,13 @@
         initial_capital:     settings.initial_capital,
         max_positions:       settings.max_positions,
         scan_all_market:     settings.scan_all_market,
+        risk_per_trade_pct:  settings.risk_per_trade_pct,
+        max_position_pct:    settings.max_position_pct,
+        min_positions:       settings.min_positions,
+        risk_per_trade_usd:  settings.risk_per_trade_usd,
+        rsi_buy_max:         settings.rsi_buy_max,
+        rsi_sell_min:        settings.rsi_sell_min,
+        sma_spread_min:      settings.sma_spread_min,
       };
       fetch('/api/settings/trading', {
         method: 'POST',
@@ -1288,6 +1394,7 @@
     function loadRiskSettings() {
       try {
         const s = JSON.parse(localStorage.getItem('alien_risk_settings') || '{}');
+        // Core execution
         if (s.trailing_stop_pct  != null) document.getElementById('trailingStop').value    = s.trailing_stop_pct;
         if (s.loss_threshold     != null) document.getElementById('stopLoss').value        = s.loss_threshold;
         if (s.max_trades_per_hour!= null) document.getElementById('maxTrades').value       = s.max_trades_per_hour;
@@ -1297,17 +1404,27 @@
         if (s.scan_all_market    != null) document.getElementById('scanAllMarket').checked = s.scan_all_market;
         if (s.qty)                        document.getElementById('defaultQty').value      = s.qty;
         if (s.stocks)                     document.getElementById('stockList').value       = s.stocks;
+        // Position sizing / risk controls
+        if (s.risk_per_trade_pct != null) document.getElementById('riskPerTradePct').value = s.risk_per_trade_pct;
+        if (s.max_position_pct   != null) document.getElementById('maxPositionPct').value  = s.max_position_pct;
+        if (s.min_positions      != null) document.getElementById('minPositions').value    = s.min_positions;
+        if (s.risk_per_trade_usd != null) document.getElementById('riskPerTradeUSD').value = s.risk_per_trade_usd;
+        // Signal filters
+        if (s.rsi_buy_max        != null) document.getElementById('rsiBuyMax').value       = s.rsi_buy_max;
+        if (s.rsi_sell_min       != null) document.getElementById('rsiSellMin').value      = s.rsi_sell_min;
+        if (s.sma_spread_min     != null) document.getElementById('smaSpreadMin').value    = s.sma_spread_min;
         // Alert / notification fields (local only)
-        if (s._pushover_user)             document.getElementById('pushoverUser').value     = s._pushover_user;
-        if (s._twilio_to)                 document.getElementById('twilioTo').value         = s._twilio_to;
-        if (s._afterhours_drop != null)   document.getElementById('afterhoursDrop').value   = s._afterhours_drop;
-        if (s._rocket_alert    != null)   document.getElementById('rocketAlert').value      = s._rocket_alert;
+        if (s._pushover_user)             document.getElementById('pushoverUser').value       = s._pushover_user;
+        if (s._twilio_to)                 document.getElementById('twilioTo').value           = s._twilio_to;
+        if (s._afterhours_drop != null)   document.getElementById('afterhoursDrop').value     = s._afterhours_drop;
+        if (s._rocket_alert    != null)   document.getElementById('rocketAlert').value        = s._rocket_alert;
         if (s._afterhours_on   != null)   document.getElementById('afterhoursProtect').checked = s._afterhours_on;
       } catch {}
     }
 
     // Sync UI when engine pushes settings update via WebSocket
     socket.on('trading_settings', function(s) {
+      // Core
       if (s.trailing_stop_pct  != null) document.getElementById('trailingStop').value    = s.trailing_stop_pct;
       if (s.loss_threshold     != null) document.getElementById('stopLoss').value        = s.loss_threshold;
       if (s.max_trades_per_hour!= null) document.getElementById('maxTrades').value       = s.max_trades_per_hour;
@@ -1315,6 +1432,15 @@
       if (s.initial_capital    != null) document.getElementById('initialCapital').value  = s.initial_capital;
       if (s.max_positions      != null) document.getElementById('maxPositions').value    = s.max_positions;
       if (s.scan_all_market    != null) document.getElementById('scanAllMarket').checked = s.scan_all_market;
+      // Position sizing / risk
+      if (s.risk_per_trade_pct != null) document.getElementById('riskPerTradePct').value = s.risk_per_trade_pct;
+      if (s.max_position_pct   != null) document.getElementById('maxPositionPct').value  = s.max_position_pct;
+      if (s.min_positions      != null) document.getElementById('minPositions').value    = s.min_positions;
+      if (s.risk_per_trade_usd != null) document.getElementById('riskPerTradeUSD').value = s.risk_per_trade_usd;
+      // Signal filters
+      if (s.rsi_buy_max        != null) document.getElementById('rsiBuyMax').value       = s.rsi_buy_max;
+      if (s.rsi_sell_min       != null) document.getElementById('rsiSellMin').value      = s.rsi_sell_min;
+      if (s.sma_spread_min     != null) document.getElementById('smaSpreadMin').value    = s.sma_spread_min;
     });
 
     // ═══════════════════════════════════════════

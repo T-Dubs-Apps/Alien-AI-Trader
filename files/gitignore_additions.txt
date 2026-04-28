@@ -1,17 +1,3 @@
-.venv/
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-*.db
-*.sqlite3
-config.json
-keys.bat
-.env
-*.log
-dist/
-build/
-*.egg-info/
 # ── Alien AI Trader — Sensitive Files ──────────────────────
 # Add these to your .gitignore to prevent key exposure
 
