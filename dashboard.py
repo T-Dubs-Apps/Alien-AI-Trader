@@ -1,3 +1,9 @@
+# CRITICAL: gevent monkey patch MUST be first -- before ANY other imports.
+# This patches Python's standard library to work with gevent's async model.
+# Required for Socket.IO WebSocket support on Render/gunicorn with gevent worker.
+from gevent import monkey
+monkey.patch_all()
+
 import os
 import time
 from threading import Lock
@@ -463,4 +469,3 @@ if __name__ == "__main__":
     socketio.run(app, host="0.0.0.0", port=port, debug=False, allow_unsafe_werkzeug=True)
 
 # Built by Troy Walker of T-Dub's Apps — 2026-04-22
-
