@@ -175,20 +175,52 @@ class TradingEngine:
 
     def run_forever(self):
         """
-        Main loop — polls live settings, optionally extends the scan queue with
-        full-market momentum candidates, then scans all symbols concurrently.
+        Main loop — polls live settings, checks market status, optionally extends
+        the scan queue with full-market momentum candidates, then scans all symbols
+        concurrently.
+
+        After-hours behaviour:
+          - Market OPEN  → full scan + buy/sell execution every poll_seconds
+          - Market CLOSED → sleep 60s between cycles, run portfolio guard only
+            (buy/sell orders cannot fill; we skip the heavy scan to save API quota)
         """
-        self.start()
+        # NOTE: worker.py already calls engine.start() before launching this thread.
+        # Do NOT call self.start() here — that would double-start the afterhours watcher.
+        cycle = 0
         while self.running:
-            # Pick up live setting changes pushed from the dashboard UI
+            cycle += 1
+            # ── Pick up live setting changes pushed from the dashboard UI ──────
             self._poll_live_settings()
             self._maybe_heartbeat(message="scan-start")
+
+            market_open = self._is_market_open()
             symbols = list(self.stock_list)
+
+            if not market_open:
+                # Market is closed — nothing to trade.
+                # The _afterhours_loop thread is already guarding the portfolio.
+                print(
+                    f"[ENGINE] Cycle {cycle} — market CLOSED. "
+                    f"Holding {len(self.current_holdings)} position(s). "
+                    f"After-hours guard is active. Sleeping 60s."
+                )
+                self._maybe_heartbeat(message="market-closed")
+                time.sleep(60)
+                continue
+
+            # ── Market is OPEN — run full scan ────────────────────────────────
+            print(
+                f"[ENGINE] Cycle {cycle} — market OPEN. "
+                f"Scanning {len(symbols)} symbols | "
+                f"Positions: {len(self.current_holdings)}/{self.max_positions} | "
+                f"Capital: ${self._available_capital:.2f}"
+            )
 
             # Market-wide scan: pull top momentum movers and add to this cycle's queue
             if self.scan_all_market:
                 candidates = self._get_market_candidates(max_candidates=self._market_scan_candidates)
                 symbols = list(dict.fromkeys(symbols + candidates))
+                print(f"[ENGINE] Market scan added {len(candidates)} momentum candidates → {len(symbols)} total symbols")
 
             if symbols:
                 with ThreadPoolExecutor(max_workers=min(self.max_workers, len(symbols))) as pool:
@@ -200,6 +232,7 @@ class TradingEngine:
                             future.result()
                         except Exception as exc:
                             sym = futures[future]
+                            print(f"[ENGINE] Scan error for {sym}: {exc}")
                             self.send_alert(f"Scan error for {sym}: {exc}", level="warn")
 
             self._maybe_heartbeat(message="scan-complete")
@@ -246,11 +279,9 @@ class TradingEngine:
             if "rsi_buy_max"         in s: self.rsi_buy_max          = max(20.0, float(s["rsi_buy_max"]))
             if "rsi_sell_min"        in s: self.rsi_sell_min         = max(50.0, float(s["rsi_sell_min"]))
             if "sma_spread_min"      in s: self.sma_spread_min       = max(0.0,  float(s["sma_spread_min"]))
-        except Exception:
+        except Exception as e:
+            print(f"[ENGINE] _poll_live_settings error: {e}")
             pass
-
-    # -------------------------------
-    # Full-market momentum scanner
     # -------------------------------
 
     def _get_market_candidates(self, max_candidates: int = 30) -> List[str]:
@@ -507,13 +538,14 @@ class TradingEngine:
         try:
             t = self.api.get_latest_trade(symbol)
             price = float(t.price)
-        except Exception:
+        except Exception as e:
+            print(f"[ENGINE] {symbol}: Alpaca price fetch failed ({e}) — trying Alpha Vantage")
             # Failover to Alpha Vantage if Alpaca fails
             try:
                 data, _ = self.ts.get_quote_endpoint(symbol)
                 price = float(data["05. price"])
-            except Exception:
-                pass
+            except Exception as e2:
+                print(f"[ENGINE] {symbol}: Alpha Vantage also failed ({e2}) — no price available")
 
         self._price_cache[symbol] = (price, time.time())
         return price
@@ -523,10 +555,14 @@ class TradingEngine:
         try:
             bars = self.api.get_bars(symbol, TimeFrame.Minute, limit=limit)
             if not bars:
+                print(f"[ENGINE] {symbol}: Alpaca returned 0 bars (market closed or no data)")
                 return None
             df = pd.DataFrame([{"c": b.c, "v": b.v} for b in bars])
+            if len(df) < 15:
+                print(f"[ENGINE] {symbol}: only {len(df)} bars returned (need 15+ for RSI/SMA)")
             return df
-        except Exception:
+        except Exception as e:
+            print(f"[ENGINE] {symbol}: get_bars error — {e}")
             return None
 
     # -------------------------------
@@ -597,6 +633,11 @@ class TradingEngine:
                 signal["verdict"] = "SELL"
                 signal["spread_pct"] = round(spread_pct, 3)
 
+        print(
+            f"[SIGNAL] {symbol} @ ${price:.2f} | "
+            f"RSI={signal['rsi']} SMA20={signal['sma20']} SMA50={signal['sma50']} | "
+            f"→ {signal['verdict']}"
+        )
         return signal
 
     # -------------------------------
