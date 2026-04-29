@@ -1,3 +1,6 @@
+from news_sentiment import get_symbol_sentiment
+from ai_model import ai_predict_signal
+from dynamic_position import calc_volatility, adjust_risk_for_streak, adjust_risk_for_volatility
 import os
 import time
 import threading
@@ -17,6 +20,33 @@ except Exception:
 
 
 class TradingEngine:
+        def _calc_macd(self, closes: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9):
+            if len(closes) < slow + signal:
+                return None, None
+            exp1 = closes.ewm(span=fast, adjust=False).mean()
+            exp2 = closes.ewm(span=slow, adjust=False).mean()
+            macd_line = exp1 - exp2
+            signal_line = macd_line.ewm(span=signal, adjust=False).mean()
+            return float(macd_line.iloc[-1]), float(signal_line.iloc[-1])
+
+        def _calc_bollinger(self, closes: pd.Series, period: int = 20, num_std: float = 2.0):
+            if len(closes) < period:
+                return None, None, None
+            sma = closes.rolling(window=period).mean().iloc[-1]
+            std = closes.rolling(window=period).std().iloc[-1]
+            upper = sma + num_std * std
+            lower = sma - num_std * std
+            return float(upper), float(sma), float(lower)
+
+        def _calc_vwap(self, df: pd.DataFrame):
+            # VWAP = sum(price * volume) / sum(volume)
+            if df is None or df.empty or 'c' not in df or 'v' not in df:
+                return None
+            pv = (df['c'].astype(float) * df['v'].astype(float)).sum()
+            v = df['v'].astype(float).sum()
+            if v == 0:
+                return None
+            return float(pv / v)
     """
     TradingEngine — upgraded for concurrent scanning, RSI + SMA crossover signals,
     ROI tracking, price caching, and faster real-time heartbeats.
@@ -561,13 +591,16 @@ class TradingEngine:
 
     def _get_signal(self, symbol: str, price: float) -> Dict[str, Any]:
         """
-        Returns a signal dict with RSI, SMA20, SMA50, and a BUY/SELL/HOLD verdict.
-        Uses SMA20/SMA50 crossover + RSI oversold/overbought filter.
+        Returns a signal dict with advanced confluence: RSI, SMA, MACD, Bollinger Bands, VWAP, and a BUY/SELL/HOLD verdict.
         """
         df = self._get_bars_df(symbol, limit=60)
         signal: Dict[str, Any] = {
             "symbol": symbol, "price": price,
-            "rsi": None, "sma20": None, "sma50": None, "verdict": "HOLD"
+            "rsi": None, "sma20": None, "sma50": None,
+            "macd": None, "macd_signal": None,
+            "boll_upper": None, "boll_mid": None, "boll_lower": None,
+            "vwap": None,
+            "verdict": "HOLD"
         }
         if df is None or df.empty:
             return signal
@@ -576,31 +609,58 @@ class TradingEngine:
         rsi = self._calc_rsi(closes)
         sma20 = self._calc_sma(closes, 20)
         sma50 = self._calc_sma(closes, 50)
+        macd, macd_signal = self._calc_macd(closes)
+        boll_upper, boll_mid, boll_lower = self._calc_bollinger(closes)
+        vwap = self._calc_vwap(df)
 
-        signal["rsi"]   = rsi
+        signal["rsi"] = rsi
         signal["sma20"] = round(sma20, 4) if sma20 else None
         signal["sma50"] = round(sma50, 4) if sma50 else None
+        signal["macd"] = round(macd, 4) if macd is not None else None
+        signal["macd_signal"] = round(macd_signal, 4) if macd_signal is not None else None
+        signal["boll_upper"] = round(boll_upper, 4) if boll_upper else None
+        signal["boll_mid"] = round(boll_mid, 4) if boll_mid else None
+        signal["boll_lower"] = round(boll_lower, 4) if boll_lower else None
+        signal["vwap"] = round(vwap, 4) if vwap else None
 
-        # ── Signal quality filter ─────────────────────────────────────────────
+        # ── Advanced confluence logic ──
         # BUY requires ALL of:
         #   1. Golden cross: SMA20 > SMA50 by at least sma_spread_min %
-        #      (avoids triggering on a razor-thin, unstable crossover)
-        #   2. RSI below rsi_buy_max (default 50) — catching dips, not chasing tops
-        #      RSI < 30 = deeply oversold (strong signal)
-        #      RSI < 50 = mild pullback (default — decent entries)
-        #      RSI < 70 = original (too loose — enters near tops)
-        # SELL requires ANY of:
-        #   1. Death cross: SMA20 < SMA50, or
-        #   2. RSI overbought above rsi_sell_min (default 70), but only while in profit
-        if sma20 and sma50 and rsi is not None:
+        #   2. RSI below rsi_buy_max
+        #   3. MACD > MACD signal (bullish)
+        #   4. Price above lower Bollinger Band but below upper
+        #   5. Price not far above VWAP (within 2%)
+        # SELL if:
+        #   1. Death cross (SMA20 < SMA50)
+        #   2. RSI > rsi_sell_min
+        #   3. MACD < MACD signal (bearish)
+        #   4. Price >= upper Bollinger Band
+
+        if sma20 and sma50 and rsi is not None and macd is not None and macd_signal is not None and boll_upper and boll_lower and vwap:
             spread_pct = abs(sma20 - sma50) / sma50 * 100
             golden_cross = sma20 > sma50 and spread_pct >= self.sma_spread_min
             death_cross  = sma20 < sma50
+            price_above_lower = price > boll_lower
+            price_below_upper = price < boll_upper
+            price_near_vwap = abs(price - vwap) / vwap <= 0.02
 
-            if golden_cross and rsi < self.rsi_buy_max:
+            # BUY: all must be true
+            if (
+                golden_cross and
+                rsi < self.rsi_buy_max and
+                macd > macd_signal and
+                price_above_lower and price_below_upper and
+                price_near_vwap
+            ):
                 signal["verdict"] = "BUY"
                 signal["spread_pct"] = round(spread_pct, 3)
-            elif death_cross or rsi > self.rsi_sell_min:
+            # SELL: any can be true
+            elif (
+                death_cross or
+                rsi > self.rsi_sell_min or
+                macd < macd_signal or
+                price >= boll_upper
+            ):
                 signal["verdict"] = "SELL"
                 signal["spread_pct"] = round(spread_pct, 3)
 
@@ -615,6 +675,18 @@ class TradingEngine:
             return
 
         signal = self._get_signal(symbol, price)
+        # Integrate news/sentiment analysis
+        sentiment = get_symbol_sentiment(symbol)
+        signal["sentiment_score"] = sentiment["sentiment_score"]
+        signal["sentiment_headlines"] = sentiment["headlines"]
+        # Block BUY if sentiment is negative
+        if signal["verdict"] == "BUY" and sentiment["sentiment_score"] < 0:
+            signal["verdict"] = "HOLD"
+            signal["sentiment_blocked"] = True
+        # If mode is 'AI_MODEL', override verdict with ML model prediction
+        if self.mode == "AI_MODEL":
+            verdict = ai_predict_signal(signal)
+            signal["verdict"] = verdict
         with self.lock:
             self._symbol_signals[symbol] = signal
             holding = self.current_holdings.get(symbol)
@@ -730,8 +802,20 @@ class TradingEngine:
             open_slots      = max(1, effective_slots - len(self.current_holdings))
             slot_alloc      = self._available_capital / open_slots
 
+            # --- Dynamic risk adjustment ---
+            # 1. Streak-based risk adjustment
+            streak_risk = adjust_risk_for_streak(self.risk_per_trade_pct, self.trade_log)
+
+            # 2. Volatility-based risk adjustment (use last 20 closes)
+            df = self._get_bars_df(symbol, limit=21)
+            closes = df["c"].astype(float) if df is not None and not df.empty else None
+            vol_risk = streak_risk
+            if closes is not None:
+                vol = calc_volatility(closes)
+                vol_risk = adjust_risk_for_volatility(streak_risk, vol)
+
             # Risk-per-trade cap (% of total capital)
-            risk_alloc = total_capital * (self.risk_per_trade_pct / 100.0)
+            risk_alloc = total_capital * (vol_risk / 100.0)
 
             # Max position cap (% of total capital)
             max_alloc  = total_capital * (self.max_position_pct  / 100.0)
@@ -773,6 +857,7 @@ class TradingEngine:
                 f"SIZING: {symbol} @ ${price:.2f} | "
                 f"slots={open_slots} slot_alloc=${slot_alloc:.2f} "
                 f"risk_alloc=${risk_alloc:.2f} max_alloc=${max_alloc:.2f} "
+                f"(streak_risk={streak_risk:.2f}%, vol_risk={vol_risk:.2f}%) "
                 f"→ buying {qty}x (${cost:.2f})",
                 level="info", symbol=symbol,
             )
@@ -889,19 +974,30 @@ class TradingEngine:
         if self.pb:
             try:
                 self.pb.push_note(f"Alien AI Trader [{level.upper()}]", message)
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[Pushbullet] send failed: {e}")
 
         title = f"Alien AI Trader — {symbol or level.upper()}"
         if level == "warn":
-            self._send_pushover(title=title, message=message, priority=0)
+            try:
+                self._send_pushover(title=title, message=message, priority=0)
+            except Exception as e:
+                print(f"[Pushover] send failed: {e}")
         elif level == "alert":
-            # Emergency: repeats every 60s until you tap acknowledge on your phone
-            self._send_pushover(title=f"CRASH ALERT: {symbol or 'PORTFOLIO'}",
-                                message=message, priority=2, sound="siren")
-            self._send_twilio_call(message)
+            try:
+                self._send_pushover(title=f"CRASH ALERT: {symbol or 'PORTFOLIO'}",
+                                    message=message, priority=2, sound="siren")
+            except Exception as e:
+                print(f"[Pushover] send failed: {e}")
+            try:
+                self._send_twilio_call(message)
+            except Exception as e:
+                print(f"[Twilio] call failed: {e}")
         elif level == "rocket":
-            self._send_pushover(title=title, message=message, priority=1, sound="cashregister")
+            try:
+                self._send_pushover(title=title, message=message, priority=1, sound="cashregister")
+            except Exception as e:
+                print(f"[Pushover] send failed: {e}")
 
         if self.dashboard_base_url:
             try:

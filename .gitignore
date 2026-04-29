@@ -34,3 +34,6 @@ __pycache__/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Project backups
+backup files zipped/

@@ -398,4 +398,29 @@ Real money trading involves substantial risk of loss.
 
 ---
 
-<!-- Built by Troy Walker of T-Dub's Apps — 2026-04-26 -->
+## ☁️ Cloud Sync for User Data (Planned/Optional)
+
+**Cloud sync for backtest results and settings is now an optional feature.**
+- Each registered/licensed user can choose to enable cloud sync for their own account.
+- Backtest results, logs, and settings can be securely uploaded to the user’s personal cloud (not shared with other users or the app author).
+- Cloud sync is OFF by default and must be enabled in the dashboard settings by the user.
+- (Coming soon) Users will be able to view, download, and restore their results from any device after logging in.
+
+> **Note:** No user data is ever uploaded to a central/shared cloud unless the user explicitly enables it. All cloud storage is per-user and tied to their license/account.
+
+---
+
+## 🆕 Major Enhancements (2026)
+
+- Advanced signal filters: MACD, Bollinger Bands, VWAP
+- Dynamic position sizing (volatility & streak-based)
+- AI model integration (pluggable ML signals)
+- News & sentiment analysis (blocks bad trades)
+- Auto-recovery: crash notifications & dashboard logging
+- Trade simulation/backtest mode (CLI & dashboard UI)
+- Dashboard: Backtest tab, instant CSV upload, equity curve chart
+- Robust notification system (Pushbullet, Pushover, Twilio)
+- All settings live-editable from dashboard (no restart)
+- Modular architecture for easy upgrades
+
+---

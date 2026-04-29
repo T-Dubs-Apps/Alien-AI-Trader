@@ -1,3 +1,4 @@
+from crash_notifier import send_crash_notification
 import os
 import time
 import signal
@@ -86,46 +87,56 @@ def build_symbol_list() -> list:
     env_list = os.environ.get("STOCK_LIST", "").strip()
     if env_list:
         symbols = [s.strip().upper() for s in env_list.split(",") if s.strip()]
-        print(f"[WORKER] Using STOCK_LIST from env: {len(symbols)} symbols")
+        if not symbols:
+            print("[WORKER] No stocks selected in STOCK_LIST — will scan full market.")
+        else:
+            print(f"[WORKER] Using STOCK_LIST from env: {len(symbols)} symbols")
     else:
         symbols = DEFAULT_PORTFOLIO
         print(f"[WORKER] Using DEFAULT_PORTFOLIO: {len(symbols)} symbols")
+    # If no symbols, force scan_all_market ON in engine
+    if not symbols:
+        os.environ["SCAN_ALL_MARKET"] = "true"
     return symbols
 
 
 def main():
-    symbols = build_symbol_list()
-    mode    = os.environ.get("ENGINE_MODE", "AI")
+        symbols = build_symbol_list()
+        mode    = os.environ.get("ENGINE_MODE", "AI")
 
-    print(f"[WORKER] Starting Alien AI Trader Worker")
-    print(f"[WORKER] Symbols: {len(symbols)} | Mode: {mode} | "
-          f"Run limit: {RUN_SECONDS // 3600}h {(RUN_SECONDS % 3600) // 60}m")
+        print(f"[WORKER] Starting Alien AI Trader Worker")
+        print(f"[WORKER] Symbols: {len(symbols)} | Mode: {mode} | "
+            f"Run limit: {RUN_SECONDS // 3600}h {(RUN_SECONDS % 3600) // 60}m")
 
-    # ── Create trading engine ─────────────────────────────────
-    engine = TradingEngine(symbols, mode=mode)
+        # If no symbols, force scan_all_market ON
+        scan_all_market = os.environ.get("SCAN_ALL_MARKET", "false").lower() == "true" or not symbols
 
-    # ── Create portfolio ladder scanner ───────────────────────
-    ladder = PortfolioLadderScanner(
-        symbols=symbols,
-        engine=engine,
-        max_workers=SCAN_WORKERS,
-        top_tier_pct=TOP_TIER_PCT,
-        bottom_tier_pct=BOTTOM_TIER_PCT,
-        min_score_to_buy=MIN_SCORE_TO_BUY,
-        rsi_buy_max=float(os.environ.get("RSI_BUY_MAX", "55.0")),
-    )
+        # ── Create trading engine ─────────────────────────────────
+        engine = TradingEngine(symbols, mode=mode)
+        engine.scan_all_market = scan_all_market
 
-    # ── Wire ladder into engine signal gating ─────────────────
-    integrate_ladder_with_engine(engine, ladder)
-    print(f"[WORKER] Ladder scanner integrated -- only TOP {TOP_TIER_PCT * 100:.0f}% "
-          f"of {len(symbols)} symbols will be BUY candidates per cycle")
+        # ── Create portfolio ladder scanner ───────────────────────
+        ladder = PortfolioLadderScanner(
+          symbols=symbols,
+          engine=engine,
+          max_workers=SCAN_WORKERS,
+          top_tier_pct=TOP_TIER_PCT,
+          bottom_tier_pct=BOTTOM_TIER_PCT,
+          min_score_to_buy=MIN_SCORE_TO_BUY,
+          rsi_buy_max=float(os.environ.get("RSI_BUY_MAX", "55.0")),
+        )
+
+        # ── Wire ladder into engine signal gating ─────────────────
+        integrate_ladder_with_engine(engine, ladder)
+        print(f"[WORKER] Ladder scanner integrated -- only TOP {TOP_TIER_PCT * 100:.0f}% "
+            f"of {len(symbols)} symbols will be BUY candidates per cycle")
 
     # ── Shutdown handler ──────────────────────────────────────
     def shutdown(*_):
         print("[WORKER] Shutdown signal received -- stopping engine and scanner.")
         ladder.stop()
         engine.stop()
-        sys.exit(0)
+        sys.exit(0)   # SIGTERM from Render = intentional stop, exit is correct here
 
     signal.signal(signal.SIGTERM, shutdown)
     signal.signal(signal.SIGINT,  shutdown)
@@ -176,7 +187,16 @@ def main():
 
         # Restart engine thread if it dies unexpectedly
         if not engine_thread.is_alive():
-            print("[WORKER] Engine thread died -- restarting.")
+            msg = "[WORKER] Engine thread died -- restarting."
+            print(msg)
+            send_crash_notification(msg)
+            # Dashboard log
+            try:
+                dashboard_url = os.environ.get("DASHBOARD_BASE_URL") or os.environ.get("DASHBOARD_URL") or ""
+                if dashboard_url:
+                    requests.post(f"{dashboard_url}/api/notifications", json={"level": "alert", "message": msg}, timeout=5)
+            except Exception:
+                pass
             engine.start()
             engine_thread = threading.Thread(
                 target=engine.run_forever,
@@ -187,7 +207,15 @@ def main():
 
         # Restart ladder thread if it dies
         if not ladder_thread.is_alive():
-            print("[WORKER] Ladder scanner thread died -- restarting.")
+            msg = "[WORKER] Ladder scanner thread died -- restarting."
+            print(msg)
+            send_crash_notification(msg)
+            try:
+                dashboard_url = os.environ.get("DASHBOARD_BASE_URL") or os.environ.get("DASHBOARD_URL") or ""
+                if dashboard_url:
+                    requests.post(f"{dashboard_url}/api/notifications", json={"level": "alert", "message": msg}, timeout=5)
+            except Exception:
+                pass
             ladder_thread = threading.Thread(
                 target=ladder.run_forever,
                 kwargs={"interval_seconds": LADDER_INTERVAL},
@@ -202,22 +230,51 @@ def main():
                 summary = ladder.summary()
                 top_names = [e["symbol"] for e in summary.get("top_5", [])]
                 if top_names:
-                    print(f"[WORKER] Ladder top 5: {' -> '.join(top_names)}")
-            except Exception:
-                pass
+                    print(f"[WORKER] Ladder top 5: {' -> '.join(top_names)} (scan_all_market={engine.scan_all_market})")
+                else:
+                    print("[WORKER] No top 5 found. Likely no market candidates or scan issue.")
+            except Exception as ex:
+                print(f"[WORKER] Ladder summary error: {ex}")
 
-        # Enforce RUN_SECONDS limit (clean shutdown before Alpaca session expires)
+        # Enforce RUN_SECONDS limit (clean session recycle before Alpaca session expires)
         if now - start >= RUN_SECONDS:
             print(f"[WORKER] RUN_SECONDS limit reached "
-                  f"({RUN_SECONDS // 60}min) -- shutting down cleanly.")
+                  f"({RUN_SECONDS // 60}min) -- recycling session cleanly.")
             ladder.stop()
             engine.stop()
-            sys.exit(0)
+            time.sleep(3)   # brief pause so threads can flush
+            return          # outer loop will restart main() automatically
 
         time.sleep(2)
 
 
 if __name__ == "__main__":
-    main()
+    # ── Outer restart loop ────────────────────────────────────────────────────
+    # Render does NOT auto-restart a worker that exits cleanly (sys.exit(0)).
+    # Instead we loop forever here — when the session limit is reached, main()
+    # returns, we sleep 5 seconds, then launch a fresh session automatically.
+    # The worker process NEVER exits unless Render kills it (deploy, crash, etc.)
+    restart_count = 0
+    while True:
+        restart_count += 1
+        print(f"[WORKER] {'Starting' if restart_count == 1 else 'Restarting'} "
+              f"session #{restart_count} ...")
+        try:
+            main()
+        except SystemExit:
+            pass
+        except Exception as e:
+            msg = f"[WORKER] Unexpected crash in session #{restart_count}: {e}"
+            print(msg)
+            send_crash_notification(msg)
+            try:
+                dashboard_url = os.environ.get("DASHBOARD_BASE_URL") or os.environ.get("DASHBOARD_URL") or ""
+                if dashboard_url:
+                    requests.post(f"{dashboard_url}/api/notifications", json={"level": "alert", "message": msg}, timeout=5)
+            except Exception:
+                pass
+        print(f"[WORKER] Session #{restart_count} ended. "
+              f"Sleeping 5s then launching session #{restart_count + 1} ...")
+        time.sleep(5)
 
 # Built by Troy Walker of T-Dub's Apps - 2026-04-26
