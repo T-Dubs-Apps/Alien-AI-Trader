@@ -42,6 +42,12 @@ class TradingEngine:
         self._session_start_equity: Optional[float] = None
         self._symbol_signals: Dict[str, Dict[str, Any]] = {}   # per-symbol last signal data
 
+        # ── Auto-trade master switch (live-toggled from dashboard UI) ──────────
+        # When False the engine scans and signals but never places orders.
+        # Flipping the toggle in the UI updates /api/settings/trading which the
+        # engine picks up on the next _poll_live_settings() call.
+        self.auto_trade = True   # default ON; dashboard can override
+
         # ── Risk controls (live-updateable from dashboard UI) ──
         self.loss_threshold    = float(os.environ.get("LOSS_THRESHOLD",    "0.05"))  # 5% absolute floor
         self.trailing_stop_pct = float(os.environ.get("TRAILING_STOP_PCT", "0.03"))  # 3% drop from peak
@@ -175,52 +181,20 @@ class TradingEngine:
 
     def run_forever(self):
         """
-        Main loop — polls live settings, checks market status, optionally extends
-        the scan queue with full-market momentum candidates, then scans all symbols
-        concurrently.
-
-        After-hours behaviour:
-          - Market OPEN  → full scan + buy/sell execution every poll_seconds
-          - Market CLOSED → sleep 60s between cycles, run portfolio guard only
-            (buy/sell orders cannot fill; we skip the heavy scan to save API quota)
+        Main loop — polls live settings, optionally extends the scan queue with
+        full-market momentum candidates, then scans all symbols concurrently.
         """
-        # NOTE: worker.py already calls engine.start() before launching this thread.
-        # Do NOT call self.start() here — that would double-start the afterhours watcher.
-        cycle = 0
+        self.start()
         while self.running:
-            cycle += 1
-            # ── Pick up live setting changes pushed from the dashboard UI ──────
+            # Pick up live setting changes pushed from the dashboard UI
             self._poll_live_settings()
             self._maybe_heartbeat(message="scan-start")
-
-            market_open = self._is_market_open()
             symbols = list(self.stock_list)
-
-            if not market_open:
-                # Market is closed — nothing to trade.
-                # The _afterhours_loop thread is already guarding the portfolio.
-                print(
-                    f"[ENGINE] Cycle {cycle} — market CLOSED. "
-                    f"Holding {len(self.current_holdings)} position(s). "
-                    f"After-hours guard is active. Sleeping 60s."
-                )
-                self._maybe_heartbeat(message="market-closed")
-                time.sleep(60)
-                continue
-
-            # ── Market is OPEN — run full scan ────────────────────────────────
-            print(
-                f"[ENGINE] Cycle {cycle} — market OPEN. "
-                f"Scanning {len(symbols)} symbols | "
-                f"Positions: {len(self.current_holdings)}/{self.max_positions} | "
-                f"Capital: ${self._available_capital:.2f}"
-            )
 
             # Market-wide scan: pull top momentum movers and add to this cycle's queue
             if self.scan_all_market:
                 candidates = self._get_market_candidates(max_candidates=self._market_scan_candidates)
                 symbols = list(dict.fromkeys(symbols + candidates))
-                print(f"[ENGINE] Market scan added {len(candidates)} momentum candidates → {len(symbols)} total symbols")
 
             if symbols:
                 with ThreadPoolExecutor(max_workers=min(self.max_workers, len(symbols))) as pool:
@@ -232,7 +206,6 @@ class TradingEngine:
                             future.result()
                         except Exception as exc:
                             sym = futures[future]
-                            print(f"[ENGINE] Scan error for {sym}: {exc}")
                             self.send_alert(f"Scan error for {sym}: {exc}", level="warn")
 
             self._maybe_heartbeat(message="scan-complete")
@@ -259,6 +232,7 @@ class TradingEngine:
             if r.status_code != 200:
                 return
             s = r.json()
+            if "auto_trade"         in s: self.auto_trade          = bool(s["auto_trade"])
             if "poll_seconds"        in s: self.poll_seconds        = max(5, int(s["poll_seconds"]))
             if "trailing_stop_pct"   in s: self.trailing_stop_pct   = max(0.001, float(s["trailing_stop_pct"]) / 100.0)
             if "loss_threshold"      in s: self.loss_threshold       = max(0.001, float(s["loss_threshold"])    / 100.0)
@@ -279,9 +253,11 @@ class TradingEngine:
             if "rsi_buy_max"         in s: self.rsi_buy_max          = max(20.0, float(s["rsi_buy_max"]))
             if "rsi_sell_min"        in s: self.rsi_sell_min         = max(50.0, float(s["rsi_sell_min"]))
             if "sma_spread_min"      in s: self.sma_spread_min       = max(0.0,  float(s["sma_spread_min"]))
-        except Exception as e:
-            print(f"[ENGINE] _poll_live_settings error: {e}")
+        except Exception:
             pass
+
+    # -------------------------------
+    # Full-market momentum scanner
     # -------------------------------
 
     def _get_market_candidates(self, max_candidates: int = 30) -> List[str]:
@@ -538,14 +514,13 @@ class TradingEngine:
         try:
             t = self.api.get_latest_trade(symbol)
             price = float(t.price)
-        except Exception as e:
-            print(f"[ENGINE] {symbol}: Alpaca price fetch failed ({e}) — trying Alpha Vantage")
+        except Exception:
             # Failover to Alpha Vantage if Alpaca fails
             try:
                 data, _ = self.ts.get_quote_endpoint(symbol)
                 price = float(data["05. price"])
-            except Exception as e2:
-                print(f"[ENGINE] {symbol}: Alpha Vantage also failed ({e2}) — no price available")
+            except Exception:
+                pass
 
         self._price_cache[symbol] = (price, time.time())
         return price
@@ -555,14 +530,10 @@ class TradingEngine:
         try:
             bars = self.api.get_bars(symbol, TimeFrame.Minute, limit=limit)
             if not bars:
-                print(f"[ENGINE] {symbol}: Alpaca returned 0 bars (market closed or no data)")
                 return None
             df = pd.DataFrame([{"c": b.c, "v": b.v} for b in bars])
-            if len(df) < 15:
-                print(f"[ENGINE] {symbol}: only {len(df)} bars returned (need 15+ for RSI/SMA)")
             return df
-        except Exception as e:
-            print(f"[ENGINE] {symbol}: get_bars error — {e}")
+        except Exception:
             return None
 
     # -------------------------------
@@ -633,11 +604,6 @@ class TradingEngine:
                 signal["verdict"] = "SELL"
                 signal["spread_pct"] = round(spread_pct, 3)
 
-        print(
-            f"[SIGNAL] {symbol} @ ${price:.2f} | "
-            f"RSI={signal['rsi']} SMA20={signal['sma20']} SMA50={signal['sma50']} | "
-            f"→ {signal['verdict']}"
-        )
         return signal
 
     # -------------------------------
@@ -659,6 +625,11 @@ class TradingEngine:
         if not holding:
             # Only enter if we have an open position slot
             if signal["verdict"] == "BUY" and len(self.current_holdings) < self.max_positions:
+                # Auto-trade master switch — if OFF, signal but don't execute
+                if not self.auto_trade:
+                    signal["verdict"] = "BUY_BLOCKED"
+                    print(f"[ENGINE] {symbol} BUY signal — auto-trade is OFF, skipping.")
+                    return
                 # Check ladder approval if scanner is attached
                 # is_ladder_approved is attached by integrate_ladder_with_engine()
                 ladder_check = getattr(self, 'is_ladder_approved', None)
@@ -693,6 +664,9 @@ class TradingEngine:
 
             # 1. Trailing stop — price fell X% below its peak since purchase → SELL
             if drop_from_peak >= self.trailing_stop_pct:
+                if not self.auto_trade:
+                    print(f"[ENGINE] {symbol} TRAILING STOP triggered — auto-trade is OFF, skipping sell.")
+                    return
                 self.send_alert(
                     f"TRAILING STOP: {symbol} fell {drop_from_peak*100:.1f}% from peak "
                     f"${peak:.2f} \u2192 selling @ ${price:.2f}",

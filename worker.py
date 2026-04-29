@@ -3,6 +3,7 @@ import time
 import signal
 import sys
 import threading
+import requests
 
 from trading_engine import TradingEngine
 from portfolio_ladder import PortfolioLadderScanner, integrate_ladder_with_engine, DEFAULT_PORTFOLIO
@@ -20,6 +21,60 @@ LADDER_INTERVAL  = int(os.environ.get("LADDER_INTERVAL",   "60"))
 MIN_SCORE_TO_BUY = float(os.environ.get("MIN_SCORE_TO_BUY", "45.0"))
 TOP_TIER_PCT     = float(os.environ.get("TOP_TIER_PCT",     "0.20"))
 BOTTOM_TIER_PCT  = float(os.environ.get("BOTTOM_TIER_PCT",  "0.20"))
+
+
+def heartbeat_loop(engine: TradingEngine, dashboard_url: str, interval: int = 10):
+    """
+    Sends a heartbeat to the dashboard every N seconds regardless of market hours.
+    This keeps the UI live feed and worker status indicator green at all times.
+    """
+    while True:
+        try:
+            with engine.lock:
+                positions = {
+                    sym: {"price": h["price"], "qty": h["qty"]}
+                    for sym, h in engine.current_holdings.items()
+                }
+                invested = sum(h["qty"] * h["price"] for h in engine.current_holdings.values())
+
+            payload = {
+                "running":      engine.running,
+                "mode":         engine.trading_mode,
+                "stock_list":   engine.stock_list,
+                "profit":       round(engine.profit, 4),
+                "positions":    positions,
+                "signals":      dict(engine._symbol_signals),
+                "message":      "heartbeat",
+                "poll_seconds": engine.poll_seconds,
+                "trade_count":  len(engine.trade_log),
+                "capital": {
+                    "initial":   round(engine.initial_capital, 2),
+                    "available": round(engine._available_capital, 2),
+                    "invested":  round(invested, 2),
+                    "total":     round(engine._available_capital + invested, 2),
+                    "mode":      "pool" if engine.initial_capital > 0 else "fixed_qty",
+                },
+                "trailing_stop_pct":    round(engine.trailing_stop_pct * 100, 2),
+                "loss_threshold":       round(engine.loss_threshold * 100, 2),
+                "scan_all_market":      engine.scan_all_market,
+                "max_positions":        engine.max_positions,
+                "min_positions":        engine.min_positions,
+                "trading_mode":         engine.trading_mode,
+                "live_trading_enabled": engine.live_enabled,
+                "auto_trade":           engine.auto_trade,
+                "risk_settings": {
+                    "risk_per_trade_pct": engine.risk_per_trade_pct,
+                    "max_position_pct":   engine.max_position_pct,
+                    "risk_per_trade_usd": engine.risk_per_trade_usd,
+                    "rsi_buy_max":        engine.rsi_buy_max,
+                    "rsi_sell_min":       engine.rsi_sell_min,
+                    "sma_spread_min":     engine.sma_spread_min,
+                },
+            }
+            requests.post(f"{dashboard_url}/api/worker/heartbeat", json=payload, timeout=5)
+        except Exception as e:
+            print(f"[HEARTBEAT] Failed to ping dashboard: {e}")
+        time.sleep(interval)
 
 
 def build_symbol_list() -> list:
@@ -77,6 +132,24 @@ def main():
 
     # ── Start engine ──────────────────────────────────────────
     engine.start()
+
+    # ── Start dedicated heartbeat thread (keeps UI live 24/7) ─
+    dashboard_url = (
+        os.environ.get("DASHBOARD_BASE_URL") or
+        os.environ.get("DASHBOARD_URL") or ""
+    ).rstrip("/")
+    heartbeat_interval = int(os.environ.get("HEARTBEAT_EVERY_SECONDS", "10"))
+    if dashboard_url:
+        hb_thread = threading.Thread(
+            target=heartbeat_loop,
+            args=(engine, dashboard_url, heartbeat_interval),
+            daemon=True,
+            name="Heartbeat"
+        )
+        hb_thread.start()
+        print(f"[WORKER] Heartbeat thread running → {dashboard_url} every {heartbeat_interval}s")
+    else:
+        print("[WORKER] WARNING: DASHBOARD_BASE_URL not set — UI will not receive live updates")
 
     # ── Start ladder scanner in daemon thread ─────────────────
     ladder_thread = threading.Thread(

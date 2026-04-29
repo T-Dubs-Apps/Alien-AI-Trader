@@ -64,6 +64,8 @@ _ai_trader_enabled = True
 
 # Live trading settings — the engine polls this endpoint every cycle
 _trading_settings: dict = {
+    # ── Auto-trade master switch (toggled from UI) ───────────────────────────
+    "auto_trade":          True,   # True = engine executes buys/sells autonomously
     # ── Core scan / execution settings ──────────────────────────────────────
     "poll_seconds":        int(os.environ.get("POLL_SECONDS",        "15")),
     "trailing_stop_pct":   float(os.environ.get("TRAILING_STOP_PCT", "3.0")),
@@ -381,6 +383,8 @@ def trader_toggle():
         _ai_trader_enabled = bool(payload["enabled"])
     else:
         _ai_trader_enabled = not _ai_trader_enabled
+    # Keep trading settings in sync so the engine picks it up on next poll
+    _trading_settings["auto_trade"] = _ai_trader_enabled
     socketio.emit("ai_trader_state", {"ai_trader_enabled": _ai_trader_enabled})
     return jsonify({"ai_trader_enabled": _ai_trader_enabled}), 200
 
@@ -440,6 +444,8 @@ def update_trading_settings():
         # Core execution
         "poll_seconds", "trailing_stop_pct", "loss_threshold",
         "max_trades_per_hour", "scan_all_market", "max_positions", "initial_capital",
+        # Auto-trade master switch
+        "auto_trade",
         # Position sizing / risk controls
         "risk_per_trade_pct", "max_position_pct", "min_positions", "risk_per_trade_usd",
         # Signal quality filters
