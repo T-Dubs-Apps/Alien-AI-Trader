@@ -20,33 +20,34 @@ except Exception:
 
 
 class TradingEngine:
-        def _calc_macd(self, closes: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9):
-            if len(closes) < slow + signal:
-                return None, None
-            exp1 = closes.ewm(span=fast, adjust=False).mean()
-            exp2 = closes.ewm(span=slow, adjust=False).mean()
-            macd_line = exp1 - exp2
-            signal_line = macd_line.ewm(span=signal, adjust=False).mean()
-            return float(macd_line.iloc[-1]), float(signal_line.iloc[-1])
+    def _calc_macd(self, closes: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9):
+        if len(closes) < slow + signal:
+            return None, None
+        exp1 = closes.ewm(span=fast, adjust=False).mean()
+        exp2 = closes.ewm(span=slow, adjust=False).mean()
+        macd_line = exp1 - exp2
+        signal_line = macd_line.ewm(span=signal, adjust=False).mean()
+        return float(macd_line.iloc[-1]), float(signal_line.iloc[-1])
 
-        def _calc_bollinger(self, closes: pd.Series, period: int = 20, num_std: float = 2.0):
-            if len(closes) < period:
-                return None, None, None
-            sma = closes.rolling(window=period).mean().iloc[-1]
-            std = closes.rolling(window=period).std().iloc[-1]
-            upper = sma + num_std * std
-            lower = sma - num_std * std
-            return float(upper), float(sma), float(lower)
+    def _calc_bollinger(self, closes: pd.Series, period: int = 20, num_std: float = 2.0):
+        if len(closes) < period:
+            return None, None, None
+        sma = closes.rolling(window=period).mean().iloc[-1]
+        std = closes.rolling(window=period).std().iloc[-1]
+        upper = sma + num_std * std
+        lower = sma - num_std * std
+        return float(upper), float(sma), float(lower)
 
-        def _calc_vwap(self, df: pd.DataFrame):
-            # VWAP = sum(price * volume) / sum(volume)
-            if df is None or df.empty or 'c' not in df or 'v' not in df:
-                return None
-            pv = (df['c'].astype(float) * df['v'].astype(float)).sum()
-            v = df['v'].astype(float).sum()
-            if v == 0:
-                return None
-            return float(pv / v)
+    def _calc_vwap(self, df: pd.DataFrame):
+        # VWAP = sum(price * volume) / sum(volume)
+        if df is None or df.empty or 'c' not in df or 'v' not in df:
+            return None
+        pv = (df['c'].astype(float) * df['v'].astype(float)).sum()
+        v = df['v'].astype(float).sum()
+        if v == 0:
+            return None
+        return float(pv / v)
+
     """
     TradingEngine — upgraded for concurrent scanning, RSI + SMA crossover signals,
     ROI tracking, price caching, and faster real-time heartbeats.
