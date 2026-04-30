@@ -101,35 +101,35 @@ def build_symbol_list() -> list:
 
 
 def main():
-        symbols = build_symbol_list()
-        mode    = os.environ.get("ENGINE_MODE", "AI")
+    symbols = build_symbol_list()
+    mode = os.environ.get("ENGINE_MODE", "AI")
 
-        print(f"[WORKER] Starting Alien AI Trader Worker")
-        print(f"[WORKER] Symbols: {len(symbols)} | Mode: {mode} | "
-            f"Run limit: {RUN_SECONDS // 3600}h {(RUN_SECONDS % 3600) // 60}m")
+    print(f"[WORKER] Starting Alien AI Trader Worker")
+    print(f"[WORKER] Symbols: {len(symbols)} | Mode: {mode} | "
+          f"Run limit: {RUN_SECONDS // 3600}h {(RUN_SECONDS % 3600) // 60}m")
 
-        # If no symbols, force scan_all_market ON
-        scan_all_market = os.environ.get("SCAN_ALL_MARKET", "false").lower() == "true" or not symbols
+    # If no symbols, force scan_all_market ON
+    scan_all_market = os.environ.get("SCAN_ALL_MARKET", "false").lower() == "true" or not symbols
 
-        # ── Create trading engine ─────────────────────────────────
-        engine = TradingEngine(symbols, mode=mode)
-        engine.scan_all_market = scan_all_market
+    # ── Create trading engine ─────────────────────────────────
+    engine = TradingEngine(symbols, mode=mode)
+    engine.scan_all_market = scan_all_market
 
-        # ── Create portfolio ladder scanner ───────────────────────
-        ladder = PortfolioLadderScanner(
-          symbols=symbols,
-          engine=engine,
-          max_workers=SCAN_WORKERS,
-          top_tier_pct=TOP_TIER_PCT,
-          bottom_tier_pct=BOTTOM_TIER_PCT,
-          min_score_to_buy=MIN_SCORE_TO_BUY,
-          rsi_buy_max=float(os.environ.get("RSI_BUY_MAX", "55.0")),
-        )
+    # ── Create portfolio ladder scanner ───────────────────────
+    ladder = PortfolioLadderScanner(
+        symbols=symbols,
+        engine=engine,
+        max_workers=SCAN_WORKERS,
+        top_tier_pct=TOP_TIER_PCT,
+        bottom_tier_pct=BOTTOM_TIER_PCT,
+        min_score_to_buy=MIN_SCORE_TO_BUY,
+        rsi_buy_max=float(os.environ.get("RSI_BUY_MAX", "55.0")),
+    )
 
-        # ── Wire ladder into engine signal gating ─────────────────
-        integrate_ladder_with_engine(engine, ladder)
-        print(f"[WORKER] Ladder scanner integrated -- only TOP {TOP_TIER_PCT * 100:.0f}% "
-            f"of {len(symbols)} symbols will be BUY candidates per cycle")
+    # ── Wire ladder into engine signal gating ─────────────────
+    integrate_ladder_with_engine(engine, ladder)
+    print(f"[WORKER] Ladder scanner integrated -- only TOP {TOP_TIER_PCT * 100:.0f}% "
+          f"of {len(symbols)} symbols will be BUY candidates per cycle")
 
     # ── Shutdown handler ──────────────────────────────────────
     def shutdown(*_):
@@ -139,7 +139,7 @@ def main():
         sys.exit(0)   # SIGTERM from Render = intentional stop, exit is correct here
 
     signal.signal(signal.SIGTERM, shutdown)
-    signal.signal(signal.SIGINT,  shutdown)
+    signal.signal(signal.SIGINT, shutdown)
 
     # ── Start engine ──────────────────────────────────────────
     engine.start()
