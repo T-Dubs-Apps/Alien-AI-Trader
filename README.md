@@ -412,13 +412,50 @@ Real money trading involves substantial risk of loss.
 
 ## 🆕 Major Enhancements (2026)
 
+### Dashboard Tabs
+| Tab | Description |
+|-----|-------------|
+| **Watchlist** | Live prices + RSI/SMA signals for your personal stock list |
+| **Live Feed** | Real-time stream of AI decisions and market events |
+| **Alerts** | Push notifications from the trading engine |
+| **Trade** | Manual order panel + risk settings |
+| **Top 20** | AI's best market candidates ranked by ladder score (score bars, tier color, RSI, verdict) |
+| **Portfolio** | Capital summary (initial / available / invested / total) + live P&L on every open position |
+| **Backtest** | Upload a CSV of historical price data → run the RSI+SMA strategy → see total return, win rate, max drawdown, and equity curve chart |
+| **Settings** | Worker status, engine config, cloud sync |
+
+### How to Use the Backtest Tab
+1. Go to the **Backtest** tab
+2. Enter a **Symbol** (e.g. `AAPL`)
+3. Set a **Start Date** and **End Date**
+4. Upload a **CSV file** with columns `date` and `close` (daily closing prices)
+5. Click **Run Backtest** — results appear instantly below the form:
+   - Total Return ($)
+   - Win Rate (%)
+   - Max Drawdown ($)
+   - Trade count
+   - Equity curve chart
+
+### Whole-Market Scanning + Capital-Based Price Filter (New)
+- **`SCAN_ALL_MARKET=true`** (default) — the AI scans all active US equities on Alpaca for momentum, not just your watchlist
+- **Capital-based price filter** — the AI only considers stocks priced below `total_capital / min_positions`, so it automatically targets affordable stocks as capital grows:
+  - $10 capital → stocks up to ~$2
+  - $50 capital → stocks up to ~$10
+  - $1,000 capital → stocks up to ~$200
+  - Compounds upward automatically as profits reinvest
+
+### Scan All Market Toggle — Persistence
+- The **"Scan Entire Market"** switch on the Trade tab is saved server-side
+- It stays on when you switch devices or open a new browser window — any device connecting picks up the current server state via WebSocket
+- Default is **ON** (set via `SCAN_ALL_MARKET=true` in `render.yaml` and Render env vars)
+- To make it permanently on: ensure `SCAN_ALL_MARKET=true` is set in your Render dashboard env vars for both services
+
+### Other Improvements
 - Advanced signal filters: MACD, Bollinger Bands, VWAP
 - Dynamic position sizing (volatility & streak-based)
 - AI model integration (pluggable ML signals)
 - News & sentiment analysis (blocks bad trades)
 - Auto-recovery: crash notifications & dashboard logging
-- Trade simulation/backtest mode (CLI & dashboard UI)
-- Dashboard: Backtest tab, instant CSV upload, equity curve chart
 - Robust notification system (Pushbullet, Pushover, Twilio)
 - All settings live-editable from dashboard (no restart)
 - Modular architecture for easy upgrades

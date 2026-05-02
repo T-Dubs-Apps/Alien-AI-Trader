@@ -931,6 +931,7 @@
     });
     socket.on('worker_status', (data) => {
       renderWorkerStatus(data);
+      renderPortfolio(data);
     });
     socket.on('ai_trader_state', (data) => {
       setAITraderUI(data.ai_trader_enabled);
@@ -1457,7 +1458,6 @@
       }
 
       // ROI % display
-      const cap = d.capital;
       const roiEl  = document.getElementById('statROI');
       const roiSub = document.getElementById('statROISub');
       const hwmEl  = document.getElementById('statHWM');
@@ -1743,12 +1743,6 @@
           }).join('');
         });
     }
-
-    // Re-render portfolio whenever worker status updates
-    socket.on('worker_status', (data) => {
-      renderWorkerStatus(data);
-      renderPortfolio(data);
-    });
 
     // ═══════════════════════════════════════════
     //  AUTO-SAVE SCAN ALL MARKET
