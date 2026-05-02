@@ -367,8 +367,11 @@ class PortfolioLadderScanner:
             return None
 
         try:
-            # Fetch signal data from engine
-            signal = self.engine._get_signal(symbol) if hasattr(self.engine, "_get_signal") else {}
+            # Fetch current price, then get full signal from engine
+            price = self.engine.get_live_price(symbol) if hasattr(self.engine, "get_live_price") else None
+            if price is None:
+                return None
+            signal = self.engine._get_signal(symbol, price) if hasattr(self.engine, "_get_signal") else {}
 
             rsi   = signal.get("rsi")
             sma20 = signal.get("sma20")

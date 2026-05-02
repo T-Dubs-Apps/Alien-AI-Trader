@@ -4,10 +4,18 @@ import time
 import threading
 import requests
 
+from crash_notifier import send_crash_notification
+from trading_engine import TradingEngine
+from portfolio_ladder import PortfolioLadderScanner
+
 # Built by Troy Walker of T-Dub's Apps - 2026-04-26
 
 RUN_SECONDS = int(os.environ.get("RUN_SECONDS", "3300"))
 LADDER_INTERVAL = int(os.environ.get("LADDER_INTERVAL", "5"))
+
+# Module-level refs so the shutdown() signal handler can reach them
+engine = None
+ladder = None
 
 
 def shutdown(signum, frame):
@@ -36,7 +44,18 @@ def safe_dashboard_notify(dashboard_url, level, message):
         pass
 
 
+def heartbeat_loop(engine, dashboard_url, interval):
+    while getattr(engine, "running", True):
+        try:
+            engine._maybe_heartbeat(message="alive")
+        except Exception:
+            pass
+        time.sleep(interval)
+
+
 def main():
+    global engine, ladder
+
     dashboard_url = (
         os.environ.get("DASHBOARD_BASE_URL")
         or os.environ.get("DASHBOARD_URL")
@@ -44,6 +63,16 @@ def main():
     ).rstrip("/")
 
     heartbeat_interval = int(os.environ.get("HEARTBEAT_EVERY_SECONDS", "10"))
+
+    stock_list = [
+        s.strip().upper()
+        for s in os.environ.get("STOCK_LIST", "AAPL,GOOG,TSLA,MSFT,AMZN").split(",")
+        if s.strip()
+    ]
+    mode = os.environ.get("ENGINE_MODE", "AI")
+
+    engine = TradingEngine(stock_list=stock_list, mode=mode)
+    ladder = PortfolioLadderScanner(symbols=stock_list, engine=engine)
 
     engine.start()
 

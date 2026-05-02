@@ -342,123 +342,6 @@
           <i class="fa-solid fa-sliders me-1"></i>Settings
         </button>
       </li>
-          <!-- ══ BACKTEST TAB ══ -->
-          <div class="tab-pane fade" id="tabBacktest">
-            <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
-              <div>
-                <h5 class="mb-0 fw-bold">Trade Simulation & Backtest</h5>
-                <div class="small-muted">Upload historical CSV, run strategy simulation, and view results.</div>
-              </div>
-            </div>
-            <form id="backtestForm" class="row g-3 align-items-end mb-3">
-              <div class="col-md-4">
-                <label class="form-label">Symbol</label>
-                <input class="form-control" id="backtestSymbol" placeholder="AAPL">
-              </div>
-              <div class="col-md-3">
-                <label class="form-label">Start Date</label>
-                <input class="form-control" type="date" id="backtestStart">
-              </div>
-              <div class="col-md-3">
-                <label class="form-label">End Date</label>
-                <input class="form-control" type="date" id="backtestEnd">
-              </div>
-              <div class="col-md-2">
-                <label class="form-label">CSV File</label>
-                <input class="form-control" type="file" id="backtestCSV" accept=".csv">
-              </div>
-              <div class="col-12">
-                <button class="btn btn-primary" type="submit"><i class="fa-solid fa-play me-1"></i>Run Backtest</button>
-              </div>
-            </form>
-            <div id="backtestResult" class="mt-3"></div>
-            <canvas id="backtestChart" height="120" style="max-width:600px;"></canvas>
-          </div>
-        // ═══════════════════════════════════════════
-        //  BACKTEST TAB LOGIC
-        // ═══════════════════════════════════════════
-        document.getElementById('backtestForm').addEventListener('submit', async function(e) {
-          e.preventDefault();
-          const symbol = document.getElementById('backtestSymbol').value.trim().toUpperCase();
-          const start  = document.getElementById('backtestStart').value;
-          const end    = document.getElementById('backtestEnd').value;
-          const fileEl = document.getElementById('backtestCSV');
-          if (!symbol || !start || !end || !fileEl.files.length) {
-            document.getElementById('backtestResult').innerHTML = '<span style="color:var(--down)">Please fill all fields and select a CSV file.</span>';
-            return;
-          }
-          const file = fileEl.files[0];
-          const reader = new FileReader();
-          reader.onload = function(evt) {
-            const csv = evt.target.result;
-            runBacktestCSV(symbol, start, end, csv);
-          };
-          reader.readAsText(file);
-        });
-
-        async function runBacktestCSV(symbol, start, end, csv) {
-          // Parse CSV (expects columns: date,close)
-          const rows = csv.split(/\r?\n/).map(l => l.split(','));
-          const header = rows[0].map(h => h.trim().toLowerCase());
-          const dateIdx = header.indexOf('date');
-          const closeIdx = header.indexOf('close');
-          if (dateIdx === -1 || closeIdx === -1) {
-            document.getElementById('backtestResult').innerHTML = '<span style="color:var(--down)">CSV must have date and close columns.</span>';
-            return;
-          }
-          const data = rows.slice(1).filter(r => r.length > closeIdx && r[dateIdx] && r[closeIdx]);
-          const filtered = data.filter(r => r[dateIdx] >= start && r[dateIdx] <= end);
-          if (!filtered.length) {
-            document.getElementById('backtestResult').innerHTML = '<span style="color:var(--down)">No data in selected date range.</span>';
-            return;
-          }
-          // Simple SMA/RSI/MACD backtest (BUY/SELL logic)
-          let holding = null, tradeLog = [], equity = 0, peak = 0, maxDD = 0, pnl = [];
-          filtered.forEach((row, idx) => {
-            const price = parseFloat(row[closeIdx]);
-            const date  = row[dateIdx];
-            // Simple: buy on first, sell on last
-            if (idx === 0) {
-              holding = { price, date };
-              tradeLog.push({ action: 'BUY', price, date });
-            }
-            if (idx === filtered.length - 1 && holding) {
-              const profit = price - holding.price;
-              tradeLog.push({ action: 'SELL', price, date, pnl: profit });
-              pnl.push(profit);
-            }
-            equity += pnl.length ? pnl[pnl.length-1] : 0;
-            if (equity > peak) peak = equity;
-            const dd = peak - equity; if (dd > maxDD) maxDD = dd;
-          });
-          const totalReturn = pnl.reduce((a,b) => a+b, 0);
-          const winRate = pnl.filter(x => x > 0).length / (pnl.length || 1);
-          document.getElementById('backtestResult').innerHTML =
-            `<div class='glass-card'><b>${symbol} Backtest Results</b><br>
-            Total Return: <b>${fmtMoney(totalReturn)}</b><br>
-            Win Rate: <b>${(winRate*100).toFixed(1)}%</b><br>
-            Max Drawdown: <b>${fmtMoney(maxDD)}</b><br>
-            Trades: <b>${pnl.length}</b></div>`;
-          // Plot equity curve
-          const ctx = document.getElementById('backtestChart').getContext('2d');
-          if (window.backtestChartObj) window.backtestChartObj.destroy();
-          window.backtestChartObj = new Chart(ctx, {
-            type: 'line',
-            data: {
-              labels: filtered.map(r => r[dateIdx]),
-              datasets: [{
-                label: symbol + ' Equity',
-                data: pnl.reduce((acc, x) => { acc.push((acc.length ? acc[acc.length-1] : 0) + x); return acc; }, []),
-                borderColor: '#3b82f6',
-                borderWidth: 2,
-                pointRadius: 0,
-                tension: 0.2,
-                fill: false,
-              }]
-            },
-            options: { plugins: { legend: { display: false } }, scales: { x: { display: false }, y: { display: true } } }
-          });
-        }
     </ul>
 
     <div class="tab-content" id="dashboardTabsContent">
@@ -673,24 +556,6 @@
                     </label>
                   </div>
                 </div>
-                  // ═══════════════════════════════════════════
-                  //  AUTO-SAVE SCAN ALL MARKET
-                  // ═══════════════════════════════════════════
-                  function autoSaveScanAllMarket() {
-                    const checked = document.getElementById('scanAllMarket').checked;
-                    fetch('/api/settings/trading', {
-                      method: 'POST',
-                      headers: {'Content-Type': 'application/json'},
-                      body: JSON.stringify({ scan_all_market: checked }),
-                    })
-                    .then(r => r.json())
-                    .then(() => {
-                      addFeedSysLine(checked ? 'Scan Entire Market ENABLED' : 'Scan Entire Market DISABLED');
-                    })
-                    .catch(() => {
-                      addFeedSysLine('⚠ Failed to update Scan Entire Market setting');
-                    });
-                  }
               </div>
 
               <!-- Position Sizing & Signal Controls -->
@@ -796,6 +661,39 @@
         </div>
       </div>
 
+      <!-- ══ BACKTEST TAB ══ -->
+      <div class="tab-pane fade" id="tabBacktest">
+        <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+          <div>
+            <h5 class="mb-0 fw-bold">Trade Simulation & Backtest</h5>
+            <div class="small-muted">Upload historical CSV, run strategy simulation, and view results.</div>
+          </div>
+        </div>
+        <form id="backtestForm" class="row g-3 align-items-end mb-3">
+          <div class="col-md-4">
+            <label class="form-label">Symbol</label>
+            <input class="form-control" id="backtestSymbol" placeholder="AAPL">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">Start Date</label>
+            <input class="form-control" type="date" id="backtestStart">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">End Date</label>
+            <input class="form-control" type="date" id="backtestEnd">
+          </div>
+          <div class="col-md-2">
+            <label class="form-label">CSV File</label>
+            <input class="form-control" type="file" id="backtestCSV" accept=".csv">
+          </div>
+          <div class="col-12">
+            <button class="btn btn-primary" type="submit"><i class="fa-solid fa-play me-1"></i>Run Backtest</button>
+          </div>
+        </form>
+        <div id="backtestResult" class="mt-3"></div>
+        <canvas id="backtestChart" height="120" style="max-width:600px;"></canvas>
+      </div>
+
       <!-- ══ SETTINGS TAB ══ -->
       <div class="tab-pane fade" id="tabSettings">
         <div class="row g-4">
@@ -894,71 +792,6 @@
               <ul id="cloudFileList" class="list-group mb-2"></ul>
             </div>
           </div>
-            // ═══════════════════════════════════════════
-            //  CLOUD SYNC (USER FILES)
-            // ═══════════════════════════════════════════
-            document.getElementById('cloudUploadForm').addEventListener('submit', async function(e) {
-              e.preventDefault();
-              const fileEl = document.getElementById('cloudFile');
-              const userId = document.getElementById('cloudUserId').value.trim() || 'demo';
-              if (!fileEl.files.length) return;
-              const file = fileEl.files[0];
-              const formData = new FormData();
-              formData.append('file', file);
-              document.getElementById('cloudUploadResult').textContent = 'Uploading...';
-              try {
-                const res = await fetch('/api/cloud/upload', {
-                  method: 'POST',
-                  headers: { 'X-User-ID': userId },
-                  body: formData
-                });
-                const data = await res.json();
-                if (data.status === 'ok') {
-                  document.getElementById('cloudUploadResult').innerHTML = `<span style='color:var(--up)'>Uploaded: ${data.filename}</span>`;
-                  listCloudFiles();
-                } else {
-                  document.getElementById('cloudUploadResult').innerHTML = `<span style='color:var(--down)'>${data.error||'Upload failed'}</span>`;
-                }
-              } catch (err) {
-                document.getElementById('cloudUploadResult').innerHTML = `<span style='color:var(--down)'>${err}</span>`;
-              }
-            });
-
-            async function listCloudFiles() {
-              const userId = document.getElementById('cloudUserId').value.trim() || 'demo';
-              const res = await fetch('/api/cloud/list', { headers: { 'X-User-ID': userId } });
-              const files = await res.json();
-              const ul = document.getElementById('cloudFileList');
-              ul.innerHTML = '';
-              if (!files.length) {
-                ul.innerHTML = '<li class="list-group-item small-muted">No files in cloud.</li>';
-                return;
-              }
-              files.forEach(fname => {
-                const li = document.createElement('li');
-                li.className = 'list-group-item d-flex justify-content-between align-items-center';
-                li.textContent = fname;
-                const btn = document.createElement('button');
-                btn.className = 'btn btn-outline-primary btn-sm';
-                btn.innerHTML = '<i class="fa-solid fa-download"></i>';
-                btn.onclick = () => downloadCloudFile(fname);
-                li.appendChild(btn);
-                ul.appendChild(li);
-              });
-            }
-
-            async function downloadCloudFile(fname) {
-              const userId = document.getElementById('cloudUserId').value.trim() || 'demo';
-              const url = `/api/cloud/download/${encodeURIComponent(fname)}`;
-              fetch(url, { headers: { 'X-User-ID': userId } })
-                .then(resp => resp.blob())
-                .then(blob => {
-                  const a = document.createElement('a');
-                  a.href = window.URL.createObjectURL(blob);
-                  a.download = fname;
-                  a.click();
-                });
-            }
         </div>
       </div>
 
@@ -1698,6 +1531,173 @@
     // Fallback REST pollers (WebSocket is primary; these catch up if WS stalls)
     setInterval(fetchWorkerStatus, 20000);
     setInterval(refreshQuotesNow, 8000);   // fast fallback refresh
+
+    // ═══════════════════════════════════════════
+    //  AUTO-SAVE SCAN ALL MARKET
+    // ═══════════════════════════════════════════
+    function autoSaveScanAllMarket() {
+      const checked = document.getElementById('scanAllMarket').checked;
+      fetch('/api/settings/trading', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ scan_all_market: checked }),
+      })
+      .then(r => r.json())
+      .then(() => {
+        addFeedSysLine(checked ? 'Scan Entire Market ENABLED' : 'Scan Entire Market DISABLED');
+      })
+      .catch(() => {
+        addFeedSysLine('⚠ Failed to update Scan Entire Market setting');
+      });
+    }
+
+    // ═══════════════════════════════════════════
+    //  BACKTEST TAB LOGIC
+    // ═══════════════════════════════════════════
+    document.getElementById('backtestForm').addEventListener('submit', async function(e) {
+      e.preventDefault();
+      const symbol = document.getElementById('backtestSymbol').value.trim().toUpperCase();
+      const start  = document.getElementById('backtestStart').value;
+      const end    = document.getElementById('backtestEnd').value;
+      const fileEl = document.getElementById('backtestCSV');
+      if (!symbol || !start || !end || !fileEl.files.length) {
+        document.getElementById('backtestResult').innerHTML = '<span style="color:var(--down)">Please fill all fields and select a CSV file.</span>';
+        return;
+      }
+      const file = fileEl.files[0];
+      const reader = new FileReader();
+      reader.onload = function(evt) {
+        const csv = evt.target.result;
+        runBacktestCSV(symbol, start, end, csv);
+      };
+      reader.readAsText(file);
+    });
+
+    async function runBacktestCSV(symbol, start, end, csv) {
+      const rows = csv.split(/\r?\n/).map(l => l.split(','));
+      const header = rows[0].map(h => h.trim().toLowerCase());
+      const dateIdx = header.indexOf('date');
+      const closeIdx = header.indexOf('close');
+      if (dateIdx === -1 || closeIdx === -1) {
+        document.getElementById('backtestResult').innerHTML = '<span style="color:var(--down)">CSV must have date and close columns.</span>';
+        return;
+      }
+      const data = rows.slice(1).filter(r => r.length > closeIdx && r[dateIdx] && r[closeIdx]);
+      const filtered = data.filter(r => r[dateIdx] >= start && r[dateIdx] <= end);
+      if (!filtered.length) {
+        document.getElementById('backtestResult').innerHTML = '<span style="color:var(--down)">No data in selected date range.</span>';
+        return;
+      }
+      let holding = null, tradeLog = [], equity = 0, peak = 0, maxDD = 0, pnl = [];
+      filtered.forEach((row, idx) => {
+        const price = parseFloat(row[closeIdx]);
+        const date  = row[dateIdx];
+        if (idx === 0) {
+          holding = { price, date };
+          tradeLog.push({ action: 'BUY', price, date });
+        }
+        if (idx === filtered.length - 1 && holding) {
+          const profit = price - holding.price;
+          tradeLog.push({ action: 'SELL', price, date, pnl: profit });
+          pnl.push(profit);
+        }
+        equity += pnl.length ? pnl[pnl.length-1] : 0;
+        if (equity > peak) peak = equity;
+        const dd = peak - equity; if (dd > maxDD) maxDD = dd;
+      });
+      const totalReturn = pnl.reduce((a,b) => a+b, 0);
+      const winRate = pnl.filter(x => x > 0).length / (pnl.length || 1);
+      document.getElementById('backtestResult').innerHTML =
+        `<div class='glass-card'><b>${symbol} Backtest Results</b><br>
+        Total Return: <b>${fmtMoney(totalReturn)}</b><br>
+        Win Rate: <b>${(winRate*100).toFixed(1)}%</b><br>
+        Max Drawdown: <b>${fmtMoney(maxDD)}</b><br>
+        Trades: <b>${pnl.length}</b></div>`;
+      const ctx = document.getElementById('backtestChart').getContext('2d');
+      if (window.backtestChartObj) window.backtestChartObj.destroy();
+      window.backtestChartObj = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: filtered.map(r => r[dateIdx]),
+          datasets: [{
+            label: symbol + ' Equity',
+            data: pnl.reduce((acc, x) => { acc.push((acc.length ? acc[acc.length-1] : 0) + x); return acc; }, []),
+            borderColor: '#3b82f6',
+            borderWidth: 2,
+            pointRadius: 0,
+            tension: 0.2,
+            fill: false,
+          }]
+        },
+        options: { plugins: { legend: { display: false } }, scales: { x: { display: false }, y: { display: true } } }
+      });
+    }
+
+    // ═══════════════════════════════════════════
+    //  CLOUD SYNC (USER FILES)
+    // ═══════════════════════════════════════════
+    document.getElementById('cloudUploadForm').addEventListener('submit', async function(e) {
+      e.preventDefault();
+      const fileEl = document.getElementById('cloudFile');
+      const userId = document.getElementById('cloudUserId').value.trim() || 'demo';
+      if (!fileEl.files.length) return;
+      const file = fileEl.files[0];
+      const formData = new FormData();
+      formData.append('file', file);
+      document.getElementById('cloudUploadResult').textContent = 'Uploading...';
+      try {
+        const res = await fetch('/api/cloud/upload', {
+          method: 'POST',
+          headers: { 'X-User-ID': userId },
+          body: formData
+        });
+        const data = await res.json();
+        if (data.status === 'ok') {
+          document.getElementById('cloudUploadResult').innerHTML = `<span style='color:var(--up)'>Uploaded: ${data.filename}</span>`;
+          listCloudFiles();
+        } else {
+          document.getElementById('cloudUploadResult').innerHTML = `<span style='color:var(--down)'>${data.error||'Upload failed'}</span>`;
+        }
+      } catch (err) {
+        document.getElementById('cloudUploadResult').innerHTML = `<span style='color:var(--down)'>${err}</span>`;
+      }
+    });
+
+    async function listCloudFiles() {
+      const userId = document.getElementById('cloudUserId').value.trim() || 'demo';
+      const res = await fetch('/api/cloud/list', { headers: { 'X-User-ID': userId } });
+      const files = await res.json();
+      const ul = document.getElementById('cloudFileList');
+      ul.innerHTML = '';
+      if (!files.length) {
+        ul.innerHTML = '<li class="list-group-item small-muted">No files in cloud.</li>';
+        return;
+      }
+      files.forEach(fname => {
+        const li = document.createElement('li');
+        li.className = 'list-group-item d-flex justify-content-between align-items-center';
+        li.textContent = fname;
+        const btn = document.createElement('button');
+        btn.className = 'btn btn-outline-primary btn-sm';
+        btn.innerHTML = '<i class="fa-solid fa-download"></i>';
+        btn.onclick = () => downloadCloudFile(fname);
+        li.appendChild(btn);
+        ul.appendChild(li);
+      });
+    }
+
+    async function downloadCloudFile(fname) {
+      const userId = document.getElementById('cloudUserId').value.trim() || 'demo';
+      const url = `/api/cloud/download/${encodeURIComponent(fname)}`;
+      fetch(url, { headers: { 'X-User-ID': userId } })
+        .then(resp => resp.blob())
+        .then(blob => {
+          const a = document.createElement('a');
+          a.href = window.URL.createObjectURL(blob);
+          a.download = fname;
+          a.click();
+        });
+    }
   </script>
 </body>
 </html>
