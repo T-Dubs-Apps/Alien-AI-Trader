@@ -53,7 +53,7 @@ services:
       - key: MAX_POSITIONS
         value: "5"
       - key: SCAN_ALL_MARKET
-        value: "false"
+        value: "true"
       - key: MARKET_SCAN_CANDIDATES
         value: "30"
       - key: MAX_TRADES_PER_HOUR
@@ -149,7 +149,7 @@ services:
       - key: MAX_POSITIONS
         value: "5"
       - key: SCAN_ALL_MARKET
-        value: "false"
+        value: "true"
       - key: MARKET_SCAN_CANDIDATES
         value: "30"
       - key: MAX_TRADES_PER_HOUR

@@ -333,6 +333,16 @@
         </button>
       </li>
       <li class="nav-item">
+        <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tabTop20">
+          <i class="fa-solid fa-trophy me-1"></i>Top 20
+        </button>
+      </li>
+      <li class="nav-item">
+        <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tabPortfolio">
+          <i class="fa-solid fa-briefcase me-1"></i>Portfolio
+        </button>
+      </li>
+      <li class="nav-item">
         <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tabBacktest">
           <i class="fa-solid fa-clock-rotate-left me-1"></i>Backtest
         </button>
@@ -658,6 +668,99 @@
               <div id="riskResult" class="mt-2 small-muted"></div>
             </div>
           </div>
+        </div>
+      </div>
+
+      <!-- ══ TOP 20 TAB ══ -->
+      <div class="tab-pane fade" id="tabTop20">
+        <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+          <div>
+            <h5 class="mb-0 fw-bold">AI Top 20 — Market Scan Rankings</h5>
+            <div class="small-muted">Best momentum candidates found by scanning the whole market. Updated every heartbeat.</div>
+          </div>
+          <span class="small-muted" id="top20LastUpdate"></span>
+        </div>
+        <div class="table-responsive">
+          <table class="table table-sm" style="color:var(--text);font-size:.83rem;">
+            <thead>
+              <tr style="color:var(--muted);border-color:var(--border);">
+                <th>#</th>
+                <th>Symbol</th>
+                <th>Score</th>
+                <th>Tier</th>
+                <th>Price</th>
+                <th>RSI</th>
+                <th>SMA20</th>
+                <th>SMA50</th>
+                <th>Vol Ratio</th>
+                <th>Verdict</th>
+              </tr>
+            </thead>
+            <tbody id="top20Body">
+              <tr><td colspan="10" class="text-center small-muted py-4">Waiting for first market scan…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- ══ PORTFOLIO TAB ══ -->
+      <div class="tab-pane fade" id="tabPortfolio">
+        <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+          <div>
+            <h5 class="mb-0 fw-bold">AI Portfolio — Current Holdings</h5>
+            <div class="small-muted">Stocks the AI trader currently owns. P&amp;L updates with each heartbeat.</div>
+          </div>
+        </div>
+
+        <!-- Capital summary row -->
+        <div class="row g-3 mb-3" id="portfolioCapRow" style="display:none!important;">
+          <div class="col-6 col-md-3">
+            <div class="stat-card">
+              <div class="stat-label">Total Capital</div>
+              <div class="stat-value" id="pcTotal">—</div>
+              <div class="stat-sub">Available + Invested</div>
+            </div>
+          </div>
+          <div class="col-6 col-md-3">
+            <div class="stat-card">
+              <div class="stat-label">Available Cash</div>
+              <div class="stat-value" id="pcAvail">—</div>
+              <div class="stat-sub">Ready to deploy</div>
+            </div>
+          </div>
+          <div class="col-6 col-md-3">
+            <div class="stat-card">
+              <div class="stat-label">Invested</div>
+              <div class="stat-value" id="pcInvested">—</div>
+              <div class="stat-sub">In open positions</div>
+            </div>
+          </div>
+          <div class="col-6 col-md-3">
+            <div class="stat-card">
+              <div class="stat-label">Session P&amp;L</div>
+              <div class="stat-value" id="pcPnl">—</div>
+              <div class="stat-sub">Net profit this session</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="table-responsive">
+          <table class="table table-sm" style="color:var(--text);font-size:.83rem;">
+            <thead>
+              <tr style="color:var(--muted);border-color:var(--border);">
+                <th>Symbol</th>
+                <th>Qty</th>
+                <th>Buy Price</th>
+                <th>Current Price</th>
+                <th>Value</th>
+                <th>P&amp;L $</th>
+                <th>P&amp;L %</th>
+              </tr>
+            </thead>
+            <tbody id="portfolioBody">
+              <tr><td colspan="7" class="text-center small-muted py-4">No open positions — AI is scanning for entries</td></tr>
+            </tbody>
+          </table>
         </div>
       </div>
 
@@ -1531,6 +1634,121 @@
     // Fallback REST pollers (WebSocket is primary; these catch up if WS stalls)
     setInterval(fetchWorkerStatus, 20000);
     setInterval(refreshQuotesNow, 8000);   // fast fallback refresh
+
+    // ═══════════════════════════════════════════
+    //  TOP 20 TAB
+    // ═══════════════════════════════════════════
+    socket.on('ladder_update', (data) => {
+      renderTop20(data.ladder || []);
+    });
+
+    function renderTop20(ladder) {
+      const tbody = document.getElementById('top20Body');
+      if (!ladder || !ladder.length) {
+        tbody.innerHTML = '<tr><td colspan="10" class="text-center small-muted py-4">Scanning market… results will appear shortly.</td></tr>';
+        return;
+      }
+      document.getElementById('top20LastUpdate').textContent = 'Updated ' + tsNow();
+      tbody.innerHTML = ladder.map((e, i) => {
+        const tierColor = e.tier === 'TOP' ? 'var(--up)' : e.tier === 'BOTTOM' ? 'var(--down)' : 'var(--muted)';
+        const verdictColor = e.verdict === 'BUY' ? 'var(--up)' : e.verdict === 'SELL' ? 'var(--down)' : 'var(--muted)';
+        const scoreBar = Math.round(e.score || 0);
+        return `<tr style="border-color:var(--border);">
+          <td style="color:var(--muted);">${i + 1}</td>
+          <td style="font-weight:800;color:#fff;">${escHtml(e.symbol)}</td>
+          <td>
+            <div style="display:flex;align-items:center;gap:6px;">
+              <div style="width:${scoreBar}px;max-width:80px;height:6px;background:var(--accent);border-radius:3px;"></div>
+              <span style="font-weight:700;">${scoreBar}</span>
+            </div>
+          </td>
+          <td><span style="color:${tierColor};font-weight:700;font-size:.72rem;">${e.tier || '—'}</span></td>
+          <td>${e.price != null ? fmtMoney(e.price) : '—'}</td>
+          <td style="color:${rsiColor(e.rsi)};font-weight:700;">${e.rsi != null ? (+e.rsi).toFixed(1) : '—'}</td>
+          <td>${e.sma20 != null ? fmtMoney(e.sma20) : '—'}</td>
+          <td>${e.sma50 != null ? fmtMoney(e.sma50) : '—'}</td>
+          <td>${e.volume_ratio != null ? (+e.volume_ratio).toFixed(2) + 'x' : '—'}</td>
+          <td><span style="color:${verdictColor};font-weight:800;font-size:.78rem;">${e.verdict || 'HOLD'}</span></td>
+        </tr>`;
+      }).join('');
+    }
+
+    async function fetchAndRenderTop20() {
+      try {
+        const r = await fetch('/api/ladder');
+        const data = await r.json();
+        renderTop20(data);
+      } catch {}
+    }
+
+    // ═══════════════════════════════════════════
+    //  PORTFOLIO TAB
+    // ═══════════════════════════════════════════
+    function renderPortfolio(workerStatus) {
+      const positions = workerStatus.positions || {};
+      const capital   = workerStatus.capital   || {};
+      const profit    = workerStatus.profit;
+      const symbols   = Object.keys(positions);
+      const tbody     = document.getElementById('portfolioBody');
+
+      // Capital summary
+      if (capital.total != null) {
+        document.getElementById('portfolioCapRow').style.removeProperty('display');
+        document.getElementById('pcTotal').textContent    = fmtMoney(capital.total);
+        document.getElementById('pcAvail').textContent    = fmtMoney(capital.available);
+        document.getElementById('pcInvested').textContent = fmtMoney(capital.invested);
+        const pnlEl = document.getElementById('pcPnl');
+        pnlEl.textContent  = profit != null ? fmtMoney(profit) : '—';
+        pnlEl.style.color  = profit > 0 ? 'var(--up)' : profit < 0 ? 'var(--down)' : 'var(--text)';
+      }
+
+      if (!symbols.length) {
+        tbody.innerHTML = '<tr><td colspan="7" class="text-center small-muted py-4">No open positions — AI is scanning for entries</td></tr>';
+        return;
+      }
+
+      // Fetch current prices then render
+      fetch('/api/quotes?symbols=' + encodeURIComponent(symbols.join(',')))
+        .then(r => r.json())
+        .then(quotes => {
+          tbody.innerHTML = symbols.map(sym => {
+            const pos      = positions[sym];
+            const buyPrice = pos.price || 0;
+            const qty      = pos.qty   || 0;
+            const curPrice = quotes[sym]?.price;
+            const value    = curPrice != null ? curPrice * qty : null;
+            const pnlDollar = curPrice != null ? (curPrice - buyPrice) * qty : null;
+            const pnlPct    = buyPrice > 0 && curPrice != null ? (curPrice - buyPrice) / buyPrice * 100 : null;
+            const pnlColor  = pnlDollar > 0 ? 'var(--up)' : pnlDollar < 0 ? 'var(--down)' : 'var(--muted)';
+            return `<tr style="border-color:var(--border);">
+              <td style="font-weight:800;color:#fff;">${escHtml(sym)}</td>
+              <td>${qty}</td>
+              <td>${fmtMoney(buyPrice)}</td>
+              <td>${curPrice != null ? fmtMoney(curPrice) : '—'}</td>
+              <td>${value != null ? fmtMoney(value) : '—'}</td>
+              <td style="color:${pnlColor};font-weight:700;">${pnlDollar != null ? fmtMoney(pnlDollar) : '—'}</td>
+              <td style="color:${pnlColor};font-weight:700;">${pnlPct != null ? fmtPct(pnlPct) : '—'}</td>
+            </tr>`;
+          }).join('');
+        })
+        .catch(() => {
+          tbody.innerHTML = symbols.map(sym => {
+            const pos = positions[sym];
+            return `<tr style="border-color:var(--border);">
+              <td style="font-weight:800;color:#fff;">${escHtml(sym)}</td>
+              <td>${pos.qty || 0}</td>
+              <td>${fmtMoney(pos.price)}</td>
+              <td colspan="4" class="small-muted">Price unavailable</td>
+            </tr>`;
+          }).join('');
+        });
+    }
+
+    // Re-render portfolio whenever worker status updates
+    socket.on('worker_status', (data) => {
+      renderWorkerStatus(data);
+      renderPortfolio(data);
+    });
 
     // ═══════════════════════════════════════════
     //  AUTO-SAVE SCAN ALL MARKET

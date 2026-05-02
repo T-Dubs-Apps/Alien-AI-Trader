@@ -314,6 +314,19 @@ class TradingEngine:
         watchlist    = set(self.stock_list)
         candidates: List[tuple] = []
 
+        # Capital-based price ceiling: spread capital across min_positions stocks.
+        # $10 capital / 5 positions = max $2/share; $10,000 / 5 = max $2,000/share.
+        with self.lock:
+            invested = sum(h["qty"] * h["price"] for h in self.current_holdings.values())
+        total_capital = self._available_capital + invested
+        if total_capital > 0 and self.initial_capital > 0:
+            max_price = max(2.0, total_capital / max(self.min_positions, 1))
+            min_price = 0.50
+        else:
+            max_price = 1000.0
+            min_price = 2.0
+        max_price = min(max_price, 5000.0)
+
         BATCH = 500
         for i in range(0, min(len(tradable), 5000), BATCH):
             batch = tradable[i : i + BATCH]
@@ -324,7 +337,7 @@ class TradingEngine:
                         continue
                     lt    = getattr(snap, "latest_trade", None)
                     price = float(getattr(lt, "price", 0) or 0)
-                    if price < 2.0 or price > 1000.0:
+                    if price < min_price or price > max_price:
                         continue
                     db     = getattr(snap, "daily_bar", None)
                     volume = float(getattr(db, "v", 0) or 0)

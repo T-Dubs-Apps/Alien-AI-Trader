@@ -59,6 +59,9 @@ _worker_status: Dict[str, Any] = {
     "message": "Worker has not checked in yet."
 }
 
+# In-memory ladder top 20 (updated every heartbeat)
+_ladder_top20: List[Dict[str, Any]] = []
+
 # In-memory AI trader toggle (can be overridden by worker via heartbeat)
 _ai_trader_enabled = True
 
@@ -155,7 +158,7 @@ def receive_data():
 
 @app.route("/api/worker/heartbeat", methods=["POST"])
 def worker_heartbeat():
-    global _worker_status
+    global _worker_status, _ladder_top20
     try:
         payload = request.json or {}
         _worker_status.update({
@@ -172,18 +175,25 @@ def worker_heartbeat():
             "scan_all_market":      payload.get("scan_all_market",      _worker_status.get("scan_all_market")),
             "max_positions":        payload.get("max_positions",        _worker_status.get("max_positions")),
             "min_positions":        payload.get("min_positions",        _worker_status.get("min_positions")),
-            # New: live/paper mode status and risk settings snapshot from engine
             "trading_mode":         payload.get("trading_mode",         _worker_status.get("trading_mode")),
             "live_trading_enabled": payload.get("live_trading_enabled", _worker_status.get("live_trading_enabled", False)),
             "risk_settings":        payload.get("risk_settings",        _worker_status.get("risk_settings", {})),
             "message":      payload.get("message", "ok"),
             "last_heartbeat": int(time.time()),
         })
+        if payload.get("ladder_top20"):
+            _ladder_top20 = payload["ladder_top20"]
+            socketio.emit("ladder_update", {"ladder": _ladder_top20})
         # Push live worker status to all browser clients
         socketio.emit("worker_status", _worker_status)
         return jsonify({"status": "ok"}), 200
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 400
+
+
+@app.route("/api/ladder", methods=["GET"])
+def get_ladder():
+    return jsonify(_ladder_top20), 200
 
 
 @app.route("/api/worker/status", methods=["GET"])
@@ -468,6 +478,7 @@ def on_connect():
     emit("ai_trader_state", {"ai_trader_enabled": _ai_trader_enabled})
     emit("notifications_init", {"notifications": _notifications[-50:]})
     emit("trading_settings", _trading_settings)
+    emit("ladder_update", {"ladder": _ladder_top20})
 
 
 if __name__ == "__main__":

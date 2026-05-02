@@ -44,10 +44,53 @@ def safe_dashboard_notify(dashboard_url, level, message):
         pass
 
 
-def heartbeat_loop(engine, dashboard_url, interval):
+def heartbeat_loop(engine, ladder, dashboard_url, interval):
     while getattr(engine, "running", True):
         try:
-            engine._maybe_heartbeat(message="alive")
+            with engine.lock:
+                positions = {
+                    sym: {"price": h["price"], "qty": h["qty"]}
+                    for sym, h in engine.current_holdings.items()
+                }
+                signals_snapshot = dict(engine._symbol_signals)
+                invested = sum(h["qty"] * h["price"] for h in engine.current_holdings.values())
+
+            ladder_top20 = []
+            try:
+                ladder_top20 = ladder.get_ladder()[:20]
+            except Exception:
+                pass
+
+            payload = {
+                "running":      engine.running,
+                "mode":         engine.trading_mode,
+                "stock_list":   engine.stock_list,
+                "profit":       round(engine.profit, 4),
+                "positions":    positions,
+                "signals":      signals_snapshot,
+                "message":      "alive",
+                "trade_count":  len(engine.trade_log),
+                "capital": {
+                    "initial":   round(engine.initial_capital, 2),
+                    "available": round(engine._available_capital, 2),
+                    "invested":  round(invested, 2),
+                    "total":     round(engine._available_capital + invested, 2),
+                    "mode":      "pool" if engine.initial_capital > 0 else "fixed_qty",
+                },
+                "trailing_stop_pct":    round(engine.trailing_stop_pct * 100, 2),
+                "loss_threshold":       round(engine.loss_threshold * 100, 2),
+                "scan_all_market":      engine.scan_all_market,
+                "max_positions":        engine.max_positions,
+                "min_positions":        engine.min_positions,
+                "ladder_top20":         ladder_top20,
+                "trading_mode":         engine.trading_mode,
+                "live_trading_enabled": engine.live_enabled,
+            }
+            requests.post(
+                f"{dashboard_url}/api/worker/heartbeat",
+                json=payload,
+                timeout=5,
+            )
         except Exception:
             pass
         time.sleep(interval)
@@ -79,7 +122,7 @@ def main():
     if dashboard_url:
         hb_thread = threading.Thread(
             target=heartbeat_loop,
-            args=(engine, dashboard_url, heartbeat_interval),
+            args=(engine, ladder, dashboard_url, heartbeat_interval),
             daemon=True,
             name="Heartbeat",
         )
