@@ -1,4 +1,16 @@
+; ============================================================
+;  ALIEN AI TRADER — CD/DVD Autorun
+;  Built by Troy Walker of T-Dub's Apps — 2026
+;  Works on Windows 10+
+; ============================================================
+
 [autorun]
 label=Alien AI Trader
-open=DISC_SETUP.bat
-action=Install Alien AI Trader
+open=LAUNCH.bat
+icon=installer\alien_icon.ico,0
+action=Install Alien AI Trader — AI-Powered Stock Trading
+
+[Content]
+MusicFiles=false
+PictureFiles=false
+VideoFiles=false

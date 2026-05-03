@@ -1,0 +1,665 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Alien AI Trader — Installer</title>
+<style>
+  :root {
+    --green:  #22c55e;
+    --green2: #4ade80;
+    --blue:   #2563eb;
+    --bg:     #060c18;
+    --card:   #0d1626;
+    --border: #1e3058;
+    --text:   #e2e8f0;
+    --muted:  #64748b;
+    --spin-ms: 5000ms;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    height: 100%; background: var(--bg); color: var(--text);
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    overflow-x: hidden;
+  }
+
+  /* ── STARFIELD ── */
+  #stars { position: fixed; inset: 0; z-index: 0; pointer-events: none; }
+
+  /* ── LAYOUT ── */
+  .page {
+    position: relative; z-index: 1;
+    min-height: 100vh;
+    display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 32px; padding: 32px 16px;
+  }
+
+  /* ── TITLE ── */
+  .title-block { text-align: center; }
+  .title-block h1 {
+    font-size: clamp(2rem, 5vw, 3.2rem);
+    font-weight: 900; letter-spacing: .04em;
+    background: linear-gradient(135deg, var(--green2) 0%, #60a5fa 50%, var(--green) 100%);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    background-clip: text;
+    text-shadow: none;
+    margin-bottom: 6px;
+  }
+  .title-block .sub {
+    color: var(--muted); font-size: .95rem; letter-spacing: .12em; text-transform: uppercase;
+  }
+  .title-block .byline {
+    margin-top: 4px; color: #94a3b8; font-size: .8rem;
+  }
+
+  /* ── DISC STAGE ── */
+  .disc-stage {
+    position: relative;
+    width: 300px; height: 300px;
+    display: flex; align-items: center; justify-content: center;
+    filter: drop-shadow(0 0 40px rgba(34,197,94,.35));
+  }
+
+  /* Spinning rainbow disc */
+  .disc {
+    position: absolute; inset: 0;
+    border-radius: 50%;
+    animation: spin var(--spin-ms) linear infinite;
+    background: conic-gradient(
+      from 0deg,
+      #ff355e 0deg,   #ff6b35 30deg,
+      #ffd700 60deg,  #7fff00 90deg,
+      #00e5ff 120deg, #2979ff 150deg,
+      #aa00ff 180deg, #ff355e 210deg,
+      #ff6b35 240deg, #ffd700 270deg,
+      #00e5ff 300deg, #aa00ff 330deg,
+      #ff355e 360deg
+    );
+    /* Ring tracks overlay */
+    -webkit-mask: radial-gradient(circle at 50% 50%,
+      transparent 0%,  transparent 13%,
+      black 13.5%, black 100%
+    );
+    mask: radial-gradient(circle at 50% 50%,
+      transparent 0%,  transparent 13%,
+      black 13.5%, black 100%
+    );
+  }
+
+  /* CD data-track rings */
+  .disc-tracks {
+    position: absolute; inset: 0;
+    border-radius: 50%;
+    background:
+      repeating-radial-gradient(
+        circle at 50% 50%,
+        transparent 0px,
+        transparent 6px,
+        rgba(0,0,0,.22) 7px,
+        transparent 8px
+      );
+    animation: spin var(--spin-ms) linear infinite;
+    pointer-events: none;
+  }
+
+  /* Iridescent sheen that stays put (creates the CD "holo" illusion) */
+  .disc-sheen {
+    position: absolute; inset: 0; border-radius: 50%;
+    background: radial-gradient(
+      ellipse 70% 55% at 32% 30%,
+      rgba(255,255,255,.28) 0%,
+      rgba(255,255,255,.08) 40%,
+      transparent 70%
+    );
+    pointer-events: none;
+  }
+
+  /* Label area (dark center ring — does NOT spin) */
+  .disc-label {
+    position: absolute;
+    width: 160px; height: 160px;
+    border-radius: 50%;
+    background: radial-gradient(circle, #0a1020 0%, #0d1626 80%);
+    border: 1px solid #1e3058;
+    display: flex; align-items: center; justify-content: center;
+    flex-direction: column; gap: 4px;
+    z-index: 2;
+  }
+  .disc-label canvas { display: block; }
+  .disc-label .label-text {
+    font-size: .6rem; font-weight: 700; letter-spacing: .1em;
+    color: var(--green2); text-transform: uppercase; margin-top: 2px;
+    text-align: center; line-height: 1.3;
+  }
+
+  /* Center spindle hole */
+  .disc-hole {
+    position: absolute; width: 28px; height: 28px; border-radius: 50%;
+    background: var(--bg); border: 2px solid #1e3058; z-index: 3;
+  }
+
+  /* Outer edge glow */
+  .disc-glow {
+    position: absolute;
+    width: 310px; height: 310px;
+    border-radius: 50%;
+    border: 2px solid rgba(34,197,94,.15);
+    animation: glow-pulse 3s ease-in-out infinite;
+    pointer-events: none;
+  }
+  @keyframes glow-pulse {
+    0%,100% { box-shadow: 0 0 15px 4px rgba(34,197,94,.15); }
+    50%      { box-shadow: 0 0 40px 12px rgba(34,197,94,.3); }
+  }
+
+  /* Speed readout badge */
+  .speed-badge {
+    position: absolute; top: -14px; right: -14px;
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 999px; padding: 4px 10px;
+    font-size: .68rem; font-weight: 700; color: var(--green2);
+    letter-spacing: .06em; z-index: 4;
+    transition: all .3s;
+  }
+
+  @keyframes spin {
+    from { transform: rotate(0deg); }
+    to   { transform: rotate(360deg); }
+  }
+
+  /* ── STATUS BAR ── */
+  .status-bar {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 10px; padding: 12px 20px; width: 100%; max-width: 520px;
+    text-align: center;
+  }
+  .status-dot {
+    display: inline-block; width: 9px; height: 9px; border-radius: 50%;
+    background: var(--green); margin-right: 8px;
+    animation: blink 2s step-end infinite;
+  }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.3} }
+  #statusText { font-size: .85rem; color: var(--text); }
+
+  /* ── BUTTONS ── */
+  .btn-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 12px; width: 100%; max-width: 560px;
+  }
+  .btn {
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+    padding: 14px 20px; border-radius: 10px; border: 1px solid var(--border);
+    background: var(--card); color: var(--text); font-size: .9rem;
+    font-weight: 600; cursor: pointer; text-decoration: none;
+    transition: background .2s, border-color .2s, transform .1s;
+    user-select: none;
+  }
+  .btn:hover  { background: #162039; border-color: #2e4a7a; transform: translateY(-2px); }
+  .btn:active { transform: scale(.97); }
+  .btn-primary { background: rgba(37,99,235,.25); border-color: var(--blue); color: #93c5fd; }
+  .btn-primary:hover { background: rgba(37,99,235,.4); }
+  .btn-green { background: rgba(34,197,94,.15); border-color: var(--green); color: var(--green2); }
+  .btn-green:hover { background: rgba(34,197,94,.28); }
+  .btn .icon { font-size: 1.3rem; }
+
+  /* ── KEY CARDS ── */
+  .keys-section {
+    width: 100%; max-width: 560px;
+  }
+  .keys-section h3 {
+    font-size: .75rem; text-transform: uppercase; letter-spacing: .1em;
+    color: var(--muted); margin-bottom: 12px;
+  }
+  .key-cards { display: flex; flex-direction: column; gap: 8px; }
+  .key-card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 10px; padding: 12px 16px;
+    display: flex; align-items: flex-start; gap: 12px;
+  }
+  .key-card .kc-icon { font-size: 1.4rem; flex-shrink: 0; margin-top: 2px; }
+  .key-card .kc-body { flex: 1; }
+  .key-card .kc-name { font-weight: 700; font-size: .9rem; color: var(--text); }
+  .key-card .kc-role { font-size: .78rem; color: #94a3b8; margin-top: 2px; line-height: 1.45; }
+  .key-card .kc-note { font-size: .72rem; color: #f59e0b; margin-top: 4px; }
+  .key-card .kc-link {
+    font-size: .75rem; color: #60a5fa; text-decoration: none;
+    margin-top: 6px; display: inline-block;
+    border: 1px solid #2e4a7a; border-radius: 5px; padding: 2px 8px;
+  }
+  .key-card .kc-link:hover { background: rgba(37,99,235,.2); }
+
+  /* ── STEPS ── */
+  .steps-section {
+    width: 100%; max-width: 560px;
+  }
+  .steps-section h3 {
+    font-size: .75rem; text-transform: uppercase; letter-spacing: .1em;
+    color: var(--muted); margin-bottom: 12px;
+  }
+  .step-list { display: flex; flex-direction: column; gap: 6px; }
+  .step-item {
+    display: flex; align-items: center; gap: 12px;
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 8px; padding: 10px 16px;
+    font-size: .85rem; color: #94a3b8;
+  }
+  .step-item.done { color: var(--green2); border-color: rgba(34,197,94,.3); }
+  .step-item.done .step-num { background: var(--green); color: #fff; }
+  .step-num {
+    width: 24px; height: 24px; border-radius: 50%; flex-shrink: 0;
+    background: var(--border); color: var(--muted);
+    display: flex; align-items: center; justify-content: center;
+    font-size: .75rem; font-weight: 700;
+  }
+
+  /* ── FOOTER ── */
+  footer {
+    text-align: center; font-size: .75rem; color: var(--muted);
+    padding-bottom: 16px;
+  }
+  footer a { color: #60a5fa; text-decoration: none; }
+</style>
+</head>
+<body>
+<canvas id="stars"></canvas>
+
+<div class="page">
+
+  <!-- Title -->
+  <div class="title-block">
+    <h1>👽 ALIEN AI TRADER</h1>
+    <div class="sub">AI-Powered Stock Trading — Full Setup</div>
+    <div class="byline">Built by Troy Walker · T-Dub's Apps · 2026</div>
+  </div>
+
+  <!-- Spinning Disc -->
+  <div class="disc-stage" id="discStage">
+    <div class="disc-glow"></div>
+    <div class="disc" id="disc"></div>
+    <div class="disc-tracks" id="discTracks"></div>
+    <div class="disc-sheen"></div>
+    <div class="disc-label">
+      <canvas id="faceCanvas" width="110" height="110"></canvas>
+      <div class="label-text">AI<br>TRADER</div>
+    </div>
+    <div class="disc-hole"></div>
+    <div class="speed-badge" id="speedBadge">IDLE</div>
+  </div>
+
+  <!-- Status bar -->
+  <div class="status-bar">
+    <span class="status-dot"></span>
+    <span id="statusText">Disc ready — select an option below to begin</span>
+  </div>
+
+  <!-- Main action buttons -->
+  <div class="btn-grid">
+    <div class="btn btn-green" onclick="startInstall()">
+      <span class="icon">🚀</span>
+      <span>Install Now</span>
+    </div>
+    <div class="btn btn-primary" onclick="openWizard()">
+      <span class="icon">🔑</span>
+      <span>Setup API Keys</span>
+    </div>
+    <div class="btn" onclick="openDocs()">
+      <span class="icon">📖</span>
+      <span>Read the Docs</span>
+    </div>
+    <div class="btn" onclick="openDashboard()">
+      <span class="icon">📡</span>
+      <span>Open Dashboard</span>
+    </div>
+  </div>
+
+  <!-- API Key Cards -->
+  <div class="keys-section">
+    <h3>🔐 API Keys Required — What Each One Does</h3>
+    <div class="key-cards">
+
+      <div class="key-card">
+        <div class="kc-icon">📈</div>
+        <div class="kc-body">
+          <div class="kc-name">Alpaca Markets</div>
+          <div class="kc-role">
+            Executes your buy and sell orders on real stock markets.
+            Provides real-time price feeds, order management, and your account balance.
+            <strong>This is the core trading engine connection.</strong>
+          </div>
+          <div class="kc-note">
+            ⚠ Paper trading (fake money) is instant and free. Live trading requires identity
+            verification which can take up to 1 week and is not guaranteed by us —
+            Alpaca approves live accounts at their sole discretion.
+          </div>
+          <a class="kc-link" href="https://app.alpaca.markets/signup" target="_blank"
+             onclick="revUp()">Register at alpaca.markets →</a>
+        </div>
+      </div>
+
+      <div class="key-card">
+        <div class="kc-icon">📊</div>
+        <div class="kc-body">
+          <div class="kc-name">Alpha Vantage</div>
+          <div class="kc-role">
+            Supplies RSI, SMA, MACD, and price bar data so the AI can compute
+            buy/sell signals. Without this key the AI can still trade using
+            Alpaca data only, but signal quality is reduced.
+          </div>
+          <div class="kc-note">Free tier: 25 requests/day, 5/minute. Sufficient for testing.</div>
+          <a class="kc-link" href="https://www.alphavantage.co/support/#api-key" target="_blank"
+             onclick="revUp()">Get free key at alphavantage.co →</a>
+        </div>
+      </div>
+
+      <div class="key-card">
+        <div class="kc-icon">🔔</div>
+        <div class="kc-body">
+          <div class="kc-name">Pushover</div>
+          <div class="kc-role">
+            Sends push notifications to your phone every time the AI buys, sells,
+            or hits a stop-loss. Breaks through Do-Not-Disturb for critical alerts.
+          </div>
+          <div class="kc-note">30-day free trial, then one-time $4.99 per platform (iOS/Android).</div>
+          <a class="kc-link" href="https://pushover.net/login" target="_blank"
+             onclick="revUp()">Sign up at pushover.net →</a>
+        </div>
+      </div>
+
+      <div class="key-card">
+        <div class="kc-icon">📱</div>
+        <div class="kc-body">
+          <div class="kc-name">Twilio</div>
+          <div class="kc-role">
+            Sends SMS text messages and can make phone calls for high-priority events
+            like a crash or large stop-loss. Optional — the app still works without it.
+          </div>
+          <div class="kc-note">Free trial includes credits. Sending a number costs ~$1/month.</div>
+          <a class="kc-link" href="https://www.twilio.com/try-twilio" target="_blank"
+             onclick="revUp()">Sign up at twilio.com →</a>
+        </div>
+      </div>
+
+      <div class="key-card">
+        <div class="kc-icon">🔗</div>
+        <div class="kc-body">
+          <div class="kc-name">Pushbullet</div>
+          <div class="kc-role">
+            Syncs notifications across all your devices — phone, tablet, PC.
+            Useful for seeing trade alerts on a second screen while watching the dashboard.
+          </div>
+          <div class="kc-note">Free tier is sufficient. No purchase required.</div>
+          <a class="kc-link" href="https://www.pushbullet.com/#settings/account" target="_blank"
+             onclick="revUp()">Get token at pushbullet.com →</a>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Installation Steps -->
+  <div class="steps-section">
+    <h3>📋 Installation Checklist</h3>
+    <div class="step-list" id="stepList">
+      <div class="step-item" id="step1"><div class="step-num">1</div> Python 3.10+ installed</div>
+      <div class="step-item" id="step2"><div class="step-num">2</div> Files copied to install path</div>
+      <div class="step-item" id="step3"><div class="step-num">3</div> Virtual environment created</div>
+      <div class="step-item" id="step4"><div class="step-num">4</div> Python packages installed</div>
+      <div class="step-item" id="step5"><div class="step-num">5</div> API keys configured</div>
+      <div class="step-item" id="step6"><div class="step-num">6</div> Desktop shortcut created</div>
+      <div class="step-item" id="step7"><div class="step-num">7</div> Dashboard launched</div>
+    </div>
+  </div>
+
+  <!-- Cloud sync option (from README) -->
+  <div class="status-bar" style="text-align:left; max-width:560px;">
+    <strong style="color:var(--green2)">☁ Cloud Sync (Optional)</strong><br>
+    <span style="font-size:.82rem; color:#94a3b8;">
+      Enable cloud sync to back up your settings, trade logs, and backtest results
+      to your personal account. Cloud sync is <em>off by default</em> and is per-user
+      — your data is never shared. Enable it in the Settings tab after launching.
+    </span>
+  </div>
+
+</div><!-- end .page -->
+
+<footer>
+  👽 Alien AI Trader — Built by Troy Walker · T-Dub's Apps · 2026 &nbsp;|&nbsp;
+  <a href="../README.md">README</a> &nbsp;|&nbsp;
+  <a href="http://localhost:5000" target="_blank">Dashboard</a>
+</footer>
+
+<script>
+// ─────────────────────────────────────────────────────────
+//  STARS
+// ─────────────────────────────────────────────────────────
+(function() {
+  const canvas = document.getElementById('stars');
+  const ctx = canvas.getContext('2d');
+  let stars = [];
+
+  function resize() {
+    canvas.width  = window.innerWidth;
+    canvas.height = window.innerHeight;
+    stars = Array.from({ length: 160 }, () => ({
+      x: Math.random() * canvas.width,
+      y: Math.random() * canvas.height,
+      r: Math.random() * 1.4 + 0.2,
+      o: Math.random() * 0.7 + 0.2,
+      speed: Math.random() * 0.4 + 0.05,
+    }));
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  function tick() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    stars.forEach(s => {
+      s.o += s.speed * 0.01 * (Math.random() > 0.5 ? 1 : -1);
+      s.o = Math.max(0.1, Math.min(0.9, s.o));
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(255,255,255,${s.o})`;
+      ctx.fill();
+    });
+    requestAnimationFrame(tick);
+  }
+  tick();
+})();
+
+// ─────────────────────────────────────────────────────────
+//  ALIEN FACE on disc label
+// ─────────────────────────────────────────────────────────
+(function() {
+  const c   = document.getElementById('faceCanvas');
+  const ctx = c.getContext('2d');
+  const W = c.width, H = c.height;
+  const cx = W / 2, cy = H / 2;
+
+  function drawFace() {
+    ctx.clearRect(0, 0, W, H);
+
+    // Head
+    ctx.beginPath();
+    ctx.ellipse(cx, cy + 4, 28, 36, 0, 0, Math.PI * 2);
+    ctx.fillStyle = '#22c55e';
+    ctx.fill();
+    ctx.strokeStyle = '#16a34a';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    // Left eye
+    ctx.save();
+    ctx.translate(cx - 13, cy - 5);
+    ctx.rotate(-0.32);
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 10, 7, 0, 0, Math.PI * 2);
+    ctx.fillStyle = '#000';
+    ctx.fill();
+    // shine
+    ctx.beginPath();
+    ctx.ellipse(-4, -3, 3, 2, 0, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255,255,255,.75)';
+    ctx.fill();
+    ctx.restore();
+
+    // Right eye
+    ctx.save();
+    ctx.translate(cx + 13, cy - 5);
+    ctx.rotate(0.32);
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 10, 7, 0, 0, Math.PI * 2);
+    ctx.fillStyle = '#000';
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(-4, -3, 3, 2, 0, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255,255,255,.75)';
+    ctx.fill();
+    ctx.restore();
+
+    // Nostrils
+    [[cx-6, cy+14],[cx+6, cy+14]].forEach(([nx,ny]) => {
+      ctx.beginPath();
+      ctx.arc(nx, ny, 2.5, 0, Math.PI * 2);
+      ctx.fillStyle = '#16a34a';
+      ctx.fill();
+    });
+
+    // Mouth
+    ctx.beginPath();
+    ctx.arc(cx, cy + 20, 12, 0.1, Math.PI - 0.1);
+    ctx.strokeStyle = '#16a34a';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // Antenna
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - 32);
+    ctx.lineTo(cx, cy - 55);
+    ctx.strokeStyle = '#22c55e';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(cx, cy - 57, 5, 0, Math.PI * 2);
+    ctx.fillStyle = '#4ade80';
+    ctx.fill();
+  }
+
+  drawFace();
+})();
+
+// ─────────────────────────────────────────────────────────
+//  DISC SPEED CONTROL
+// ─────────────────────────────────────────────────────────
+let spinMs = 5000;
+let slowTimer = null;
+
+const disc       = document.getElementById('disc');
+const discTracks = document.getElementById('discTracks');
+const badge      = document.getElementById('speedBadge');
+const statusEl   = document.getElementById('statusText');
+
+function setSpeed(ms) {
+  spinMs = Math.max(300, Math.min(8000, ms));
+  disc.style.setProperty('--spin-ms', spinMs + 'ms');
+  discTracks.style.animationDuration = spinMs + 'ms';
+  if (spinMs < 1000)       badge.textContent = 'MAX RPM';
+  else if (spinMs < 2500)  badge.textContent = 'FAST';
+  else if (spinMs < 5000)  badge.textContent = 'SPIN UP';
+  else                     badge.textContent = 'IDLE';
+  badge.style.color = spinMs < 2000 ? '#fbbf24' : '#4ade80';
+}
+
+function revUp() {
+  if (slowTimer) clearInterval(slowTimer);
+  let target = spinMs;
+  const accel = setInterval(() => {
+    target *= 0.62;
+    setSpeed(target);
+    if (target <= 500) clearInterval(accel);
+  }, 80);
+  // Auto-decelerate after 3 seconds
+  setTimeout(() => {
+    clearInterval(accel);
+    slowTimer = setInterval(() => {
+      setSpeed(spinMs * 1.12);
+      if (spinMs >= 5000) clearInterval(slowTimer);
+    }, 200);
+  }, 3000);
+}
+
+// Idle breathing: very slight variation
+setInterval(() => {
+  if (spinMs > 4500) setSpeed(4800 + Math.sin(Date.now() / 3000) * 200);
+}, 100);
+
+// ─────────────────────────────────────────────────────────
+//  STEP PROGRESS (localStorage across refresh)
+// ─────────────────────────────────────────────────────────
+function markStep(n) {
+  const el = document.getElementById('step' + n);
+  if (el) el.classList.add('done');
+  try { localStorage.setItem('alien_step_' + n, '1'); } catch(e) {}
+}
+function loadSteps() {
+  for (let i = 1; i <= 7; i++) {
+    try { if (localStorage.getItem('alien_step_' + i)) markStep(i); } catch(e) {}
+  }
+}
+loadSteps();
+
+// ─────────────────────────────────────────────────────────
+//  BUTTON HANDLERS
+// ─────────────────────────────────────────────────────────
+function setStatus(msg) {
+  statusEl.textContent = msg;
+}
+
+function startInstall() {
+  revUp();
+  setStatus('Switch to the console window to complete installation…');
+  markStep(1);
+  // If we're running from the disc/folder, the console installer is already open.
+  // The user just needs to switch to it and press enter.
+  setTimeout(() => {
+    setStatus('Installation in progress in the console window. Follow the prompts!');
+  }, 2500);
+}
+
+function openWizard() {
+  revUp();
+  setStatus('Opening API Key Setup Wizard — switch to the console window…');
+  setTimeout(() => {
+    setStatus('Follow each step in the wizard to register and enter your API keys.');
+  }, 2000);
+}
+
+function openDocs() {
+  revUp();
+  setStatus('Opening README documentation…');
+  // Try to open the README.md one level up
+  window.open('../README.md', '_blank');
+}
+
+function openDashboard() {
+  revUp();
+  setStatus('Connecting to local dashboard at http://localhost:5000 …');
+  setTimeout(() => {
+    window.open('http://localhost:5000', '_blank');
+  }, 500);
+}
+
+// Rev up when any external link is clicked
+document.querySelectorAll('a[target="_blank"]').forEach(a => {
+  a.addEventListener('click', revUp);
+});
+
+// Also spin up on any button click
+document.querySelectorAll('.btn').forEach(b => {
+  b.addEventListener('mouseenter', () => {
+    if (spinMs > 4000) setSpeed(spinMs * 0.85);
+  });
+});
+</script>
+</body>
+</html>
