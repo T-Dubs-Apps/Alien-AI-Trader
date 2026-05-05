@@ -195,8 +195,40 @@ def collect_twilio(keys: dict):
     success("Twilio credentials saved!")
 
 
+def collect_render(keys: dict):
+    step_header(5, 6, "Render — Cloud Deployment API Key (Optional)", "☁")
+    print(f"""  {C.WHITE}Render is the cloud platform that hosts your dashboard
+  and trading worker so they run 24/7 without your PC being on.{C.RESET}
+
+  {C.YELLOW}Why you need a Render API key:{C.RESET}
+    Without it you can still run Alien AI Trader locally.
+    With it, ONE_CLICK_INSTALL.bat automatically pushes your Alpaca,
+    Alpha Vantage, and alert keys to Render and triggers a redeploy —
+    no manual copy-paste in the Render dashboard required.
+
+    1. Log in at render.com (free account is sufficient)
+    2. Click your profile icon (top-right) → Account Settings
+    3. Click  {C.YELLOW}API Keys{C.RESET}  →  Create API Key
+    4. Name it "Alien AI Trader", click Create
+    5. Copy the key that starts with  {C.YELLOW}rnd_{C.RESET}...
+       {C.RED}⚠ It only shows once — copy it immediately!{C.RESET}
+
+  {C.DIM}First-time Render setup: after getting the key, go to
+  dashboard.render.com/blueprints → New Blueprint Instance →
+  connect your GitHub repo → Apply.  This creates both services
+  from render.yaml automatically.{C.RESET}
+""")
+    open_url("https://dashboard.render.com/account/api-keys")
+    render_key = input(f"  {C.BOLD}{C.WHITE}➜ Render API Key (press ENTER to skip): {C.RESET}").strip()
+    if render_key:
+        keys["RENDER_API_KEY"] = render_key
+        success("Render API key saved!")
+    else:
+        warn("Skipped — you can add RENDER_API_KEY to keys.bat manually later.")
+
+
 def collect_pushbullet(keys: dict):
-    step_header(5, 5, "Pushbullet — Device Sync & Notifications", "🔗")
+    step_header(6, 6, "Pushbullet — Device Sync & Notifications", "🔗")
     print(f"""  {C.WHITE}Pushbullet syncs notifications across your devices.{C.RESET}
 
     1. Sign in at pushbullet.com (use Google or email)
@@ -323,6 +355,7 @@ def main():
         collect_alpha_vantage(keys)
         collect_pushover(keys)
         collect_twilio(keys)
+        collect_render(keys)
         collect_pushbullet(keys)
     except KeyboardInterrupt:
         print(f"\n\n{C.YELLOW}  Setup interrupted. Saving what we have so far...{C.RESET}\n")

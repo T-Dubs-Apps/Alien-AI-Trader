@@ -339,22 +339,37 @@ Write-Section "STEP 9 — Desktop Shortcut"
 Write-Teach "Creating a Desktop shortcut so you can launch Alien AI Trader"
 Write-Teach "with one double-click — no need to find the folder each time."
 
-$shortcutPath = "$env:USERPROFILE\Desktop\Alien AI Trader.lnk"
-$startBat     = Join-Path $installPath "START.bat"
-$iconFile     = if (Test-Path $iconOut) { $iconOut } else { "" }
+$iconFile        = if (Test-Path $iconOut) { $iconOut } else { "" }
+$oneClickBat     = Join-Path $installPath "ONE_CLICK_INSTALL.bat"
+$startBat        = Join-Path $installPath "START.bat"
+$ws = New-Object -ComObject WScript.Shell
 
+# Shortcut 1 — Daily launcher: "Alien AI Trader"
 try {
-    $ws = New-Object -ComObject WScript.Shell
-    $sc = $ws.CreateShortcut($shortcutPath)
+    $sc = $ws.CreateShortcut("$env:USERPROFILE\Desktop\Alien AI Trader.lnk")
     $sc.TargetPath       = $startBat
     $sc.WorkingDirectory = $installPath
-    $sc.Description      = "Alien AI Trader — AI-Powered Stock Trading"
+    $sc.Description      = "Alien AI Trader — Launch the app"
     if ($iconFile) { $sc.IconLocation = $iconFile }
     $sc.Save()
-    Write-OK "Desktop shortcut created: 'Alien AI Trader'"
+    Write-OK "Desktop shortcut created: 'Alien AI Trader' (daily launch)"
 } catch {
-    Write-Warn "Could not create shortcut: $_"
-    Write-Info "You can launch the app by double-clicking START.bat in: $installPath"
+    Write-Warn "Could not create launch shortcut: $_"
+}
+
+# Shortcut 2 — Setup & Deploy: "Alien AI Trader — Setup"
+if (Test-Path $oneClickBat) {
+    try {
+        $sc2 = $ws.CreateShortcut("$env:USERPROFILE\Desktop\Alien AI Trader — Setup.lnk")
+        $sc2.TargetPath       = $oneClickBat
+        $sc2.WorkingDirectory = $installPath
+        $sc2.Description      = "Alien AI Trader — Full install + GitHub push + Render deploy"
+        if ($iconFile) { $sc2.IconLocation = $iconFile }
+        $sc2.Save()
+        Write-OK "Desktop shortcut created: 'Alien AI Trader — Setup' (install + deploy)"
+    } catch {
+        Write-Warn "Could not create setup shortcut: $_"
+    }
 }
 
 # ── STEP 10: Cloud Sync option ───────────────────────────────────────────────
