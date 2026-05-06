@@ -1,0 +1,77 @@
+name: Create Release ZIP
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build distributable ZIP
+        run: |
+          TAG="${{ github.ref_name }}"
+          ZIPNAME="AlienAITrader-${TAG}.zip"
+
+          # Create a clean staging folder named Alien_AI_Trader
+          mkdir -p staging/Alien_AI_Trader
+
+          rsync -av . staging/Alien_AI_Trader/ \
+            --exclude=".git" \
+            --exclude=".github" \
+            --exclude=".claude" \
+            --exclude=".venv" \
+            --exclude="__pycache__" \
+            --exclude="keys.bat" \
+            --exclude=".env" \
+            --exclude="install_config.json" \
+            --exclude="*.pyc" \
+            --exclude="*.pyo" \
+            --exclude="*.db" \
+            --exclude="*.sqlite3" \
+            --exclude="*.log" \
+            --exclude="staging"
+
+          cd staging
+          zip -r "../${ZIPNAME}" Alien_AI_Trader/
+          cd ..
+
+          echo "ZIPNAME=${ZIPNAME}" >> $GITHUB_ENV
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Alien AI Trader ${{ github.ref_name }}"
+          files: ${{ env.ZIPNAME }}
+          body: |
+            ## Alien AI Trader ${{ github.ref_name }}
+
+            ### Download & Install (Windows 10/11)
+
+            1. Download **`${{ env.ZIPNAME }}`** below
+            2. Right-click the ZIP → **Extract All** → pick a folder (e.g. Desktop)
+            3. Open the extracted `Alien_AI_Trader` folder
+            4. Double-click **`LAUNCH.bat`**
+            5. Choose **[1] Install** and follow the on-screen wizard
+               *(installs Python, packages, and walks you through API keys)*
+            6. The app opens at **http://localhost:5000** automatically
+
+            ### Daily Launch
+            After install, use the **"Alien AI Trader"** shortcut on your Desktop,
+            or double-click `START.bat` inside the install folder.
+
+            ### Cloud Version (Render)
+            The app also runs in the cloud at:
+            **https://alien-ai-trader-dashboard.onrender.com**
+
+            ---
+            Built by Troy Walker · T-Dub's Apps · 2026
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
