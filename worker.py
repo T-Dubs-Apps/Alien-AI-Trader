@@ -11,7 +11,7 @@ from portfolio_ladder import PortfolioLadderScanner
 # Built by Troy Walker of T-Dub's Apps - 2026-04-26
 
 RUN_SECONDS = int(os.environ.get("RUN_SECONDS", "3300"))
-LADDER_INTERVAL = int(os.environ.get("LADDER_INTERVAL", "5"))
+LADDER_INTERVAL = int(os.environ.get("LADDER_INTERVAL", "120"))
 
 # Module-level refs so the shutdown() signal handler can reach them
 engine = None
