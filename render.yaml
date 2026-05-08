@@ -43,9 +43,9 @@ services:
         value: AAPL,GOOG,TSLA,MSFT,AMZN
       # -- Scan & execution -------------------------------------------------
       - key: POLL_SECONDS
-        value: "15"
+        value: "60"         # 1 scan/min → 5 Alpha Vantage calls/min (free tier limit)
       - key: SCAN_WORKERS
-        value: "12"
+        value: "8"
       - key: TRAILING_STOP_PCT
         value: "3.0"
       - key: LOSS_THRESHOLD
@@ -53,14 +53,14 @@ services:
       - key: MAX_POSITIONS
         value: "5"
       - key: SCAN_ALL_MARKET
-        value: "true"
+        value: "false"      # OFF — free AV tier cannot support whole-market scanning
       - key: MARKET_SCAN_CANDIDATES
-        value: "30"
+        value: "20"
       - key: MAX_TRADES_PER_HOUR
-        value: "30"
+        value: "10"
       - key: ORDER_QTY
         value: "1"
-      # -- Capital & position sizing (NEW) ----------------------------------
+      # -- Capital & position sizing ----------------------------------------
       - key: INITIAL_CAPITAL
         value: "0"
       - key: RISK_PER_TRADE_PCT
@@ -71,16 +71,16 @@ services:
         value: "5"
       - key: RISK_PER_TRADE_USD
         value: "0"
-      # -- Signal filters (NEW) ---------------------------------------------
+      # -- Signal filters ---------------------------------------------------
       - key: RSI_BUY_MAX
         value: "50.0"
       - key: RSI_SELL_MIN
         value: "70.0"
       - key: SMA_SPREAD_MIN
         value: "0.1"
-      # -- Portfolio ladder (NEW) -------------------------------------------
+      # -- Portfolio ladder -------------------------------------------------
       - key: LADDER_INTERVAL
-        value: "60"
+        value: "120"        # rescore every 2 min — keeps AV calls well within free limit
       - key: MIN_SCORE_TO_BUY
         value: "45.0"
       - key: TOP_TIER_PCT
@@ -139,9 +139,9 @@ services:
         value: AAPL,GOOG,TSLA,MSFT,AMZN
       # -- Scan & execution -------------------------------------------------
       - key: POLL_SECONDS
-        value: "15"
+        value: "60"
       - key: SCAN_WORKERS
-        value: "12"
+        value: "8"
       - key: TRAILING_STOP_PCT
         value: "3.0"
       - key: LOSS_THRESHOLD
@@ -149,14 +149,14 @@ services:
       - key: MAX_POSITIONS
         value: "5"
       - key: SCAN_ALL_MARKET
-        value: "true"
+        value: "false"
       - key: MARKET_SCAN_CANDIDATES
-        value: "30"
+        value: "20"
       - key: MAX_TRADES_PER_HOUR
-        value: "30"
+        value: "10"
       - key: ORDER_QTY
         value: "1"
-      # -- Capital & position sizing (NEW) ----------------------------------
+      # -- Capital & position sizing ----------------------------------------
       - key: INITIAL_CAPITAL
         value: "0"
       - key: RISK_PER_TRADE_PCT
@@ -167,16 +167,16 @@ services:
         value: "5"
       - key: RISK_PER_TRADE_USD
         value: "0"
-      # -- Signal filters (NEW) ---------------------------------------------
+      # -- Signal filters ---------------------------------------------------
       - key: RSI_BUY_MAX
         value: "50.0"
       - key: RSI_SELL_MIN
         value: "70.0"
       - key: SMA_SPREAD_MIN
         value: "0.1"
-      # -- Portfolio ladder (NEW) -------------------------------------------
+      # -- Portfolio ladder -------------------------------------------------
       - key: LADDER_INTERVAL
-        value: "60"
+        value: "120"
       - key: MIN_SCORE_TO_BUY
         value: "45.0"
       - key: TOP_TIER_PCT

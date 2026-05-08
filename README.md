@@ -6,26 +6,39 @@ Built by **Troy Walker of T-Dub's Apps — 2026**
 
 ---
 
+## ⬇️ Download
+
+**[→ Download the latest release (ZIP)](../../releases/latest)**
+
+1. Click the link above and download `AlienAITrader-vX.X.X.zip`
+2. Extract the ZIP anywhere on your PC
+3. Open the `Alien_AI_Trader` folder and double-click **`LAUNCH.bat`**
+4. Choose **[1] Install** — the wizard does everything else
+
+> **No GitHub account required.** No forking needed. Just download, extract, and run.
+
+---
+
 ## 🚀 Quick Start (New Users — Start Here)
 
-### Step 1 — Install (first time only)
+### Step 1 — Download & Install (first time only)
 ```
-Right-click INSTALL.ps1 → Run with PowerShell
+Double-click: LAUNCH.bat  →  choose [1] Install
 ```
 This automatically:
 - Checks for Python 3.10+ and installs it if missing (via winget or python.org)
 - Upgrades pip
 - Creates a `.venv` virtual environment
 - Installs all dependencies from `requirements.txt`
-- Checks for your API keys configuration
+- Runs the API key wizard and writes `keys.bat` for you
+- Creates a Desktop shortcut for daily use
 
 ### Step 2 — Set Up Your API Keys
-```
-Double-click: RUN-SETUP-WIZARD.bat
-```
-The Setup Wizard walks you through registering for each service step by step,
-opens each registration page in your browser automatically, and writes your
-`keys.bat` file for you. No manual editing required.
+The Setup Wizard (launched automatically during install) walks you through
+registering for each service, opens each registration page in your browser,
+and writes your `keys.bat` file automatically. No manual editing required.
+
+To re-run the wizard later: open `LAUNCH.bat` → choose **[3] Setup Keys**.
 
 Services you'll need (the wizard explains each one):
 | Service | Purpose | Approval Time |
@@ -41,7 +54,7 @@ Services you'll need (the wizard explains each one):
 
 ### Step 3 — Launch
 ```
-Double-click: START.bat
+Double-click: START.bat   (or use the "Alien AI Trader" Desktop shortcut)
 ```
 This activates the venv, loads your keys, starts both the dashboard and worker,
 and opens your browser automatically.

@@ -83,7 +83,7 @@ def validate_phone(number: str) -> bool:
 # ════════════════════════════════════════════════════════════════
 
 def collect_alpaca(keys: dict):
-    step_header(1, 5, "Alpaca Markets — Stock Trading API", "📈")
+    step_header(1, 6, "Alpaca Markets — Stock Trading API", "📈")
     print(f"""  {C.WHITE}Alpaca provides commission-free stock trading and market data.
   You will need to:{C.RESET}
 
@@ -117,7 +117,7 @@ def collect_alpaca(keys: dict):
 
 
 def collect_alpha_vantage(keys: dict):
-    step_header(2, 5, "Alpha Vantage — Market Data & Stock Info", "📊")
+    step_header(2, 6, "Alpha Vantage — Market Data & Stock Info", "📊")
     print(f"""  {C.WHITE}Alpha Vantage provides free stock market data, indicators,
   and fundamental data. Registration is instant.{C.RESET}
 
@@ -136,7 +136,7 @@ def collect_alpha_vantage(keys: dict):
 
 
 def collect_pushover(keys: dict):
-    step_header(3, 5, "Pushover — Push Notifications", "🔔")
+    step_header(3, 6, "Pushover — Push Notifications", "🔔")
     print(f"""  {C.WHITE}Pushover sends real-time push notifications to your phone
   for trade alerts and app events.{C.RESET}
 
@@ -157,7 +157,7 @@ def collect_pushover(keys: dict):
 
 
 def collect_twilio(keys: dict):
-    step_header(4, 5, "Twilio — SMS Text Alerts", "📱")
+    step_header(4, 6, "Twilio — SMS Text Alerts", "📱")
     print(f"""  {C.WHITE}Twilio sends SMS text message alerts for trades and events.{C.RESET}
 
     1. Sign up at twilio.com (free trial includes credits)
@@ -379,9 +379,8 @@ def main():
   ✦ Setup Complete! Here's what to do next:
 {C.RESET}
   {C.WHITE}Local:{C.RESET}
-    1. Run {C.YELLOW}SETUP.bat{C.RESET}
-    2. Run {C.YELLOW}start-alien-ai-trader.bat{C.RESET}
-    3. Open {C.CYAN}http://localhost:5000{C.RESET}
+    1. Double-click {C.YELLOW}START.bat{C.RESET}  (or the Desktop shortcut)
+    2. Open {C.CYAN}http://localhost:5000{C.RESET}
 
   {C.WHITE}Render:{C.RESET}
     1. Add the environment variables shown above
