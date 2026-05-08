@@ -612,16 +612,30 @@ class TradingEngine:
         df = None
         try:
             bars = self.api.get_bars(symbol, TimeFrame.Day, limit=limit)
-            if bars:
+            bar_list = list(bars) if bars else []
+            if bar_list:
                 df = pd.DataFrame([{
                     "c": float(b.c),
                     "v": float(b.v),
                     "h": float(b.h),
                     "l": float(b.l),
                     "o": float(b.o),
-                } for b in bars])
-        except Exception:
-            pass
+                } for b in bar_list])
+            else:
+                # Fallback: try hourly bars if daily returns nothing
+                # (can happen for thinly traded or recently listed symbols)
+                bars_h = self.api.get_bars(symbol, TimeFrame.Hour, limit=limit)
+                bar_list_h = list(bars_h) if bars_h else []
+                if bar_list_h:
+                    df = pd.DataFrame([{
+                        "c": float(b.c),
+                        "v": float(b.v),
+                        "h": float(b.h),
+                        "l": float(b.l),
+                        "o": float(b.o),
+                    } for b in bar_list_h])
+        except Exception as e:
+            print(f"[ENGINE] _get_bars_df({symbol}) error: {e}")
 
         self._bars_cache[symbol] = (df, time.time())
         return df

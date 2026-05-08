@@ -6,7 +6,7 @@ import requests
 
 from crash_notifier import send_crash_notification
 from trading_engine import TradingEngine
-from portfolio_ladder import PortfolioLadderScanner
+from portfolio_ladder import PortfolioLadderScanner, DEFAULT_PORTFOLIO
 
 # Built by Troy Walker of T-Dub's Apps - 2026-04-26
 
@@ -115,7 +115,13 @@ def main():
     mode = os.environ.get("ENGINE_MODE", "AI")
 
     engine = TradingEngine(stock_list=stock_list, mode=mode)
-    ladder = PortfolioLadderScanner(symbols=stock_list, engine=engine)
+
+    # Ladder scanner uses the user's watchlist PLUS the full DEFAULT_PORTFOLIO
+    # (60 curated stocks across sectors). This gives the Top 20 tab real candidates
+    # to rank instead of repeating the same 5 watchlist stocks.
+    # The trading engine's market-wide scan adds additional live momentum movers on top.
+    ladder_symbols = list(dict.fromkeys(stock_list + DEFAULT_PORTFOLIO))
+    ladder = PortfolioLadderScanner(symbols=ladder_symbols, engine=engine)
 
     engine.start()
 
