@@ -43,7 +43,7 @@ services:
         value: AAPL,GOOG,TSLA,MSFT,AMZN
       # -- Scan & execution -------------------------------------------------
       - key: POLL_SECONDS
-        value: "60"         # 1 scan/min → 5 Alpha Vantage calls/min (free tier limit)
+        value: "30"         # safe: daily bars cached 30min, only live prices hit API
       - key: SCAN_WORKERS
         value: "8"
       - key: TRAILING_STOP_PCT
@@ -53,7 +53,7 @@ services:
       - key: MAX_POSITIONS
         value: "5"
       - key: SCAN_ALL_MARKET
-        value: "false"      # OFF — free AV tier cannot support whole-market scanning
+        value: "true"       # safe now: list_assets cached 10min, bars cached 30min
       - key: MARKET_SCAN_CANDIDATES
         value: "20"
       - key: MAX_TRADES_PER_HOUR

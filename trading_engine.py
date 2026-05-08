@@ -201,6 +201,16 @@ class TradingEngine:
         self._price_cache: Dict[str, Tuple[Optional[float], float]] = {}
         self._cache_ttl = int(os.environ.get("PRICE_CACHE_TTL", "8"))   # seconds
 
+        # Daily bars cache: {symbol: (DataFrame, fetched_at_epoch)}
+        # Daily bars don't change meaningfully within a session — 30-min TTL
+        # prevents hammering Alpaca's API on every scan cycle.
+        self._bars_cache: Dict[str, Tuple[Optional[pd.DataFrame], float]] = {}
+        self._bars_cache_ttl = int(os.environ.get("BARS_CACHE_TTL", "1800"))  # 30 min
+
+        # Market candidates cache: avoid calling list_assets every scan cycle
+        self._market_candidates_cache: Tuple[List[str], float] = ([], 0.0)
+        self._market_candidates_ttl = int(os.environ.get("MARKET_CANDIDATES_TTL", "600"))  # 10 min
+
     def start(self):
         self.running = True
         # Start after-hours background watcher on its own daemon thread
@@ -294,12 +304,19 @@ class TradingEngine:
     def _get_market_candidates(self, max_candidates: int = 30) -> List[str]:
         """
         Two-phase scan of the entire US equity market:
-        1. Load all active tradable symbols from Alpaca.
+        1. Load all active tradable symbols from Alpaca (cached 10 min).
         2. Batch-fetch snapshots (price, volume, daily change) — 1 API call per 500.
         3. Filter: price $2–$1000, daily volume > 200k, day change > +0.5%.
         4. Return the top N by daily gain % (hottest movers first).
         Already-held and watchlist symbols are excluded (evaluated separately).
+
+        10-minute cache: list_assets returns ~10k symbols and barely changes
+        during a session — no need to re-fetch every scan cycle.
         """
+        cached_syms, cached_ts = self._market_candidates_cache
+        if cached_ts > 0 and (time.time() - cached_ts) < self._market_candidates_ttl:
+            return cached_syms
+
         try:
             assets = self.api.list_assets(status="active", asset_class="us_equity")
             tradable = [
@@ -354,7 +371,9 @@ class TradingEngine:
                 pass
 
         candidates.sort(key=lambda x: x[1], reverse=True)
-        return [sym for sym, _ in candidates[:max_candidates]]
+        result = [sym for sym, _ in candidates[:max_candidates]]
+        self._market_candidates_cache = (result, time.time())
+        return result
 
     # -----------------------------------------------
     # After-hours portfolio guard (runs 24/7)
@@ -569,16 +588,43 @@ class TradingEngine:
         self._price_cache[symbol] = (price, time.time())
         return price
 
-    def _get_bars_df(self, symbol: str, limit: int = 50) -> Optional[pd.DataFrame]:
-        """Fetch recent 1-minute bars as a DataFrame. Returns None on error."""
+    def _get_bars_df(self, symbol: str, limit: int = 100) -> Optional[pd.DataFrame]:
+        """
+        Fetch recent DAILY bars as a DataFrame with a 30-minute cache.
+
+        WHY DAILY:
+          RSI-14, SMA-20, SMA-50, MACD, and Bollinger Bands are all standard
+          *daily* indicators. Using 1-minute bars produced a 14-minute RSI and
+          a 20-minute SMA — numbers that look valid but mean something completely
+          different and cannot produce reliable trade signals.
+
+        WHY CACHED:
+          Daily bars are stable for at least 30 minutes. Fetching them on every
+          15-60 second scan cycle burned Alpaca API quota for no benefit.
+          With caching, a 35-symbol watchlist uses ~35 Alpaca calls per 30 min
+          instead of ~35 calls per minute.
+        """
+        # Serve from cache if fresh
+        cached = self._bars_cache.get(symbol)
+        if cached and (time.time() - cached[1]) < self._bars_cache_ttl:
+            return cached[0]
+
+        df = None
         try:
-            bars = self.api.get_bars(symbol, TimeFrame.Minute, limit=limit)
-            if not bars:
-                return None
-            df = pd.DataFrame([{"c": b.c, "v": b.v} for b in bars])
-            return df
+            bars = self.api.get_bars(symbol, TimeFrame.Day, limit=limit)
+            if bars:
+                df = pd.DataFrame([{
+                    "c": float(b.c),
+                    "v": float(b.v),
+                    "h": float(b.h),
+                    "l": float(b.l),
+                    "o": float(b.o),
+                } for b in bars])
         except Exception:
-            return None
+            pass
+
+        self._bars_cache[symbol] = (df, time.time())
+        return df
 
     # -------------------------------
     # Technical indicators
@@ -605,19 +651,34 @@ class TradingEngine:
 
     def _get_signal(self, symbol: str, price: float) -> Dict[str, Any]:
         """
-        Returns a signal dict with advanced confluence: RSI, SMA, MACD, Bollinger Bands, VWAP, and a BUY/SELL/HOLD verdict.
+        Returns a signal dict using DAILY bars for all indicators.
+
+        Indicators calculated (all on daily close prices):
+          RSI-14       — momentum oscillator; buy dip below rsi_buy_max
+          SMA-20/50    — trend filter; golden cross = uptrend confirmed
+          MACD 12/26/9 — momentum confirmation
+          Bollinger    — 20-day bands; price inside = not extended
+          VWAP         — volume-weighted average price over the bar window
+          week52_high/low — 52-week (approx.) range for ladder trend scoring
         """
-        df = self._get_bars_df(symbol, limit=60)
+        df = self._get_bars_df(symbol)   # daily bars, limit=100, 30-min cached
         signal: Dict[str, Any] = {
             "symbol": symbol, "price": price,
             "rsi": None, "sma20": None, "sma50": None,
             "macd": None, "macd_signal": None,
             "boll_upper": None, "boll_mid": None, "boll_lower": None,
             "vwap": None,
+            "week52_high": None, "week52_low": None,
             "verdict": "HOLD"
         }
         if df is None or df.empty:
             return signal
+
+        # Populate 52-week range from the daily bar window (up to ~5 months
+        # on limit=100; close enough for the ladder trend score)
+        if "h" in df.columns and "l" in df.columns:
+            signal["week52_high"] = round(float(df["h"].max()), 4)
+            signal["week52_low"]  = round(float(df["l"].min()), 4)
 
         closes = df["c"].astype(float)
         rsi = self._calc_rsi(closes)
