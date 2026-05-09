@@ -1,15 +1,25 @@
-Zip for sending:
+Alien AI Trader — Simple Download and Install Instructions
+==========================================================
 
-E:\Users\troyw\Desktop\Alien AI Trader for Win.zip — 29 KB compressed, ready to attach to an email.
+For most people, the easiest install process is:
 
-Your brother's workflow: 
+1. Download the latest Alien AI Trader ZIP from GitHub Releases
+2. Right-click the ZIP and choose "Extract All"
+3. Open the extracted Alien_AI_Trader folder
+4. Double-click LAUNCH.bat
+5. Choose [1] Install
+6. Follow the setup wizard
 
-1) Install Python, 
+The installer will:
+- Install Python if needed
+- Install the app files and packages
+- Open the signup pages for the services you need
+- Save your keys automatically
+- Create a Desktop shortcut
 
-2) Unzip,
+After setup, start the app by double-clicking:
+- Alien AI Trader on your Desktop
+or
+- START.bat inside the install folder
 
-3) Run SETUP.bat once, 
-
-4) Fill in config.json with his Alpaca/Alpha Vantage keys, 
-
-5) Double-click the Desktop shortcut.
+If you want the app to download itself first, use DOWNLOAD_AND_INSTALL.bat.

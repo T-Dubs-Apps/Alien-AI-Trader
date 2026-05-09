@@ -19,6 +19,48 @@ Built by **Troy Walker of T-Dub's Apps — 2026**
 
 ---
 
+## 🧭 New User Guide — How Do I Get the Files?
+
+If you are new to GitHub, **"getting the files" just means downloading Alien AI Trader to your computer**.
+
+You have 3 easy choices:
+
+### Option 1 — Easiest: Download the ZIP
+This is the best choice for most people.
+
+1. Open the **latest release** link above
+2. Download the ZIP file
+3. Right-click the ZIP and choose **Extract All**
+4. Open the extracted `Alien_AI_Trader` folder
+5. Double-click **`LAUNCH.bat`**
+6. Choose **[1] Install**
+
+### Option 2 — Even More Automated: Use `DOWNLOAD_AND_INSTALL.bat`
+If you were sent the `DOWNLOAD_AND_INSTALL.bat` file:
+
+1. Double-click it
+2. If Git is not installed yet, it opens the Git download page for you
+3. After Git is installed, double-click the file again
+4. It downloads Alien AI Trader to your Desktop and starts the installer automatically
+
+### Option 3 — Get the Files with Git
+This is for people who want the latest repository version directly from GitHub.
+
+1. Install **Git for Windows** from https://git-scm.com/download/win
+2. Open **Command Prompt** or **PowerShell**
+3. Paste this command and press Enter:
+
+```powershell
+git clone https://github.com/T-Dubs-Apps/Alien-AI-Trader.git
+```
+
+4. Open the new `Alien-AI-Trader` folder
+5. Double-click **`ONE_CLICK_INSTALL.bat`** or **`LAUNCH.bat`**
+
+If that sounds confusing, use the ZIP method instead. It is simpler.
+
+---
+
 ## 🚀 Quick Start (New Users — Start Here)
 
 ### Step 1 — Download & Install (first time only)
@@ -29,9 +71,11 @@ This automatically:
 - Checks for Python 3.10+ and installs it if missing (via winget or python.org)
 - Upgrades pip
 - Creates a `.venv` virtual environment
-- Installs all dependencies from `requirements.txt`
+- Installs all dependencies from `requirements-local.txt`
 - Runs the API key wizard and writes `keys.bat` for you
 - Creates a Desktop shortcut for daily use
+
+> **Beginner tip:** If someone tells you to "clone the repo" or "get the files from GitHub," you do **not** need to understand programming first. You are simply downloading the app files to your PC so the installer can run.
 
 ### Step 2 — Set Up Your API Keys
 The Setup Wizard (launched automatically during install) walks you through

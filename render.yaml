@@ -3,6 +3,7 @@ services:
   - type: web
     name: alien-ai-trader-dashboard
     runtime: python
+    autoDeploy: true
     buildCommand: pip install -r requirements.txt
     # gevent worker class is REQUIRED for Socket.IO WebSocket support.
     # gthread does not support WebSockets and will break live dashboard updates.
@@ -15,9 +16,11 @@ services:
         sync: false
       - key: ALPACA_SECRET
         sync: false
+      - key: ALPACA_BASE_URL
+        sync: false
       - key: ALPHA_VANTAGE_KEY
         sync: false
-      - key: PUSHBULLET_TOKEN
+      - key: PUSHBULLET_API_KEY
         sync: false
       - key: PUSHOVER_TOKEN
         sync: false
@@ -92,8 +95,6 @@ services:
         value: "3"
       - key: ROCKET_ALERT_PCT
         value: "5"
-      - key: HEARTBEAT_EVERY_SECONDS
-        value: "10"
       - key: DASHBOARD_BASE_URL
         sync: false
       - key: ALLOWED_ORIGINS
@@ -103,6 +104,7 @@ services:
   - type: worker
     name: alien-ai-trader-worker
     runtime: python
+    autoDeploy: true
     buildCommand: pip install -r requirements.txt
     startCommand: python worker.py
     envVars:
@@ -111,9 +113,11 @@ services:
         sync: false
       - key: ALPACA_SECRET
         sync: false
+      - key: ALPACA_BASE_URL
+        sync: false
       - key: ALPHA_VANTAGE_KEY
         sync: false
-      - key: PUSHBULLET_TOKEN
+      - key: PUSHBULLET_API_KEY
         sync: false
       - key: PUSHOVER_TOKEN
         sync: false
@@ -190,6 +194,8 @@ services:
         value: "3"
       - key: ROCKET_ALERT_PCT
         value: "5"
+      - key: HEARTBEAT_EVERY_SECONDS
+        value: "10"
       # -- Dashboard connection (CRITICAL - worker posts heartbeats here) ---
       - key: DASHBOARD_BASE_URL
         value: https://alien-ai-trader-dashboard.onrender.com

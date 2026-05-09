@@ -98,13 +98,14 @@ _notifications: List[Dict[str, Any]] = []
 # These are safe because values come from Render env vars; never sent to browser.
 ALPACA_KEY = os.environ.get("ALPACA_KEY")
 ALPACA_SECRET = os.environ.get("ALPACA_SECRET")
+ALPACA_BASE_URL = os.environ.get("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
 ALPHA_VANTAGE_KEY = os.environ.get("ALPHA_VANTAGE_KEY")
 
 _alpaca = None
 _alpha = None
 
 if ALPACA_KEY and ALPACA_SECRET:
-    _alpaca = REST(ALPACA_KEY, ALPACA_SECRET, base_url="https://paper-api.alpaca.markets")
+    _alpaca = REST(ALPACA_KEY, ALPACA_SECRET, base_url=ALPACA_BASE_URL)
 
 if ALPHA_VANTAGE_KEY:
     _alpha = TimeSeries(key=ALPHA_VANTAGE_KEY, output_format="json")
