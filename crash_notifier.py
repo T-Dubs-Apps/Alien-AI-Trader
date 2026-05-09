@@ -5,7 +5,7 @@ import requests
 def send_crash_notification(message: str):
     """Send crash alert via Pushbullet, Pushover, and Twilio if configured."""
     # Pushbullet
-    pb_token = os.environ.get("PUSHBULLET_TOKEN", "")
+    pb_token = os.environ.get("PUSHBULLET_API_KEY", "")
     if pb_token:
         try:
             requests.post("https://api.pushbullet.com/v2/pushes",

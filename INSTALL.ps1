@@ -235,7 +235,7 @@ try { & "$venvPath\Scripts\Activate.ps1" 2>$null } catch { }
 
 # ── STEP 6: Install requirements ─────────────────────────────────────────────
 Write-Section "STEP 6 — Installing Python Packages"
-Write-Teach "Installing all required libraries from requirements.txt."
+Write-Teach "Installing all required libraries from requirements-local.txt."
 Write-Teach ""
 Write-Teach "Key packages and what they do:"
 Write-Teach "  flask          — The web server that powers the dashboard UI"
@@ -249,13 +249,13 @@ Write-Teach "  gevent         — Async engine for the WebSocket server"
 Write-Teach ""
 Write-Teach "This may take 2–5 minutes on first install."
 
-$reqFile = Join-Path $installPath "requirements.txt"
+$reqFile = Join-Path $installPath "requirements-local.txt"
 if (Test-Path $reqFile) {
-    Write-Info "Installing from requirements.txt..."
+    Write-Info "Installing from requirements-local.txt..."
     & $venvPip install -r $reqFile --quiet
     Write-OK "All packages installed."
 } else {
-    Write-Warn "requirements.txt not found — installing core packages manually..."
+    Write-Warn "requirements-local.txt not found — installing core packages manually..."
     $pkgs = @("flask","flask-cors","flask-socketio","alpaca-trade-api",
               "alpha_vantage","pandas","Pillow","requests","pushbullet.py",
               "twilio","gevent","gunicorn","stripe","sendgrid")
@@ -308,12 +308,12 @@ Write-Teach "  🔗 Pushbullet     — Multi-device notification sync (optional)
 Write-Teach ""
 
 $keysFile = Join-Path $installPath "keys.bat"
+$skipWizard = $false
 if (Test-Path $keysFile) {
     Write-OK "keys.bat already exists."
     $rerun = Read-Host "  Re-run the wizard to update your keys? (y/N)"
     if ($rerun -notin @("y","Y","yes","YES")) {
         Write-Info "Keeping existing keys.bat."
-        goto :skip_wizard 2>$null
         $skipWizard = $true
     }
 }
