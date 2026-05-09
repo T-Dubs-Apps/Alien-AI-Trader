@@ -1,0 +1,22 @@
+Alien AI Trader — Message You Can Send to New Users
+===================================================
+
+Here is the easiest way to install Alien AI Trader on Windows:
+
+1. Download the latest release ZIP from the GitHub Releases page
+2. Right-click the ZIP and choose "Extract All"
+3. Open the extracted Alien_AI_Trader folder
+4. Double-click LAUNCH.bat
+5. Choose [1] Install
+6. Follow the setup wizard
+
+If you want the most automatic method instead, use DOWNLOAD_AND_INSTALL.bat.
+That file can download the app for you and start the installer automatically.
+
+Important:
+- Start with Alpaca Paper Trading first
+- You do not need a GitHub account
+- You do not need to know coding
+- The installer helps you get your API keys step by step
+
+After install, launch the app using the "Alien AI Trader" Desktop shortcut.

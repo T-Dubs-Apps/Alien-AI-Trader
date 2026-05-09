@@ -1,50 +1,59 @@
 Alien AI Trader — Quick Startup Instructions
 ============================================
 
-1. Clone the Repo
------------------
-Location: https://github.com/T-Dubs-Apps/Alien-AI-Trader
+WHAT THIS APP DOES
+------------------
+Alien AI Trader includes an installer that sets up Python, installs the app,
+walks you through API keys, and creates a Desktop shortcut for you.
 
-2. Install Python 3.10+ and pip (if not already installed)
+FOR MOST NEW USERS — DO THIS
+----------------------------
+1. Go to the GitHub Releases page for Alien AI Trader
+2. Download the latest ZIP file
+3. Right-click the ZIP and choose "Extract All"
+4. Open the extracted Alien_AI_Trader folder
+5. Double-click: LAUNCH.bat
+6. Choose: [1] Install
+7. Follow the on-screen setup wizard
 
-3. Create and Activate Virtual Environment (Windows)
----------------------------------------------------
-cd "Alien AI Trader disc"
-python -m venv .venv
-.venv\Scripts\activate
+AFTER INSTALL
+-------------
+1. Double-click the "Alien AI Trader" shortcut on your Desktop
+   OR open the install folder and double-click START.bat
+2. Your browser should open automatically
+3. Local dashboard address: http://localhost:5000
 
-4. Install Requirements
-----------------------
-pip install -r requirements.txt
+IF SOMEONE WANTS THE FILES FROM GIT INSTEAD
+-------------------------------------------
+1. Install Git for Windows: https://git-scm.com/download/win
+2. Open Command Prompt or PowerShell
+3. Run:
 
-5. Set Up Your Keys and Env Vars
---------------------------------
-You need the following keys:
+   git clone https://github.com/T-Dubs-Apps/Alien-AI-Trader.git
 
-- ALPACA_KEY, ALPACA_SECRET (https://alpaca.markets/ — sign up, get API keys)
-- ALPHA_VANTAGE_KEY (https://www.alphavantage.co/support/#api-key)
-- PUSHOVER_TOKEN, PUSHOVER_USER (https://pushover.net/ — create account, create app, get User Key and API Token)
-- TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER, TWILIO_TO_NUMBER (https://twilio.com/ — sign up, get Console SID/Auth Token, buy a number, verify your cell)
+4. Open the downloaded Alien-AI-Trader folder
+5. Double-click ONE_CLICK_INSTALL.bat
 
-Where to enter them:
-- **Local:** Edit `keys.bat` (copy from `keys.bat.template`)
-- **Render:** Enter each as an Environment Variable for both the web and worker services
+EASIEST SINGLE-FILE METHOD
+--------------------------
+If you were sent DOWNLOAD_AND_INSTALL.bat:
+1. Double-click it
+2. If Git is missing, install Git when prompted
+3. Double-click DOWNLOAD_AND_INSTALL.bat again
+4. It downloads the repo to your Desktop and starts the installer
 
-6. Start the App (Local)
-------------------------
-Run:
-    SETUP.bat
-    start-alien-ai-trader.bat
+KEYS YOU WILL BE ASKED FOR
+--------------------------
+- ALPACA_KEY + ALPACA_SECRET
+- ALPHA_VANTAGE_KEY
+- PUSHOVER_TOKEN + PUSHOVER_USER (optional)
+- TWILIO settings (optional)
+- PUSHBULLET_API_KEY (optional)
 
-7. Access the Dashboard
-----------------------
-- Local: http://localhost:5000
-- Render: https://alien-ai-trader-dashboard.onrender.com
-
-8. For Help
------------
-- README.md in the repo
-- QUICK SETUP.txt in the repo
+IMPORTANT TIP
+-------------
+Start with Alpaca Paper Trading first. It uses fake money and is much safer for
+new users than live trading.
 
 
 # Built by Troy Walker of T-Dub's Apps — 2026-04-23

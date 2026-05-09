@@ -6,24 +6,41 @@
 REQUIREMENTS
 ------------
 - Windows 10 or 11
-- Python 3.10 or newer
-  Download free at: https://www.python.org/downloads/
-  (Check "Add Python to PATH" during install!)
+- Internet connection
+
+EASIEST WAY TO GET THE APP
+--------------------------
+Option A (recommended):
+1. Download the latest ZIP from the GitHub Releases page
+2. Extract it anywhere on your PC
+3. Open the Alien_AI_Trader folder
+4. Double-click LAUNCH.bat
+5. Choose [1] Install
+
+Option B (most automatic):
+1. Double-click DOWNLOAD_AND_INSTALL.bat
+2. If Git is not installed, install it when the file tells you to
+3. Double-click DOWNLOAD_AND_INSTALL.bat again
+4. Let it download the app and start the installer for you
 
 FIRST TIME SETUP (do this once)
 --------------------------------
-1. Unzip this folder anywhere on your PC
-2. Double-click:  SETUP.bat
+1. Open the Alien_AI_Trader folder
+2. Double-click:  LAUNCH.bat
+3. Choose: [1] Install
+   - Installs Python if needed
    - Creates a virtual environment
    - Installs all required Python packages
-   - Creates your keys.bat file
+   - Launches the setup wizard
+   - Creates your keys.bat file automatically
+   - Creates a Desktop shortcut
 
-3. Open keys.bat in Notepad and fill in your API keys:
+4. The wizard will help you enter your API keys:
 
    ALPACA_KEY        -- Get free at: https://alpaca.markets  (paper account is free)
    ALPACA_SECRET     -- Same Alpaca account page
    ALPHA_VANTAGE_KEY -- Get free at: https://www.alphavantage.co/support/#api-key
-   PUSHBULLET_TOKEN  -- Get free at: https://www.pushbullet.com (for phone alerts, optional)
+   PUSHBULLET_API_KEY -- Get free at: https://www.pushbullet.com (for phone alerts, optional)
 
    OPTIONAL -- PUSHOVER (breaks Do Not Disturb on your phone):
    Sign up FREE at https://pushover.net, create an app called "Alien AI Trader", then add:
@@ -42,11 +59,12 @@ FIRST TIME SETUP (do this once)
    AFTERHOURS_DROP_PCT  -- alert + auto stop-order trigger % (default 3)
    ROCKET_ALERT_PCT     -- celebratory push when stock surges this % (default 5)
 
-   Save and close keys.bat when done.
+   The wizard writes your keys for you when done.
 
 STARTING THE APP
 ----------------
-Double-click:  start-alien-ai-trader.bat
+Double-click:  Alien AI Trader on your Desktop
+OR double-click: START.bat
 
 Then open your browser to:  http://localhost:5000
 
