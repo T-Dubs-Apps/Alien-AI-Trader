@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ADAM Agent Dashboard</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css" rel="stylesheet">
+  <style>
+    :root {
+      --bg:       #080e1a;
+      --surface:  #0d1626;
+      --card:     #111e35;
+      --card2:    #162039;
+      --border:   #1e3058;
+      --accent:   #2563eb;
+      --accent2:  #3b82f6;
+      --up:       #22c55e;
+      --down:     #ef4444;
+      --flat:     #94a3b8;
+      --text:     #e2e8f0;
+      --muted:    #64748b;
+      --warn:     #f59e0b;
+    }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      min-height: 100vh;
+    }
+    .adam-voice-controls { background: var(--card2); border-radius: 12px; padding: 1rem; margin: 1.5rem 0; box-shadow: 0 2px 8px #0002; }
+    .adam-voice-btn { margin: 0 0.5rem; }
+    .adam-personalization { margin-top: 1.5rem; background: var(--card2); border-radius: 12px; padding: 1rem; }
+  </style>
+</head>
+<body>
+  <div class="container adam-voice-controls">
+    <h5><i class="fa-solid fa-robot"></i> ADAM Voice & Dictation</h5>
+    <!-- ADAM Request Optimizer Toggle -->
+    <div class="form-check form-switch mb-3">
+      <input class="form-check-input" type="checkbox" id="adam-request-optimizer-toggle" checked>
+      <label class="form-check-label" for="adam-request-optimizer-toggle">
+        <i class="fa-solid fa-compress"></i> Enable Request Optimizer (reduce token usage)
+      </label>
+    </div>
+    <!-- ADAM Token Usage Indicator -->
+    <div class="mb-2" style="display: flex; align-items: center; gap: 8px;">
+      <span id="adam-token-indicator" title="Estimated tokens used in this request. 1 token ≈ 4 characters or 0.75 words. Most LLMs have a per-request or per-session token limit (e.g., 5,000 tokens).">0 tokens of 5k</span>
+      <i class="fa-solid fa-info-circle text-muted" style="cursor: pointer;" title="Token usage is estimated. 1 token ≈ 4 characters. LLMs may have daily, monthly, or per-request limits depending on provider."></i>
+    </div>
+    <div class="d-flex align-items-center mb-2">
+      <button id="adam-start-listen" class="btn btn-success adam-voice-btn"><i class="fa-solid fa-microphone"></i> Start Dictation</button>
+      <button id="adam-stop-listen" class="btn btn-secondary adam-voice-btn"><i class="fa-solid fa-microphone-slash"></i> Stop</button>
+      <button id="adam-speak" class="btn btn-primary adam-voice-btn"><i class="fa-solid fa-volume-up"></i> Speak Text</button>
+    </div>
+    <textarea id="adam-dictation-text" class="form-control mb-2" rows="3" placeholder="Dictation will appear here..."></textarea>
+    <div class="form-text">Works in Google Chrome and Microsoft Edge (Web Speech API required).</div>
+  </div>
+  <div class="container adam-personalization">
+    <h6><i class="fa-solid fa-brain"></i> ADAM Memory & Personalization</h6>
+    <div id="adam-memory-status">Personalization active. Preferences and dictation history will be remembered locally.</div>
+  </div>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+  <script>
+    // --- ADAM Request Optimizer ---
+    let adamRequestOptimizerEnabled = true;
+    const optimizerToggle = document.getElementById('adam-request-optimizer-toggle');
+    if (optimizerToggle) {
+      optimizerToggle.onchange = function() {
+        adamRequestOptimizerEnabled = optimizerToggle.checked;
+        localStorage.setItem('adamRequestOptimizerEnabled', adamRequestOptimizerEnabled ? '1' : '0');
+      };
+      // Load saved state
+      const saved = localStorage.getItem('adamRequestOptimizerEnabled');
+      if (saved !== null) {
+        adamRequestOptimizerEnabled = saved === '1';
+        optimizerToggle.checked = adamRequestOptimizerEnabled;
+      }
+    }
+    // Simulated request optimizer (summarizes/compresses text)
+    function adamOptimizeRequest(text) {
+      if (!adamRequestOptimizerEnabled) return text;
+      let compressed = text.replace(/\s+/g, ' ').trim();
+      let sentences = compressed.split(/(?<=[.!?])\s+/);
+      let seen = new Set(), result = [];
+      for (let s of sentences) {
+        let t = s.trim();
+        if (t && !seen.has(t)) { result.push(t); seen.add(t); }
+      }
+      compressed = result.join(' ');
+      if (compressed.length > 500) compressed = compressed.slice(0, 497) + '...';
+      return compressed;
+    }
+    // --- ADAM Token Usage Indicator ---
+    const TOKEN_LIMIT = 5000;
+    function estimateTokens(text) {
+      return Math.ceil((text || '').length / 4);
+    }
+    function updateTokenIndicator() {
+      const text = document.getElementById('adam-dictation-text').value;
+      const tokens = estimateTokens(text);
+      const display = tokens >= 1000 ? (tokens/1000).toFixed(1) + 'k' : tokens;
+      document.getElementById('adam-token-indicator').textContent = `${display} tokens of 5k`;
+    }
+    document.getElementById('adam-dictation-text').addEventListener('input', updateTokenIndicator);
+    updateTokenIndicator();
+    // --- ADAM Voice/Dictation for Chrome/Edge ---
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const synth = window.speechSynthesis;
+    let recognition;
+    let recognizing = false;
+    let adamMemory = JSON.parse(localStorage.getItem('adamMemory') || '{}');
+    function saveAdamMemory() {
+      localStorage.setItem('adamMemory', JSON.stringify(adamMemory));
+    }
+    function updateMemoryStatus() {
+      document.getElementById('adam-memory-status').textContent =
+        'Personalization active. Preferences and dictation history will be remembered locally.';
+    }
+    function speakText(text) {
+      if (!synth) return alert('Text-to-speech not supported.');
+      const utter = new SpeechSynthesisUtterance(text);
+      utter.lang = 'en-US';
+      utter.rate = 1;
+      utter.pitch = 1.1;
+      utter.voice = synth.getVoices().find(v => v.name.toLowerCase().includes('female')) || synth.getVoices()[0];
+      synth.speak(utter);
+    }
+    function startDictation() {
+      if (!SpeechRecognition) return alert('Speech recognition not supported in this browser.');
+      recognition = new SpeechRecognition();
+      recognition.lang = 'en-US';
+      recognition.interimResults = false;
+      recognition.continuous = false;
+      recognizing = true;
+      recognition.onresult = function(event) {
+        const transcript = event.results[0][0].transcript;
+        document.getElementById('adam-dictation-text').value = transcript;
+        adamMemory.dictationHistory = adamMemory.dictationHistory || [];
+        adamMemory.dictationHistory.push({ text: transcript, ts: Date.now() });
+        saveAdamMemory();
+        updateTokenIndicator();
+      };
+      recognition.onerror = function(event) {
+        alert('Dictation error: ' + event.error);
+      };
+      recognition.onend = function() { recognizing = false; };
+      recognition.start();
+    }
+    function stopDictation() {
+      if (recognition && recognizing) {
+        recognition.stop();
+        recognizing = false;
+      }
+    }
+    document.getElementById('adam-start-listen').onclick = startDictation;
+    document.getElementById('adam-stop-listen').onclick = stopDictation;
+    document.getElementById('adam-speak').onclick = function() {
+      const text = document.getElementById('adam-dictation-text').value;
+      if (text) speakText(text);
+    };
+    // Add a demo button for testing
+    const demoBtn = document.createElement('button');
+    demoBtn.className = 'btn btn-outline-info adam-voice-btn';
+    demoBtn.innerHTML = '<i class="fa-solid fa-paper-plane"></i> Send to LLM (demo)';
+    demoBtn.onclick = function() {
+      const text = document.getElementById('adam-dictation-text').value;
+      const optimized = adamOptimizeRequest(text);
+      alert('Sending to LLM (demo):\n' + optimized);
+      updateTokenIndicator();
+    };
+    document.querySelector('.adam-voice-controls').appendChild(demoBtn);
+    updateMemoryStatus();
+  </script>
+</body>
+</html>

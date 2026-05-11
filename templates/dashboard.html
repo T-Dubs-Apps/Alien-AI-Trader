@@ -333,16 +333,6 @@
         </button>
       </li>
       <li class="nav-item">
-        <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tabTop20">
-          <i class="fa-solid fa-trophy me-1"></i>Top 20
-        </button>
-      </li>
-      <li class="nav-item">
-        <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tabPortfolio">
-          <i class="fa-solid fa-briefcase me-1"></i>Portfolio
-        </button>
-      </li>
-      <li class="nav-item">
         <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tabBacktest">
           <i class="fa-solid fa-clock-rotate-left me-1"></i>Backtest
         </button>
@@ -352,7 +342,137 @@
           <i class="fa-solid fa-sliders me-1"></i>Settings
         </button>
       </li>
-    </ul>
+          <!-- ══ BACKTEST TAB ══ -->
+          <div class="tab-pane fade" id="tabBacktest">
+            <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+              <div>
+                <h5 class="mb-0 fw-bold">Trade Simulation & Backtest</h5>
+                <div class="small-muted">Upload historical CSV, run strategy simulation, and view results.</div>
+              </div>
+            </div>
+            <form id="backtestForm" class="row g-3 align-items-end mb-3">
+              <div class="col-md-4">
+                <label class="form-label">Symbol</label>
+                <input class="form-control" id="backtestSymbol" placeholder="AAPL">
+              </div>
+              <div class="col-md-3">
+                <label class="form-label">Start Date</label>
+                <input class="form-control" type="date" id="backtestStart">
+              </div>
+              <div class="col-md-3">
+                <label class="form-label">End Date</label>
+                <input class="form-control" type="date" id="backtestEnd">
+              </div>
+              <div class="col-md-2">
+                <label class="form-label">CSV File</label>
+                <input class="form-control" type="file" id="backtestCSV" accept=".csv">
+              </div>
+              <div class="col-12">
+                <button class="btn btn-primary" type="submit"><i class="fa-solid fa-play me-1"></i>Run Backtest</button>
+              </div>
+            </form>
+            <div id="backtestResult" class="mt-3"></div>
+            <canvas id="backtestChart" height="120" style="max-width:600px;"></canvas>
+          </div>
+		  
+        // ═══════════════════════════════════════════
+        // BACKTEST TAB LOGIC
+        // ═══════════════════════════════════════════
+        document.getElementById('backtestForm').addEventListener('submit', async function(e) {
+        e.preventDefault();
+
+        const symbol = document.getElementById('backtestSymbol').value.trim().toUpperCase();
+        const start = document.getElementById('backtestStart').value;
+        const end = document.getElementById('backtestEnd').value;
+        const fileEl = document.getElementById('backtestCSV');
+
+        if (!symbol || !start || !end || !fileEl.files.length) {
+        document.getElementById('backtestResult').innerHTML =
+        '<p>Please fill all fields and select a CSV file.</p>';
+        return;
+        }
+
+        const file = fileEl.files[0];
+        const reader = new FileReader();
+
+        reader.onload = function(evt) {
+        const csv = evt.target.result;
+        runBacktestCSV(symbol, start, end, csv);
+        };
+
+        reader.readAsText(file);
+        });
+
+        async function runBacktestCSV(symbol, start, end, csv) {
+          // Parse CSV (expects columns: date,close)
+          const rows = csv.split(/\r?\n/).map(l => l.split(','));
+          const header = rows[0].map(h => h.trim().toLowerCase());
+          const dateIdx = header.indexOf('date');
+          const closeIdx = header.indexOf('close');
+          if (dateIdx === -1 || closeIdx === -1) {
+            document.getElementById('backtestResult').innerHTML = '<span style="color:var(--down)">CSV must have date and close columns.</span>';
+            return;
+          }
+		  
+          const data = rows.slice(1).filter(r => r.length > closeIdx && r[dateIdx] && r[closeIdx]);
+          const filtered = data.filter(r => r[dateIdx] >= start && r[dateIdx] <= end);
+          if (!filtered.length) {
+            document.getElementById('backtestResult').innerHTML = '<span style="color:var(--down)">No data in selected date range.</span>';
+            return;
+          }
+		  
+          // Simple SMA/RSI/MACD backtest (BUY/SELL logic)
+          let holding = null, tradeLog = [], equity = 0, peak = 0, maxDD = 0, pnl = [];
+          filtered.forEach((row, idx) => {
+            const price = parseFloat(row[closeIdx]);
+            const date  = row[dateIdx];
+            // Simple: buy on first, sell on last
+            if (idx === 0) {
+              holding = { price, date };
+              tradeLog.push({ action: 'BUY', price, date });
+            }
+			
+            if (idx === filtered.length - 1 && holding) {
+              const profit = price - holding.price;
+              tradeLog.push({ action: 'SELL', price, date, pnl: profit });
+              pnl.push(profit);
+            }
+			
+            equity += pnl.length ? pnl[pnl.length-1] : 0;
+            if (equity > peak) peak = equity;
+            const dd = peak - equity; if (dd > maxDD) maxDD = dd;
+          });
+          const totalReturn = pnl.reduce((a,b) => a+b, 0);
+          const winRate = pnl.filter(x => x > 0).length / (pnl.length || 1);
+          document.getElementById('backtestResult').innerHTML =
+            `<div class='glass-card'><b>${symbol} Backtest Results</b><br>
+            Total Return: <b>${fmtMoney(totalReturn)}</b><br>
+            Win Rate: <b>${(winRate*100).toFixed(1)}%</b><br>
+            Max Drawdown: <b>${fmtMoney(maxDD)}</b><br>
+            Trades: <b>${pnl.length}</b></div>`;
+          // Plot equity curve
+          const ctx = document.getElementById('backtestChart').getContext('2d');
+          if (window.backtestChartObj) window.backtestChartObj.destroy();
+          window.backtestChartObj = new Chart(ctx, {
+            type: 'line',
+            data: {
+              labels: filtered.map(r => r[dateIdx]),
+              datasets: [{
+                label: symbol + ' Equity',
+                data: pnl.reduce((acc, x) => { acc.push((acc.length ? acc[acc.length-1] : 0) + x); return acc; }, []),
+                borderColor: '#3b82f6',
+                borderWidth: 2,
+                pointRadius: 0,
+                tension: 0.2,
+                fill: false,
+              }]
+            },
+            options: { plugins: { legend: { display: false } }, scales: { x: { display: false }, y: { display: true } } }
+          });
+        }
+		
+    
+	    </ul>
 
     <div class="tab-content" id="dashboardTabsContent">
 
@@ -566,6 +686,24 @@
                     </label>
                   </div>
                 </div>
+                  // ═══════════════════════════════════════════
+                  //  AUTO-SAVE SCAN ALL MARKET
+                  // ═══════════════════════════════════════════
+                  function autoSaveScanAllMarket() {
+                    const checked = document.getElementById('scanAllMarket').checked;
+                    fetch('/api/settings/trading', {
+                      method: 'POST',
+                      headers: {'Content-Type': 'application/json'},
+                      body: JSON.stringify({ scan_all_market: checked }),
+                    })
+                    .then(r => r.json())
+                    .then(() => {
+                      addFeedSysLine(checked ? 'Scan Entire Market ENABLED' : 'Scan Entire Market DISABLED');
+                    })
+                    .catch(() => {
+                      addFeedSysLine('⚠ Failed to update Scan Entire Market setting');
+                    });
+                  }
               </div>
 
               <!-- Position Sizing & Signal Controls -->
@@ -671,132 +809,6 @@
         </div>
       </div>
 
-      <!-- ══ TOP 20 TAB ══ -->
-      <div class="tab-pane fade" id="tabTop20">
-        <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
-          <div>
-            <h5 class="mb-0 fw-bold">AI Top 20 — Market Scan Rankings</h5>
-            <div class="small-muted">Best momentum candidates found by scanning the whole market. Updated every heartbeat.</div>
-          </div>
-          <span class="small-muted" id="top20LastUpdate"></span>
-        </div>
-        <div class="table-responsive">
-          <table class="table table-sm" style="color:var(--text);font-size:.83rem;">
-            <thead>
-              <tr style="color:var(--muted);border-color:var(--border);">
-                <th>#</th>
-                <th>Symbol</th>
-                <th>Score</th>
-                <th>Tier</th>
-                <th>Price</th>
-                <th>RSI</th>
-                <th>SMA20</th>
-                <th>SMA50</th>
-                <th>Vol Ratio</th>
-                <th>Verdict</th>
-              </tr>
-            </thead>
-            <tbody id="top20Body">
-              <tr><td colspan="10" class="text-center small-muted py-4">Waiting for first market scan…</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <!-- ══ PORTFOLIO TAB ══ -->
-      <div class="tab-pane fade" id="tabPortfolio">
-        <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
-          <div>
-            <h5 class="mb-0 fw-bold">AI Portfolio — Current Holdings</h5>
-            <div class="small-muted">Stocks the AI trader currently owns. P&amp;L updates with each heartbeat.</div>
-          </div>
-        </div>
-
-        <!-- Capital summary row -->
-        <div class="row g-3 mb-3" id="portfolioCapRow" style="display:none!important;">
-          <div class="col-6 col-md-3">
-            <div class="stat-card">
-              <div class="stat-label">Total Capital</div>
-              <div class="stat-value" id="pcTotal">—</div>
-              <div class="stat-sub">Available + Invested</div>
-            </div>
-          </div>
-          <div class="col-6 col-md-3">
-            <div class="stat-card">
-              <div class="stat-label">Available Cash</div>
-              <div class="stat-value" id="pcAvail">—</div>
-              <div class="stat-sub">Ready to deploy</div>
-            </div>
-          </div>
-          <div class="col-6 col-md-3">
-            <div class="stat-card">
-              <div class="stat-label">Invested</div>
-              <div class="stat-value" id="pcInvested">—</div>
-              <div class="stat-sub">In open positions</div>
-            </div>
-          </div>
-          <div class="col-6 col-md-3">
-            <div class="stat-card">
-              <div class="stat-label">Session P&amp;L</div>
-              <div class="stat-value" id="pcPnl">—</div>
-              <div class="stat-sub">Net profit this session</div>
-            </div>
-          </div>
-        </div>
-
-        <div class="table-responsive">
-          <table class="table table-sm" style="color:var(--text);font-size:.83rem;">
-            <thead>
-              <tr style="color:var(--muted);border-color:var(--border);">
-                <th>Symbol</th>
-                <th>Qty</th>
-                <th>Buy Price</th>
-                <th>Current Price</th>
-                <th>Value</th>
-                <th>P&amp;L $</th>
-                <th>P&amp;L %</th>
-              </tr>
-            </thead>
-            <tbody id="portfolioBody">
-              <tr><td colspan="7" class="text-center small-muted py-4">No open positions — AI is scanning for entries</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <!-- ══ BACKTEST TAB ══ -->
-      <div class="tab-pane fade" id="tabBacktest">
-        <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
-          <div>
-            <h5 class="mb-0 fw-bold">Trade Simulation & Backtest</h5>
-            <div class="small-muted">Upload historical CSV, run strategy simulation, and view results.</div>
-          </div>
-        </div>
-        <form id="backtestForm" class="row g-3 align-items-end mb-3">
-          <div class="col-md-4">
-            <label class="form-label">Symbol</label>
-            <input class="form-control" id="backtestSymbol" placeholder="AAPL">
-          </div>
-          <div class="col-md-3">
-            <label class="form-label">Start Date</label>
-            <input class="form-control" type="date" id="backtestStart">
-          </div>
-          <div class="col-md-3">
-            <label class="form-label">End Date</label>
-            <input class="form-control" type="date" id="backtestEnd">
-          </div>
-          <div class="col-md-2">
-            <label class="form-label">CSV File</label>
-            <input class="form-control" type="file" id="backtestCSV" accept=".csv">
-          </div>
-          <div class="col-12">
-            <button class="btn btn-primary" type="submit"><i class="fa-solid fa-play me-1"></i>Run Backtest</button>
-          </div>
-        </form>
-        <div id="backtestResult" class="mt-3"></div>
-        <canvas id="backtestChart" height="120" style="max-width:600px;"></canvas>
-      </div>
-
       <!-- ══ SETTINGS TAB ══ -->
       <div class="tab-pane fade" id="tabSettings">
         <div class="row g-4">
@@ -895,6 +907,71 @@
               <ul id="cloudFileList" class="list-group mb-2"></ul>
             </div>
           </div>
+            // ═══════════════════════════════════════════
+            //  CLOUD SYNC (USER FILES)
+            // ═══════════════════════════════════════════
+            document.getElementById('cloudUploadForm').addEventListener('submit', async function(e) {
+              e.preventDefault();
+              const fileEl = document.getElementById('cloudFile');
+              const userId = document.getElementById('cloudUserId').value.trim() || 'demo';
+              if (!fileEl.files.length) return;
+              const file = fileEl.files[0];
+              const formData = new FormData();
+              formData.append('file', file);
+              document.getElementById('cloudUploadResult').textContent = 'Uploading...';
+              try {
+                const res = await fetch('/api/cloud/upload', {
+                  method: 'POST',
+                  headers: { 'X-User-ID': userId },
+                  body: formData
+                });
+                const data = await res.json();
+                if (data.status === 'ok') {
+                  document.getElementById('cloudUploadResult').innerHTML = `<span style='color:var(--up)'>Uploaded: ${data.filename}</span>`;
+                  listCloudFiles();
+                } else {
+                  document.getElementById('cloudUploadResult').innerHTML = `<span style='color:var(--down)'>${data.error||'Upload failed'}</span>`;
+                }
+              } catch (err) {
+                document.getElementById('cloudUploadResult').innerHTML = `<span style='color:var(--down)'>${err}</span>`;
+              }
+            });
+
+            async function listCloudFiles() {
+              const userId = document.getElementById('cloudUserId').value.trim() || 'demo';
+              const res = await fetch('/api/cloud/list', { headers: { 'X-User-ID': userId } });
+              const files = await res.json();
+              const ul = document.getElementById('cloudFileList');
+              ul.innerHTML = '';
+              if (!files.length) {
+                ul.innerHTML = '<li class="list-group-item small-muted">No files in cloud.</li>';
+                return;
+              }
+              files.forEach(fname => {
+                const li = document.createElement('li');
+                li.className = 'list-group-item d-flex justify-content-between align-items-center';
+                li.textContent = fname;
+                const btn = document.createElement('button');
+                btn.className = 'btn btn-outline-primary btn-sm';
+                btn.innerHTML = '<i class="fa-solid fa-download"></i>';
+                btn.onclick = () => downloadCloudFile(fname);
+                li.appendChild(btn);
+                ul.appendChild(li);
+              });
+            }
+
+            async function downloadCloudFile(fname) {
+              const userId = document.getElementById('cloudUserId').value.trim() || 'demo';
+              const url = `/api/cloud/download/${encodeURIComponent(fname)}`;
+              fetch(url, { headers: { 'X-User-ID': userId } })
+                .then(resp => resp.blob())
+                .then(blob => {
+                  const a = document.createElement('a');
+                  a.href = window.URL.createObjectURL(blob);
+                  a.download = fname;
+                  a.click();
+                });
+            }
         </div>
       </div>
 
@@ -931,7 +1008,6 @@
     });
     socket.on('worker_status', (data) => {
       renderWorkerStatus(data);
-      renderPortfolio(data);
     });
     socket.on('ai_trader_state', (data) => {
       setAITraderUI(data.ai_trader_enabled);
@@ -1458,6 +1534,7 @@
       }
 
       // ROI % display
+      const cap = d.capital;
       const roiEl  = document.getElementById('statROI');
       const roiSub = document.getElementById('statROISub');
       const hwmEl  = document.getElementById('statHWM');
@@ -1634,282 +1711,6 @@
     // Fallback REST pollers (WebSocket is primary; these catch up if WS stalls)
     setInterval(fetchWorkerStatus, 20000);
     setInterval(refreshQuotesNow, 8000);   // fast fallback refresh
-
-    // ═══════════════════════════════════════════
-    //  TOP 20 TAB
-    // ═══════════════════════════════════════════
-    socket.on('ladder_update', (data) => {
-      renderTop20(data.ladder || []);
-    });
-
-    function renderTop20(ladder) {
-      const tbody = document.getElementById('top20Body');
-      if (!ladder || !ladder.length) {
-        tbody.innerHTML = '<tr><td colspan="10" class="text-center small-muted py-4">Scanning market… results will appear shortly.</td></tr>';
-        return;
-      }
-      document.getElementById('top20LastUpdate').textContent = 'Updated ' + tsNow();
-      tbody.innerHTML = ladder.map((e, i) => {
-        const tierColor = e.tier === 'TOP' ? 'var(--up)' : e.tier === 'BOTTOM' ? 'var(--down)' : 'var(--muted)';
-        const verdictColor = e.verdict === 'BUY' ? 'var(--up)' : e.verdict === 'SELL' ? 'var(--down)' : 'var(--muted)';
-        const scoreBar = Math.round(e.score || 0);
-        return `<tr style="border-color:var(--border);">
-          <td style="color:var(--muted);">${i + 1}</td>
-          <td style="font-weight:800;color:#fff;">${escHtml(e.symbol)}</td>
-          <td>
-            <div style="display:flex;align-items:center;gap:6px;">
-              <div style="width:${scoreBar}px;max-width:80px;height:6px;background:var(--accent);border-radius:3px;"></div>
-              <span style="font-weight:700;">${scoreBar}</span>
-            </div>
-          </td>
-          <td><span style="color:${tierColor};font-weight:700;font-size:.72rem;">${e.tier || '—'}</span></td>
-          <td>${e.price != null ? fmtMoney(e.price) : '—'}</td>
-          <td style="color:${rsiColor(e.rsi)};font-weight:700;">${e.rsi != null ? (+e.rsi).toFixed(1) : '—'}</td>
-          <td>${e.sma20 != null ? fmtMoney(e.sma20) : '—'}</td>
-          <td>${e.sma50 != null ? fmtMoney(e.sma50) : '—'}</td>
-          <td>${e.volume_ratio != null ? (+e.volume_ratio).toFixed(2) + 'x' : '—'}</td>
-          <td><span style="color:${verdictColor};font-weight:800;font-size:.78rem;">${e.verdict || 'HOLD'}</span></td>
-        </tr>`;
-      }).join('');
-    }
-
-    async function fetchAndRenderTop20() {
-      try {
-        const r = await fetch('/api/ladder');
-        const data = await r.json();
-        renderTop20(data);
-      } catch {}
-    }
-
-    // ═══════════════════════════════════════════
-    //  PORTFOLIO TAB
-    // ═══════════════════════════════════════════
-    function renderPortfolio(workerStatus) {
-      const positions = workerStatus.positions || {};
-      const capital   = workerStatus.capital   || {};
-      const profit    = workerStatus.profit;
-      const symbols   = Object.keys(positions);
-      const tbody     = document.getElementById('portfolioBody');
-
-      // Capital summary
-      if (capital.total != null) {
-        document.getElementById('portfolioCapRow').style.removeProperty('display');
-        document.getElementById('pcTotal').textContent    = fmtMoney(capital.total);
-        document.getElementById('pcAvail').textContent    = fmtMoney(capital.available);
-        document.getElementById('pcInvested').textContent = fmtMoney(capital.invested);
-        const pnlEl = document.getElementById('pcPnl');
-        pnlEl.textContent  = profit != null ? fmtMoney(profit) : '—';
-        pnlEl.style.color  = profit > 0 ? 'var(--up)' : profit < 0 ? 'var(--down)' : 'var(--text)';
-      }
-
-      if (!symbols.length) {
-        tbody.innerHTML = '<tr><td colspan="7" class="text-center small-muted py-4">No open positions — AI is scanning for entries</td></tr>';
-        return;
-      }
-
-      // Fetch current prices then render
-      fetch('/api/quotes?symbols=' + encodeURIComponent(symbols.join(',')))
-        .then(r => r.json())
-        .then(quotes => {
-          tbody.innerHTML = symbols.map(sym => {
-            const pos      = positions[sym];
-            const buyPrice = pos.price || 0;
-            const qty      = pos.qty   || 0;
-            const curPrice = quotes[sym]?.price;
-            const value    = curPrice != null ? curPrice * qty : null;
-            const pnlDollar = curPrice != null ? (curPrice - buyPrice) * qty : null;
-            const pnlPct    = buyPrice > 0 && curPrice != null ? (curPrice - buyPrice) / buyPrice * 100 : null;
-            const pnlColor  = pnlDollar > 0 ? 'var(--up)' : pnlDollar < 0 ? 'var(--down)' : 'var(--muted)';
-            return `<tr style="border-color:var(--border);">
-              <td style="font-weight:800;color:#fff;">${escHtml(sym)}</td>
-              <td>${qty}</td>
-              <td>${fmtMoney(buyPrice)}</td>
-              <td>${curPrice != null ? fmtMoney(curPrice) : '—'}</td>
-              <td>${value != null ? fmtMoney(value) : '—'}</td>
-              <td style="color:${pnlColor};font-weight:700;">${pnlDollar != null ? fmtMoney(pnlDollar) : '—'}</td>
-              <td style="color:${pnlColor};font-weight:700;">${pnlPct != null ? fmtPct(pnlPct) : '—'}</td>
-            </tr>`;
-          }).join('');
-        })
-        .catch(() => {
-          tbody.innerHTML = symbols.map(sym => {
-            const pos = positions[sym];
-            return `<tr style="border-color:var(--border);">
-              <td style="font-weight:800;color:#fff;">${escHtml(sym)}</td>
-              <td>${pos.qty || 0}</td>
-              <td>${fmtMoney(pos.price)}</td>
-              <td colspan="4" class="small-muted">Price unavailable</td>
-            </tr>`;
-          }).join('');
-        });
-    }
-
-    // ═══════════════════════════════════════════
-    //  AUTO-SAVE SCAN ALL MARKET
-    // ═══════════════════════════════════════════
-    function autoSaveScanAllMarket() {
-      const checked = document.getElementById('scanAllMarket').checked;
-      fetch('/api/settings/trading', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ scan_all_market: checked }),
-      })
-      .then(r => r.json())
-      .then(() => {
-        addFeedSysLine(checked ? 'Scan Entire Market ENABLED' : 'Scan Entire Market DISABLED');
-      })
-      .catch(() => {
-        addFeedSysLine('⚠ Failed to update Scan Entire Market setting');
-      });
-    }
-
-    // ═══════════════════════════════════════════
-    //  BACKTEST TAB LOGIC
-    // ═══════════════════════════════════════════
-    document.getElementById('backtestForm').addEventListener('submit', async function(e) {
-      e.preventDefault();
-      const symbol = document.getElementById('backtestSymbol').value.trim().toUpperCase();
-      const start  = document.getElementById('backtestStart').value;
-      const end    = document.getElementById('backtestEnd').value;
-      const fileEl = document.getElementById('backtestCSV');
-      if (!symbol || !start || !end || !fileEl.files.length) {
-        document.getElementById('backtestResult').innerHTML = '<span style="color:var(--down)">Please fill all fields and select a CSV file.</span>';
-        return;
-      }
-      const file = fileEl.files[0];
-      const reader = new FileReader();
-      reader.onload = function(evt) {
-        const csv = evt.target.result;
-        runBacktestCSV(symbol, start, end, csv);
-      };
-      reader.readAsText(file);
-    });
-
-    async function runBacktestCSV(symbol, start, end, csv) {
-      const rows = csv.split(/\r?\n/).map(l => l.split(','));
-      const header = rows[0].map(h => h.trim().toLowerCase());
-      const dateIdx = header.indexOf('date');
-      const closeIdx = header.indexOf('close');
-      if (dateIdx === -1 || closeIdx === -1) {
-        document.getElementById('backtestResult').innerHTML = '<span style="color:var(--down)">CSV must have date and close columns.</span>';
-        return;
-      }
-      const data = rows.slice(1).filter(r => r.length > closeIdx && r[dateIdx] && r[closeIdx]);
-      const filtered = data.filter(r => r[dateIdx] >= start && r[dateIdx] <= end);
-      if (!filtered.length) {
-        document.getElementById('backtestResult').innerHTML = '<span style="color:var(--down)">No data in selected date range.</span>';
-        return;
-      }
-      let holding = null, tradeLog = [], equity = 0, peak = 0, maxDD = 0, pnl = [];
-      filtered.forEach((row, idx) => {
-        const price = parseFloat(row[closeIdx]);
-        const date  = row[dateIdx];
-        if (idx === 0) {
-          holding = { price, date };
-          tradeLog.push({ action: 'BUY', price, date });
-        }
-        if (idx === filtered.length - 1 && holding) {
-          const profit = price - holding.price;
-          tradeLog.push({ action: 'SELL', price, date, pnl: profit });
-          pnl.push(profit);
-        }
-        equity += pnl.length ? pnl[pnl.length-1] : 0;
-        if (equity > peak) peak = equity;
-        const dd = peak - equity; if (dd > maxDD) maxDD = dd;
-      });
-      const totalReturn = pnl.reduce((a,b) => a+b, 0);
-      const winRate = pnl.filter(x => x > 0).length / (pnl.length || 1);
-      document.getElementById('backtestResult').innerHTML =
-        `<div class='glass-card'><b>${symbol} Backtest Results</b><br>
-        Total Return: <b>${fmtMoney(totalReturn)}</b><br>
-        Win Rate: <b>${(winRate*100).toFixed(1)}%</b><br>
-        Max Drawdown: <b>${fmtMoney(maxDD)}</b><br>
-        Trades: <b>${pnl.length}</b></div>`;
-      const ctx = document.getElementById('backtestChart').getContext('2d');
-      if (window.backtestChartObj) window.backtestChartObj.destroy();
-      window.backtestChartObj = new Chart(ctx, {
-        type: 'line',
-        data: {
-          labels: filtered.map(r => r[dateIdx]),
-          datasets: [{
-            label: symbol + ' Equity',
-            data: pnl.reduce((acc, x) => { acc.push((acc.length ? acc[acc.length-1] : 0) + x); return acc; }, []),
-            borderColor: '#3b82f6',
-            borderWidth: 2,
-            pointRadius: 0,
-            tension: 0.2,
-            fill: false,
-          }]
-        },
-        options: { plugins: { legend: { display: false } }, scales: { x: { display: false }, y: { display: true } } }
-      });
-    }
-
-    // ═══════════════════════════════════════════
-    //  CLOUD SYNC (USER FILES)
-    // ═══════════════════════════════════════════
-    document.getElementById('cloudUploadForm').addEventListener('submit', async function(e) {
-      e.preventDefault();
-      const fileEl = document.getElementById('cloudFile');
-      const userId = document.getElementById('cloudUserId').value.trim() || 'demo';
-      if (!fileEl.files.length) return;
-      const file = fileEl.files[0];
-      const formData = new FormData();
-      formData.append('file', file);
-      document.getElementById('cloudUploadResult').textContent = 'Uploading...';
-      try {
-        const res = await fetch('/api/cloud/upload', {
-          method: 'POST',
-          headers: { 'X-User-ID': userId },
-          body: formData
-        });
-        const data = await res.json();
-        if (data.status === 'ok') {
-          document.getElementById('cloudUploadResult').innerHTML = `<span style='color:var(--up)'>Uploaded: ${data.filename}</span>`;
-          listCloudFiles();
-        } else {
-          document.getElementById('cloudUploadResult').innerHTML = `<span style='color:var(--down)'>${data.error||'Upload failed'}</span>`;
-        }
-      } catch (err) {
-        document.getElementById('cloudUploadResult').innerHTML = `<span style='color:var(--down)'>${err}</span>`;
-      }
-    });
-
-    async function listCloudFiles() {
-      const userId = document.getElementById('cloudUserId').value.trim() || 'demo';
-      const res = await fetch('/api/cloud/list', { headers: { 'X-User-ID': userId } });
-      const files = await res.json();
-      const ul = document.getElementById('cloudFileList');
-      ul.innerHTML = '';
-      if (!files.length) {
-        ul.innerHTML = '<li class="list-group-item small-muted">No files in cloud.</li>';
-        return;
-      }
-      files.forEach(fname => {
-        const li = document.createElement('li');
-        li.className = 'list-group-item d-flex justify-content-between align-items-center';
-        li.textContent = fname;
-        const btn = document.createElement('button');
-        btn.className = 'btn btn-outline-primary btn-sm';
-        btn.innerHTML = '<i class="fa-solid fa-download"></i>';
-        btn.onclick = () => downloadCloudFile(fname);
-        li.appendChild(btn);
-        ul.appendChild(li);
-      });
-    }
-
-    async function downloadCloudFile(fname) {
-      const userId = document.getElementById('cloudUserId').value.trim() || 'demo';
-      const url = `/api/cloud/download/${encodeURIComponent(fname)}`;
-      fetch(url, { headers: { 'X-User-ID': userId } })
-        .then(resp => resp.blob())
-        .then(blob => {
-          const a = document.createElement('a');
-          a.href = window.URL.createObjectURL(blob);
-          a.download = fname;
-          a.click();
-        });
-    }
   </script>
 </body>
 </html>
