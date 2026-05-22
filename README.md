@@ -1,377 +1,380 @@
 # 👽 Alien AI Trader
 
-A real-time AI-powered stock trading dashboard with automated buy/sell logic, live WebSocket updates, RSI + SMA technical analysis, trailing stop, compound reinvestment, portfolio ladder scoring, and multi-channel mobile alerts.
+> **AI-powered stock trading on autopilot. It scans the market, picks the strongest climbers, buys on the way up, and sells before the drop.**
 
-Built by **Troy Walker of T-Dub's Apps — 2026**
-
----
-
-## ⬇️ Download
-
-**[→ Download the latest release (ZIP)](../../releases/latest)**
-
-1. Click the link above and download `AlienAITrader-vX.X.X.zip`
-2. Extract the ZIP anywhere on your PC
-3. Open the `Alien_AI_Trader` folder and double-click **`LAUNCH.bat`**
-4. Choose **[1] Install** — the wizard does everything else
-
-> **No GitHub account required.** No forking needed. Just download, extract, and run.
+Built by **Troy Walker · T-Dub's Apps · 2026**
 
 ---
 
-## 🧭 New User Guide — How Do I Get the Files?
+## ⬇️ Download — One Click to Get Started
 
-If you are new to GitHub, **"getting the files" just means downloading Alien AI Trader to your computer**.
+**[→ Click here to download the latest version (ZIP)](../../releases/latest)**
 
-You have 3 easy choices:
-
-### Option 1 — Easiest: Download the ZIP
-This is the best choice for most people.
-
-1. Open the **latest release** link above
-2. Download the ZIP file
-3. Right-click the ZIP and choose **Extract All**
-4. Open the extracted `Alien_AI_Trader` folder
-5. Double-click **`LAUNCH.bat`**
-6. Choose **[1] Install**
-
-### Option 2 — Even More Automated: Use `DOWNLOAD_AND_INSTALL.bat`
-If you were sent the `DOWNLOAD_AND_INSTALL.bat` file:
-
-1. Double-click it
-2. If Git is not installed yet, it opens the Git download page for you
-3. After Git is installed, double-click the file again
-4. It downloads Alien AI Trader to your Desktop and starts the installer automatically
-
-### Option 3 — Get the Files with Git
-This is for people who want the latest repository version directly from GitHub.
-
-1. Install **Git for Windows** from https://git-scm.com/download/win
-2. Open **Command Prompt** or **PowerShell**
-3. Paste this command and press Enter:
-
-```powershell
-git clone https://github.com/T-Dubs-Apps/Alien-AI-Trader.git
-```
-
-4. Open the new `Alien-AI-Trader` folder
-5. Double-click **`ONE_CLICK_INSTALL.bat`** or **`LAUNCH.bat`**
-
-If that sounds confusing, use the ZIP method instead. It is simpler.
+No account required. No coding. Just download, extract, and double-click.
 
 ---
 
-## 🚀 Quick Start (New Users — Start Here)
+## 🚀 Getting Started — 4 Simple Steps
 
-### Step 1 — Download & Install (first time only)
-```
-Double-click: LAUNCH.bat  →  choose [1] Install
-```
-This automatically:
-- Checks for Python 3.10+ and installs it if missing (via winget or python.org)
-- Upgrades pip
-- Creates a `.venv` virtual environment
-- Installs all dependencies from `requirements-local.txt`
-- Runs the API key wizard and writes `keys.bat` for you
-- Creates a Desktop shortcut for daily use
-
-> **Beginner tip:** If someone tells you to "clone the repo" or "get the files from GitHub," you do **not** need to understand programming first. You are simply downloading the app files to your PC so the installer can run.
-
-### Step 2 — Set Up Your API Keys
-The Setup Wizard (launched automatically during install) walks you through
-registering for each service, opens each registration page in your browser,
-and writes your `keys.bat` file automatically. No manual editing required.
-
-To re-run the wizard later: open `LAUNCH.bat` → choose **[3] Setup Keys**.
-
-Services you'll need (the wizard explains each one):
-| Service | Purpose | Approval Time |
-|---------|---------|--------------|
-| [Alpaca](https://alpaca.markets) | Stock trading API | Instant (paper) / up to 1 week (live) |
-| [Alpha Vantage](https://alphavantage.co) | Market data & indicators | Instant |
-| [Pushover](https://pushover.net) | Push notifications to phone | Instant |
-| [Twilio](https://twilio.com) | SMS / phone call alerts | Instant |
-| [Pushbullet](https://pushbullet.com) | Device sync notifications | Instant |
-
-> **Tip:** Start with Alpaca Paper Trading — it's instant and uses fake money.
-> Live trading approval can take up to a week.
-
-### Step 3 — Launch
-```
-Double-click: START.bat   (or use the "Alien AI Trader" Desktop shortcut)
-```
-This activates the venv, loads your keys, starts both the dashboard and worker,
-and opens your browser automatically.
-
-**Local dashboard:** http://localhost:5000
-**Render dashboard:** https://alien-ai-trader-dashboard.onrender.com
+> **Total time: about 5–10 minutes (most of it waiting for packages to download)**
 
 ---
 
-## 🧠 How the AI Trading Engine Works
+### Step 1 — Download the ZIP
 
-### 1. Portfolio Ladder Scoring (New)
+1. Click the download link above
+2. A file called `AlienAITrader-v1.0.0.zip` (or similar) will download to your computer
+3. Find it in your **Downloads** folder
 
-The engine now runs a **Portfolio Ladder Scanner** alongside the trading engine.
-Every scan cycle, all symbols in your portfolio (up to 61+) receive a composite
-**Ladder Score** from 0–100:
+---
 
-| Component | Weight | What It Measures |
-|-----------|--------|-----------------|
-| RSI Score | 25 pts | RSI in buying-dip sweet spot (35–55) |
-| Momentum Score | 25 pts | SMA20/SMA50 crossover strength + spread % |
-| Volume Score | 20 pts | Volume surge above 20-day average |
-| Trend Score | 15 pts | Price position within 52-week high/low range |
-| Profit Score | 15 pts | Unrealized gain bonus if currently held |
+### Step 2 — Extract the ZIP
 
-Stocks are ranked **highest → lowest** score every cycle (the "ladder"):
+1. Right-click the downloaded ZIP file
+2. Click **"Extract All..."**
+3. Click **Extract** (the default location is fine)
+4. A new folder called `Alien_AI_Trader` will appear — open it
 
-- **TOP tier** (top 20%): BUY candidates — engine focuses capital here
-- **NEUTRAL** (middle 60%): Hold / monitor — no new buys
-- **BOTTOM tier** (bottom 20%): Avoid / sell if held
+> **What is "extracting"?**
+> A ZIP file is like a compressed envelope. Extracting unpackages everything inside it onto your computer.
 
-This creates the **ladder climbing effect** — capital flows to the strongest
-movers and away from the weakest, compounding upward over the session.
+---
 
-### 2. Continuous Market Scanning
+### Step 3 — Run the Installer (1 click)
 
-The engine scans your full portfolio every **N seconds** (configurable, default 15s).
+**Double-click `LAUNCH.bat`**
 
-In **Scan All Market** mode it also pulls all active US equity symbols from Alpaca,
-batch-fetches price snapshots, filters for volume > 200k and > 0.5% daily gain,
-and adds the **top 30 momentum movers** to each cycle.
+A black window will open. It will ask you what to do:
 
-### 3. Live Price Feed
+```
+  [1] INSTALL — Copy to your PC and run full setup
+  [2] RUN NOW — I already installed, just launch the app
+  [3] SETUP KEYS — Re-run the API key wizard
+  [4] OPEN README — Read the full documentation
+  [5] EXIT
 
-For each symbol:
-- **Alpaca** first (real-time latest trade price)
-- Falls back to **Alpha Vantage** if Alpaca fails
-- Prices cached 8 seconds to avoid rate limits
+  Enter 1-5:
+```
 
-### 4. Technical Analysis — RSI + SMA Crossover
+**Type `1` and press Enter.** The installer will now do everything automatically:
 
-For every symbol the engine pulls the last **60 one-minute bars** and calculates:
+| What's happening | Why |
+|-----------------|-----|
+| Checking Windows version | Needs Windows 10 or higher |
+| Installing Python 3.12 (if missing) | The programming language the app runs on |
+| Choosing your install location | Default is your Desktop — just press Enter |
+| Copying files | Moves everything to your chosen folder |
+| Creating a virtual environment | Isolates the app's libraries from other software |
+| Installing Python packages | Flask, Alpaca API, Pandas, etc. |
+| Running the API Key Wizard | Sets up your free accounts (explained below) |
+| Creating a Desktop shortcut | So you can launch the app daily with one click |
 
-| Indicator | What It Measures |
-|-----------|-----------------|
-| **RSI-14** | Momentum. Above 70 = overbought, below 30 = oversold |
-| **SMA-20** | 20-bar Simple Moving Average — short-term trend |
-| **SMA-50** | 50-bar Simple Moving Average — medium-term trend |
+> **You do not need to understand any of this.** Just follow the on-screen prompts. The installer explains every step in plain English as it goes.
 
-### 5. Buy / Sell Signal Logic (Improved)
+---
 
-The original RSI < 70 threshold was too loose — it was buying near tops.
-Now uses stricter filters:
+### Step 4 — Enter Your API Keys
 
-| Signal | Condition | Meaning |
-|--------|-----------|---------|
-| **BUY** | SMA20 > SMA50 by ≥ 0.1% spread **AND** RSI < 50 **AND** Ladder = TOP tier | Confirmed uptrend with dip entry |
-| **SELL** | SMA20 < SMA50 **OR** RSI > 70 | Trend reversing — exit |
-| **HOLD** | Everything else | No clear edge |
+During install, the **Setup Wizard** will open. It walks you through signing up for each service — it opens the signup pages in your browser, tells you exactly what to copy, and writes your keys file automatically.
 
-> **Key change:** RSI must be below 50 (not 70) and the SMA crossover must have
-> a real spread (not razor-thin). This dramatically reduces false buy signals.
+You need accounts at these free services:
 
-### 6. Trailing Stop — Let Winners Run
+| Service | What it does | Cost |
+|---------|-------------|------|
+| [Alpaca Markets](https://alpaca.markets) | Executes your stock trades and provides real-time prices | Free |
+| [Alpha Vantage](https://alphavantage.co) | Provides technical indicator data (RSI, SMA, etc.) | Free |
+| [Pushover](https://pushover.net) | Sends push notifications to your phone | Free trial, then ~$5 one-time |
+| [Twilio](https://twilio.com) | Sends SMS texts and phone call alerts | Free trial credit |
+| [Pushbullet](https://pushbullet.com) | Syncs alerts across all your devices | Free |
 
-- Tracks the **highest price since purchase** (the "peak")
-- Sells when price **drops X% below that peak**
-- Default: **3%** (adjustable live in the UI)
+> **Start with Alpaca Paper Trading.** Paper trading uses fake money so you can test the AI without any risk. It is approved instantly. You can flip to live trading later once you are comfortable.
+
+> **Alerts are optional.** If you skip Pushover / Twilio / Pushbullet for now, the app still works — you just won't get phone alerts.
+
+---
+
+## ✅ Installation Complete — You're Ready!
+
+After the installer finishes, you'll see:
+```
+  ✦  Installation Complete!  👽
+
+  How to launch Alien AI Trader:
+    • Double-click 'Alien AI Trader' on your Desktop
+    • OR double-click START.bat
+```
+
+**From now on, just double-click the "Alien AI Trader" shortcut on your Desktop.**
+
+Your dashboard will open automatically at: **http://localhost:5000**
+
+---
+
+## 📅 Daily Use
+
+### Starting the app
+Double-click **"Alien AI Trader"** on your Desktop.
+
+Two windows will open (the Dashboard server and the Trading Worker). Your browser will open automatically to the dashboard. **Do not close those windows** while the app is running.
+
+### Stopping the app
+Close both console windows — the one labeled **Dashboard** and the one labeled **Worker**.
+
+### Re-running setup or updating your API keys
+Double-click `LAUNCH.bat` and choose **[3] Setup Keys**.
+
+---
+
+## 🖥️ The Dashboard — What You're Looking At
+
+When the app opens in your browser, you'll see several tabs:
+
+| Tab | What it shows |
+|-----|--------------|
+| **Watchlist** | Live prices + AI signal (BUY / SELL / HOLD) for your stocks |
+| **Live Feed** | Real-time stream of every AI decision as it happens |
+| **Alerts** | Trade notifications pushed from the AI engine |
+| **Trade** | Settings panel — adjust stop-loss %, capital, risk levels |
+| **Top 20** | The AI's best-ranked stocks right now, scored 0–100 |
+| **Portfolio** | Your capital balance, open positions, and live profit/loss |
+| **Backtest** | Test the AI's strategy on historical data before going live |
+| **Settings** | Worker status and advanced configuration |
+
+### The most important controls
+
+**Auto-Trade switch** (top of the Trade tab)
+- **ON** = the AI places real orders automatically
+- **OFF** = the AI scans and shows signals but does NOT trade
+
+> Start with Auto-Trade **OFF** and watch what the AI would do for a few days before turning it on.
+
+**Starting Capital $** (Trade tab)
+- Set this to the amount of money you want the AI to manage
+- Example: enter `1000` and the AI will trade with up to $1,000, sizing each position automatically
+- Leave at `0` to use fixed 1-share orders instead
+
+**Paper vs Live Trading**
+- The app starts in **Paper Mode** — all trades use fake money, so you cannot lose anything
+- To switch to live trading, you must explicitly set `TRADING_MODE=live` in your settings AND enable `LIVE_TRADING_ENABLED=true`
+- **We strongly recommend staying in Paper Mode until you have watched the AI trade for at least a week**
+
+---
+
+## 🧠 How the AI Decides What to Buy and Sell
+
+The AI does not guess. It uses multiple layers of analysis before placing any trade.
+
+### Layer 1 — Technical Indicators
+
+For every stock, the AI pulls the last 60 minutes of price bar data and calculates:
+
+| Indicator | What it measures | How it's used |
+|-----------|-----------------|--------------|
+| **RSI-14** | How fast a stock is moving (momentum) | Must be below 50 to BUY — catching dips, not chasing peaks |
+| **SMA-20** | 20-bar average price — short-term trend | Must be above SMA-50 (golden cross) to BUY |
+| **SMA-50** | 50-bar average price — medium-term trend | Death cross (SMA20 < SMA50) triggers SELL |
+| **MACD** | Convergence of moving averages | Must be bullish (MACD above signal line) to BUY |
+| **Bollinger Bands** | Price volatility range | Price must be inside the bands — avoids breakout fakes |
+| **VWAP** | Volume-weighted average price | Price must be near VWAP — avoids off-market spikes |
+
+All six conditions must be true at the same time before the AI will buy.
+
+### Layer 2 — Predictive Forecasting
+
+Before buying, the AI runs two forecasting models on the stock's recent price data:
+
+- **Linear Regression Forecast** — fits a trend line to recent prices and predicts where the stock will be in 5 bars. If the predicted direction is "up" with high confidence, the forecast approves the trade.
+- **EMA Stacking (Momentum)** — checks whether short-term averages (EMA5, EMA10, EMA20) are stacked in the right order (price > EMA5 > EMA10 > EMA20). This pattern confirms a stock is in a sustained climb, not just a random spike.
+
+**The AI will only buy if the forecast confirms the stock is still climbing.** If the forecast shows the momentum has already peaked, the trade is skipped.
+
+### Layer 3 — Portfolio Ladder Scoring
+
+Every stock in the watchlist is scored from **0 to 100** every scan cycle:
+
+| Score Component | Weight | What it rewards |
+|----------------|--------|----------------|
+| RSI score | 20 pts | RSI in the buying-dip sweet spot (35–55) |
+| Momentum score | 20 pts | SMA crossover strength |
+| Volume score | 15 pts | Volume surge above the 20-day average (confirms the move is real) |
+| Trend score | 15 pts | Price in the middle of its 52-week range (not at the very top) |
+| Profit score | 15 pts | Bonus if the AI is already holding this stock and it's up |
+| Forecast score | 15 pts | Linear regression + EMA stacking prediction |
+
+Stocks are ranked highest to lowest — this is the **Ladder**. Only the **top 20%** are approved as BUY candidates. Even if all the technical signals say BUY, the AI will not enter a stock sitting in the bottom half of the ladder.
+
+### Layer 4 — News Sentiment
+
+The AI checks recent news headlines for each stock. If the sentiment score is negative, the BUY is blocked — no matter what the charts say.
+
+---
+
+## 📈 The Ladder Effect — Buy the Climb, Sell the Peak
+
+The core strategy is simple:
+
+1. **Buy on a confirmed upward climb** — all indicators + forecast must agree the stock is rising
+2. **Hold while it keeps climbing** — the trailing stop follows the price upward, locking in gains
+3. **Sell before or during the peak** — two mechanisms protect your profits:
+
+### Trailing Stop (your main protection)
+- The AI tracks the **highest price reached** since purchase (the "peak")
+- When the price drops more than X% below that peak, the AI sells automatically
+- Default: 3% drop from peak triggers a sell
+- You can adjust this in the Trade tab
 
 ```
 Example with 3% trailing stop:
   Buy  @ $100.00
-  Peak @ $130.00  →  sell trigger = $126.10
-  Peak @ $150.00  →  sell trigger = $145.50
-  Price drops to $145.50  →  SELL
-  Captured 45.5% gain instead of a fixed 10%
+  Peak @ $140.00  →  sell trigger moves to $135.80
+  Peak @ $160.00  →  sell trigger moves to $155.20
+  Price drops to $155.20  →  AI SELLS
+  You captured a +55.2% gain
 ```
 
-An **absolute stop-loss floor** (default 5%) also fires if the stock never rises.
+### Forecast Exit (sells before the trailing stop fires)
+When the AI detects that momentum has **reversed** — the forecast flips from "up" to "down" and the EMA pattern shows the stock is now in a "falling" phase — it sells immediately, before the price actually drops enough to trigger the trailing stop. This gets you out closer to the actual top.
 
-### 7. Smart Position Sizing (New)
+You can toggle this on/off in the Trade tab under **"Forecast Exit."**
 
-Set **Starting Capital $** in the dashboard to enable compound pool mode.
-The engine now automatically scales trade sizes to your capital — no more
-single large bets:
-
-| Setting | Default | Effect at $100 Capital |
-|---------|---------|----------------------|
-| Risk Per Trade % | 2% | Max $2.00 risked per trade |
-| Max Position % | 20% | Max $20.00 in any one stock |
-| Min Positions | 5 | Capital spreads across ≥ 5 stocks |
-| Hard $ Cap | 0 (off) | Optional absolute dollar ceiling |
-
-**Example with $100:** Instead of one $99 bet, the engine places multiple
-$2–$20 positions across the top-scored ladder stocks. A string of losses
-can't wipe you out.
-
-The math scales automatically — a user with $50,000 gets proportionally
-larger positions using the same percentage rules.
-
-### 8. Capital Pool & Compound Reinvestment
-
-- On every sell, **100% of proceeds go back into the pool automatically**
-- Engine immediately hunts for the next top-ladder stock and reinvests
-- Gains compound with every cycle: $100 → $145 → $210 → ...
-- Dashboard shows **Session ROI %** and **All-Time High** portfolio peak
-
-### 9. Auto Trade Execution
-
-**Buying:**
-Signal = BUY + TOP ladder tier + open slot + capital available → market buy via Alpaca
-
-**Selling — three exits (in priority order):**
-
-| Exit | Trigger | Default |
-|------|---------|---------|
-| **Trailing Stop** | Price drops X% from peak | 3% |
-| **Absolute Stop-Loss** | Price drops X% from buy entry | 5% |
-| **Signal Exit** | SELL signal fires while profitable | — |
-
-### 10. Safety Controls
-
-- **Paper mode by default** — no real money until `TRADING_MODE=live` AND `LIVE_TRADING_ENABLED=true`
-- **Trade throttle** — max 30 trades/hour (configurable)
-- **Position cap** — max N simultaneous holdings (configurable)
-- **Ladder gate** — engine blocked from buying BOTTOM-tier stocks even if RSI dips
-- **Multi-channel alerts** — Pushbullet, Pushover, Twilio SMS/call on every major event
-
-### 11. Live Settings — No Restart Needed
-
-All settings adjustable from the **Trade tab** in the dashboard, take effect
-on the next scan cycle:
-
-**Core:**
-- Trailing Stop % · Stop-Loss % · Scan Interval · Starting Capital $
-- Max Positions · Scan All Market · Max Trades/Hour
-
-**Position Sizing (New):**
-- Risk Per Trade % · Max Position % · Min Positions · Hard $ Cap/Trade
-
-**Signal Filters (New):**
-- RSI Buy Max · RSI Sell Min · SMA Spread Min %
-
-### 12. Real-Time Dashboard
-
-Every cycle the engine pushes capital balance, open positions, RSI/SMA signals,
-ladder scores, trade count, Session ROI %, and portfolio peak via **WebSocket**
-to all open browser windows simultaneously.
+### Stop-Loss (worst case protection)
+If a stock drops more than X% from your buy price without ever rising, the AI exits immediately. Default: 5% loss from entry. This prevents a bad trade from getting worse.
 
 ---
 
-## 📊 Signal & Ladder Flow
+## ⚙️ Adjusting the Settings (Trade Tab)
 
-```
-Every N seconds (configurable, default 15s)
-     |
-     +-- [poll live settings] ← picks up UI changes with no restart
-     |
-     +-- [Scan All Market ON?]
-     |     +-- Alpaca all assets → batch snapshots → filter → top 30 movers added
-     |
-     v
-[Portfolio Ladder Scanner — parallel, every 60s]
-     +-- Score all 61 symbols: RSI + Momentum + Volume + Trend + Profit
-     +-- Rank highest → lowest (the "ladder")
-     +-- Tag TOP 20% as BUY candidates / BOTTOM 20% as AVOID
-     |
-     v
-[Thread Pool — up to 12 parallel workers]
-     +-- AAPL: price → RSI/SMA → Ladder check → BUY / trailing-stop / hold
-     +-- TSLA: price → RSI/SMA → Ladder check → BUY / trailing-stop / hold
-     +-- ... (all 61 portfolio symbols + market candidates simultaneously)
-     |
-     +-- BUY  → size position by risk % → deduct from capital pool → record peak
-     +-- TRAILING STOP → SELL → add proceeds to pool → hunt next top-ladder target
-     +-- STOP-LOSS     → SELL → protect remaining capital
-     |
-     v
-[Heartbeat → WebSocket push → live dashboard]
-     → prices, capital, ROI %, positions, RSI badges, ladder scores, alerts
-```
+All settings can be changed live — no restart needed.
+
+| Setting | Default | What it does |
+|---------|---------|-------------|
+| Trailing Stop % | 3% | How far from the peak before the AI sells |
+| Stop-Loss % | 5% | Maximum loss from buy price before forced exit |
+| Scan Interval | 15s | How often the AI scans every stock |
+| Starting Capital $ | 0 | Total money the AI manages (0 = 1-share fixed mode) |
+| Risk Per Trade % | 2% | Max % of capital on any single trade |
+| Max Position % | 20% | Max % of capital in any single stock |
+| Min Positions | 5 | Capital is spread across at least this many stocks |
+| Max Trades/Hour | 30 | Rate limiter — prevents runaway trading |
+| Max Positions | 5 | Max number of stocks held at once |
+| RSI Buy Max | 50 | Only buy when RSI is below this number |
+| RSI Sell Min | 70 | Signal-based sell when RSI exceeds this |
+| Forecast Exit | ON | Sell early when forecast shows momentum reversing |
+| Scan Entire Market | OFF | Scan all 8,000+ US stocks, not just your watchlist |
+
+> **All settings are saved automatically.** If the app restarts, your settings are restored exactly as you left them.
 
 ---
 
-## 🌐 Render Deployment
+## 🔔 Mobile Alerts
 
-This app runs as two services on Render via `render.yaml` blueprint:
+The app can notify your phone when trades happen, when a stock crashes after hours, or when your portfolio hits a new all-time high.
 
-| Service | Type | What It Does |
+| Channel | Alert type | Setup |
+|---------|-----------|-------|
+| **Pushbullet** | Every trade, every signal | pushbullet.com → Settings → Access Token |
+| **Pushover** | Crash alerts (breaks Do Not Disturb) | pushover.net → Create App |
+| **Twilio** | Phone call during after-hours crash | twilio.com → Console |
+
+---
+
+## ☁️ Runs in the Cloud Too
+
+If you want the AI trading 24/7 without your PC being on, you can deploy it to **Render.com** for free.
+
+The cloud dashboard is already live at:
+**https://alien-ai-trader-dashboard.onrender.com**
+
+To deploy your own instance, see the **Render Deployment** section below.
+
+---
+
+## 🌐 Render Cloud Deployment (Advanced)
+
+This section is for users who want to run the app in the cloud. Skip this if you just want to run it on your own PC.
+
+The app deploys as two services on Render via `render.yaml`:
+
+| Service | Type | What it does |
 |---------|------|-------------|
 | `alien-ai-trader-dashboard` | Web Service | Flask dashboard + API + WebSocket |
 | `alien-ai-trader-worker` | Background Worker | Trading engine + ladder scanner |
 
-**Environment variables** are set in the Render dashboard for each service.
-The Setup Wizard prints a copy-paste block for all required variables.
+**Steps:**
+1. Fork this repository on GitHub
+2. Go to [render.com](https://render.com) → New → Blueprint
+3. Connect your forked repo
+4. Render will find `render.yaml` and create both services automatically
+5. Set your environment variables (API keys) in the Render dashboard
 
 ---
 
-## ⚙️ Environment Variables
+## ⚙️ All Environment Variables (Advanced Reference)
 
-### Required
-| Variable | Description |
-|----------|-------------|
-| `ALPACA_KEY` | Alpaca API Key ID |
-| `ALPACA_SECRET` | Alpaca Secret Key |
-| `ALPACA_BASE_URL` | `https://paper-api.alpaca.markets` (paper) or `https://api.alpaca.markets` (live) |
-| `ALPHA_VANTAGE_KEY` | Alpha Vantage API key |
-| `PUSHOVER_TOKEN` | Pushover app API token |
-| `PUSHOVER_USER` | Pushover user key |
-| `TWILIO_ACCOUNT_SID` | Twilio Account SID |
-| `TWILIO_AUTH_TOKEN` | Twilio Auth Token |
-| `TWILIO_FROM_NUMBER` | Twilio phone number (E.164 format: +1XXXXXXXXXX) |
-| `TWILIO_TO_NUMBER` | Your cell number (E.164 format: +1XXXXXXXXXX) |
-| `PUSHBULLET_API_KEY` | Pushbullet access token |
+### Required API Keys
+| Variable | Where to get it |
+|----------|----------------|
+| `ALPACA_KEY` | alpaca.markets → API Keys |
+| `ALPACA_SECRET` | alpaca.markets → API Keys |
+| `ALPHA_VANTAGE_KEY` | alphavantage.co → Free API Key |
+| `PUSHOVER_TOKEN` | pushover.net → Create App |
+| `PUSHOVER_USER` | pushover.net → Your User Key |
+| `TWILIO_ACCOUNT_SID` | twilio.com → Console |
+| `TWILIO_AUTH_TOKEN` | twilio.com → Console |
+| `TWILIO_FROM_NUMBER` | Your Twilio phone number (+1XXXXXXXXXX) |
+| `TWILIO_TO_NUMBER` | Your personal phone number (+1XXXXXXXXXX) |
+| `PUSHBULLET_API_KEY` | pushbullet.com → Settings → Access Token |
 
-### Trading & Execution
+### Trading Settings
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `TRADING_MODE` | `paper` | `paper` or `live` |
-| `LIVE_TRADING_ENABLED` | `false` | Second safety switch for live trading |
-| `ENGINE_MODE` | `AI` | `AI`, `SMA`, or `manual` |
-| `POLL_SECONDS` | `15` | Scan interval (seconds) |
-| `SCAN_WORKERS` | `12` | Parallel threads (12 recommended for 61 symbols) |
-| `MAX_POSITIONS` | `5` | Maximum simultaneous open positions |
-| `SCAN_ALL_MARKET` | `false` | Hunt all US equities for momentum |
-| `MARKET_SCAN_CANDIDATES` | `30` | Top momentum stocks from market scan |
-| `ORDER_QTY` | `1` | Shares per order (fixed qty mode only) |
-| `MAX_TRADES_PER_HOUR` | `30` | Trade throttle |
-| `RUN_SECONDS` | `21540` | Session length (5h 59m — just under Alpaca limit) |
+| `LIVE_TRADING_ENABLED` | `false` | Second safety switch — must be `true` for live |
+| `POLL_SECONDS` | `15` | Scan interval in seconds |
+| `MAX_POSITIONS` | `5` | Max simultaneous open positions |
+| `INITIAL_CAPITAL` | `0` | Starting capital $ (0 = fixed 1-share mode) |
+| `RISK_PER_TRADE_PCT` | `2.0` | % of capital risked per trade |
+| `MAX_POSITION_PCT` | `20.0` | Max % in any single stock |
+| `TRAILING_STOP_PCT` | `3.0` | % drop from peak before selling |
+| `LOSS_THRESHOLD` | `5.0` | % drop from buy price before stop-loss |
+| `FORECAST_EXIT_ENABLED` | `true` | Sell early on momentum reversal |
+| `RUN_SECONDS` | `21540` | Session length — 5h 59m (under API limits) |
+| `SCAN_ALL_MARKET` | `false` | Scan all US equities for momentum movers |
 
-### Capital & Position Sizing (New)
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `INITIAL_CAPITAL` | `0` | Starting capital $ (0 = fixed qty mode) |
-| `RISK_PER_TRADE_PCT` | `2.0` | % of capital to risk per trade |
-| `MAX_POSITION_PCT` | `20.0` | Max % of capital in any single stock |
-| `MIN_POSITIONS` | `5` | Minimum positions to spread capital across |
-| `RISK_PER_TRADE_USD` | `0` | Hard dollar cap per trade (0 = disabled) |
+---
 
-### Signal Filters (New)
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `RSI_BUY_MAX` | `50.0` | RSI must be below this to BUY |
-| `RSI_SELL_MIN` | `70.0` | RSI must be above this to SELL |
-| `SMA_SPREAD_MIN` | `0.1` | Min SMA20/SMA50 spread % for valid crossover |
-| `TRAILING_STOP_PCT` | `3.0` | Sell if price drops this % from peak |
-| `LOSS_THRESHOLD` | `5.0` | Absolute stop-loss % below buy price |
+## 📁 Project Files (Reference)
 
-### Portfolio Ladder (New)
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `LADDER_INTERVAL` | `60` | Seconds between full portfolio re-scores |
-| `MIN_SCORE_TO_BUY` | `45.0` | Minimum ladder score required to buy |
-| `TOP_TIER_PCT` | `0.20` | Top X% of portfolio = BUY candidates |
-| `BOTTOM_TIER_PCT` | `0.20` | Bottom X% = avoid / sell if held |
+```
+Alien_AI_Trader/
+├── LAUNCH.bat              ← Start here — installer menu
+├── START.bat               ← Daily launch (after install)
+├── INSTALL.ps1             ← Full automated installer
+├── dashboard.py            ← Web server + dashboard + API
+├── trading_engine.py       ← AI brain: signals, buy/sell, position sizing
+├── worker.py               ← Background runner: engine + ladder scanner
+├── portfolio_ladder.py     ← Ladder scorer: ranks all stocks 0-100
+├── forecasting.py          ← Predictive forecasting: regression + EMA stacking
+├── setup_wizard.py         ← API key setup wizard
+├── config_loader.py        ← Loads keys from env or config.json
+├── backtest.py             ← Strategy backtesting engine
+├── requirements.txt        ← Python package list
+├── render.yaml             ← Cloud deployment blueprint (Render.com)
+├── keys.bat                ← YOUR private API keys (never share this file!)
+└── templates/
+    └── dashboard.html      ← Dashboard web interface
+```
 
-### Infrastructure
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PRICE_CACHE_TTL` | `8` | Seconds to cache each price |
-| `HEARTBEAT_EVERY_SECONDS` | `10` | Dashboard heartbeat frequency |
-| `WORKER_STALE_AFTER_SECONDS` | `60` | Mark worker offline after N seconds silence |
-| `FLASK_SECRET` | auto | Flask session secret key |
+---
+
+## 🔒 Security — Keep Your Keys Safe
+
+**Never share these files with anyone:**
+- `keys.bat` — contains all your API keys
+- `.env` — alternative key storage
+- `config.json` — your configuration
+
+These files are excluded from GitHub automatically by `.gitignore`. The app will never upload them anywhere.
 
 ---
 
@@ -380,141 +383,48 @@ The Setup Wizard prints a copy-paste block for all required variables.
 | Layer | Technology |
 |-------|-----------|
 | Web server | Flask + Flask-SocketIO |
-| Real-time push | Socket.IO (WebSocket) |
-| Market data | Alpaca Trade API + Alpha Vantage |
-| Technical analysis | pandas (RSI-14, SMA-20, SMA-50) |
-| Portfolio scoring | Custom ladder scorer (RSI + Momentum + Volume + Trend + Profit) |
-| Charts | Chart.js (sparklines per card) |
+| Real-time updates | Socket.IO (WebSocket) |
+| Trading execution | Alpaca Trade API |
+| Market data | Alpha Vantage |
+| Technical analysis | Pandas (RSI-14, SMA, MACD, Bollinger, VWAP) |
+| Predictive forecasting | NumPy linear regression + EMA stacking |
+| Portfolio scoring | Custom ladder scorer (0-100 composite) |
+| Charts | Chart.js |
 | UI | Bootstrap 5 + Font Awesome |
-| Mobile alerts | Pushbullet · Pushover · Twilio SMS/Call |
-| Licensing | Stripe + SendGrid + Twilio |
-| Deployment | Render (web service + background worker via blueprint) |
-
----
-
-## 📁 Project Structure
-
-```
-Alien AI Trader disc/          ← repo root
-├── dashboard.py               ← Flask web server + Socket.IO + all API routes
-├── trading_engine.py          ← AI brain: signals, buy/sell, trailing stop, position sizing
-├── worker.py                  ← Background worker: runs engine + ladder scanner
-├── portfolio_ladder.py        ← Portfolio ladder scorer: ranks all symbols 0-100 (New)
-├── setup_wizard.py            ← Interactive API key setup wizard (New)
-├── config_loader.py           ← Loads API keys from env / config.json
-├── license_api.py             ← Stripe licensing, SendGrid email, Twilio SMS
-├── price_map.json             ← Symbol → display name map
-├── requirements.txt           ← Python dependencies
-├── keys.bat                   ← Your private API keys (gitignored — never commit!)
-├── keys.bat.template          ← Template for keys.bat
-├── INSTALL.ps1                ← Windows installer: Python + pip + venv (New)
-├── START.bat                  ← One-click launcher: venv + keys + dashboard + worker (New)
-├── RUN-SETUP-WIZARD.bat       ← Runs the API key setup wizard (New)
-├── SETUP.bat                  ← Legacy first-time setup script
-├── start-alien-ai-trader.bat  ← Legacy launch script
-├── render.yaml                ← Render blueprint (web + worker services)
-├── README.md                  ← This file — living blueprint of the app
-└── templates/
-    └── dashboard.html         ← Single-page dashboard UI
-```
-
----
-
-## 🔒 Security Notes
-
-**Never commit these files to GitHub:**
-```
-keys.bat
-.env
-.env.local
-```
-
-Make sure your `.gitignore` includes them. The Setup Wizard and `gitignore_additions.txt`
-handle this automatically.
-
----
-
-## 📱 Mobile Alerts
-
-The app sends alerts through three channels simultaneously:
-
-| Channel | When | Setup |
-|---------|------|-------|
-| **Pushbullet** | Every trade, every signal | pushbullet.com → Settings → Access Token |
-| **Pushover** | Stop-loss hits, crashes (breaks Do Not Disturb) | pushover.net → Create App |
-| **Twilio** | After-hours crash calls to your phone | twilio.com → Console |
+| Mobile alerts | Pushbullet · Pushover · Twilio |
+| Cloud deployment | Render.com (web + worker blueprint) |
 
 ---
 
 ## ⚠️ Disclaimer
 
-This software is for educational and paper trading purposes. The authors are not
-financial advisors. Always test thoroughly in paper trading mode before enabling
-live trading. Past performance of any algorithm does not guarantee future results.
-Real money trading involves substantial risk of loss.
+This software is for educational and paper trading purposes only. Troy Walker and T-Dub's Apps are not financial advisors. Always test thoroughly in **paper trading mode** before enabling live trading. Past performance of any algorithm does not guarantee future results. Real-money trading involves substantial risk of loss. Trade responsibly.
 
 ---
 
-## ☁️ Cloud Sync for User Data (Planned/Optional)
+## ❓ Frequently Asked Questions
 
-**Cloud sync for backtest results and settings is now an optional feature.**
-- Each registered/licensed user can choose to enable cloud sync for their own account.
-- Backtest results, logs, and settings can be securely uploaded to the user’s personal cloud (not shared with other users or the app author).
-- Cloud sync is OFF by default and must be enabled in the dashboard settings by the user.
-- (Coming soon) Users will be able to view, download, and restore their results from any device after logging in.
+**Q: Do I need to know how to code?**
+No. The installer handles everything automatically. You just follow the on-screen prompts.
 
-> **Note:** No user data is ever uploaded to a central/shared cloud unless the user explicitly enables it. All cloud storage is per-user and tied to their license/account.
+**Q: Is this free?**
+The app is free. The services it connects to (Alpaca, Alpha Vantage) have free tiers that are sufficient for paper trading. Twilio and Pushover have small one-time costs for phone alerts — these are optional.
 
----
+**Q: Can I lose real money?**
+Not in Paper Mode (the default). Paper trading uses fake money. You have to manually switch to Live Mode, which requires an approved Alpaca live trading account.
 
-## 🆕 Major Enhancements (2026)
+**Q: What stocks does the AI trade?**
+By default it monitors Apple, Google, Tesla, Microsoft, and Amazon. You can add any US stock ticker in the Settings tab. Turn on "Scan Entire Market" to let the AI hunt through all 8,000+ US equities.
 
-### Dashboard Tabs
-| Tab | Description |
-|-----|-------------|
-| **Watchlist** | Live prices + RSI/SMA signals for your personal stock list |
-| **Live Feed** | Real-time stream of AI decisions and market events |
-| **Alerts** | Push notifications from the trading engine |
-| **Trade** | Manual order panel + risk settings |
-| **Top 20** | AI's best market candidates ranked by ladder score (score bars, tier color, RSI, verdict) |
-| **Portfolio** | Capital summary (initial / available / invested / total) + live P&L on every open position |
-| **Backtest** | Upload a CSV of historical price data → run the RSI+SMA strategy → see total return, win rate, max drawdown, and equity curve chart |
-| **Settings** | Worker status, engine config, cloud sync |
+**Q: How does the 5h 59m restart work?**
+Alpaca's free API has hourly usage limits. The worker automatically restarts every 5 hours and 59 minutes to stay within those limits. Your settings, open positions, and trade history are all preserved — only the internal scan session resets.
 
-### How to Use the Backtest Tab
-1. Go to the **Backtest** tab
-2. Enter a **Symbol** (e.g. `AAPL`)
-3. Set a **Start Date** and **End Date**
-4. Upload a **CSV file** with columns `date` and `close` (daily closing prices)
-5. Click **Run Backtest** — results appear instantly below the form:
-   - Total Return ($)
-   - Win Rate (%)
-   - Max Drawdown ($)
-   - Trade count
-   - Equity curve chart
+**Q: What if the app crashes?**
+The worker has a built-in crash recovery loop. If the trading engine or ladder scanner thread dies unexpectedly, the worker automatically restarts it and sends you an alert.
 
-### Whole-Market Scanning + Capital-Based Price Filter (New)
-- **`SCAN_ALL_MARKET=true`** (default) — the AI scans all active US equities on Alpaca for momentum, not just your watchlist
-- **Capital-based price filter** — the AI only considers stocks priced below `total_capital / min_positions`, so it automatically targets affordable stocks as capital grows:
-  - $10 capital → stocks up to ~$2
-  - $50 capital → stocks up to ~$10
-  - $1,000 capital → stocks up to ~$200
-  - Compounds upward automatically as profits reinvest
-
-### Scan All Market Toggle — Persistence
-- The **"Scan Entire Market"** switch on the Trade tab is saved server-side
-- It stays on when you switch devices or open a new browser window — any device connecting picks up the current server state via WebSocket
-- Default is **ON** (set via `SCAN_ALL_MARKET=true` in `render.yaml` and Render env vars)
-- To make it permanently on: ensure `SCAN_ALL_MARKET=true` is set in your Render dashboard env vars for both services
-
-### Other Improvements
-- Advanced signal filters: MACD, Bollinger Bands, VWAP
-- Dynamic position sizing (volatility & streak-based)
-- AI model integration (pluggable ML signals)
-- News & sentiment analysis (blocks bad trades)
-- Auto-recovery: crash notifications & dashboard logging
-- Robust notification system (Pushbullet, Pushover, Twilio)
-- All settings live-editable from dashboard (no restart)
-- Modular architecture for easy upgrades
+**Q: Can I run this on a Mac or Linux?**
+The installer (LAUNCH.bat, INSTALL.ps1) is Windows-only. The Python code itself runs on any platform — Mac/Linux users can run `python dashboard.py` and `python worker.py` directly in separate terminals after installing requirements with `pip install -r requirements.txt`.
 
 ---
+
+*Built with care by Troy Walker · T-Dub's Apps · 2026*
