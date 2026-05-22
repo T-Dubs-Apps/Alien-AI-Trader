@@ -1,7 +1,13 @@
 from news_sentiment import get_symbol_sentiment
 from ai_model import ai_predict_signal
 from dynamic_position import calc_volatility, adjust_risk_for_streak, adjust_risk_for_volatility
-from forecasting import get_forecast
+try:
+    from forecasting import get_forecast as _get_forecast
+    def get_forecast(closes, periods_ahead=5):
+        return _get_forecast(closes, periods_ahead)
+except Exception:
+    def get_forecast(closes, periods_ahead=5):
+        return {"score": 0.0, "forecast_direction": "neutral", "forecast_phase": "unknown", "predicted_price": None, "confidence": 0.0, "slope_pct_per_bar": 0.0}
 import os
 import time
 import threading

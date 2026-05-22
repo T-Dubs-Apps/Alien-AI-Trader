@@ -4,6 +4,7 @@ services:
     name: alien-ai-trader-dashboard
     runtime: python
     autoDeploy: true
+    healthCheckPath: /health
     buildCommand: pip install -r requirements.txt
     # gevent worker class is REQUIRED for Socket.IO WebSocket support.
     # gthread does not support WebSockets and will break live dashboard updates.
