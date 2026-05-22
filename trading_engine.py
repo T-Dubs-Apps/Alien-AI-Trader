@@ -1,6 +1,7 @@
 from news_sentiment import get_symbol_sentiment
 from ai_model import ai_predict_signal
 from dynamic_position import calc_volatility, adjust_risk_for_streak, adjust_risk_for_volatility
+from forecasting import get_forecast
 import os
 import time
 import threading
@@ -82,6 +83,9 @@ class TradingEngine:
         # ── Risk controls (live-updateable from dashboard UI) ──
         self.loss_threshold    = float(os.environ.get("LOSS_THRESHOLD",    "0.05"))  # 5% absolute floor
         self.trailing_stop_pct = float(os.environ.get("TRAILING_STOP_PCT", "0.03"))  # 3% drop from peak
+
+        # Forecast-based early exit: sell before trailing stop fires when climb peaks
+        self.forecast_exit_enabled = os.environ.get("FORECAST_EXIT_ENABLED", "true").lower() == "true"
 
         # Scan interval (live-configurable from UI)
         self.poll_seconds = int(os.environ.get("POLL_SECONDS", "15"))
@@ -294,6 +298,7 @@ class TradingEngine:
             if "rsi_buy_max"         in s: self.rsi_buy_max          = max(20.0, float(s["rsi_buy_max"]))
             if "rsi_sell_min"        in s: self.rsi_sell_min         = max(50.0, float(s["rsi_sell_min"]))
             if "sma_spread_min"      in s: self.sma_spread_min       = max(0.0,  float(s["sma_spread_min"]))
+            if "forecast_exit_enabled" in s: self.forecast_exit_enabled = bool(s["forecast_exit_enabled"])
         except Exception:
             pass
 
@@ -683,6 +688,10 @@ class TradingEngine:
             "boll_upper": None, "boll_mid": None, "boll_lower": None,
             "vwap": None,
             "week52_high": None, "week52_low": None,
+            "forecast": None,
+            "forecast_direction": "neutral",
+            "forecast_phase": "unknown",
+            "predicted_price": None,
             "verdict": "HOLD"
         }
         if df is None or df.empty:
@@ -712,6 +721,16 @@ class TradingEngine:
         signal["boll_lower"] = round(boll_lower, 4) if boll_lower else None
         signal["vwap"] = round(vwap, 4) if vwap else None
 
+        # ── Predictive forecast (linear regression + EMA stacking) ──
+        try:
+            fc = get_forecast(closes, periods_ahead=5)
+            signal["forecast"]           = fc
+            signal["forecast_direction"] = fc["forecast_direction"]
+            signal["forecast_phase"]     = fc["forecast_phase"]
+            signal["predicted_price"]    = fc.get("predicted_price")
+        except Exception:
+            pass
+
         # ── Advanced confluence logic ──
         # BUY requires ALL of:
         #   1. Golden cross: SMA20 > SMA50 by at least sma_spread_min %
@@ -732,18 +751,20 @@ class TradingEngine:
             price_above_lower = price > boll_lower
             price_below_upper = price < boll_upper
             price_near_vwap = abs(price - vwap) / vwap <= 0.02
+            forecast_up = signal.get("forecast_direction") == "up"
 
-            # BUY: all must be true
+            # BUY: all must be true — forecast confirms upward momentum
             if (
                 golden_cross and
                 rsi < self.rsi_buy_max and
                 macd > macd_signal and
                 price_above_lower and price_below_upper and
-                price_near_vwap
+                price_near_vwap and
+                forecast_up
             ):
                 signal["verdict"] = "BUY"
                 signal["spread_pct"] = round(spread_pct, 3)
-            # SELL: any can be true
+            # SELL: any trigger fires
             elif (
                 death_cross or
                 rsi > self.rsi_sell_min or
@@ -844,7 +865,26 @@ class TradingEngine:
                 )
                 self.sell(symbol, price, reason="stop_loss")
 
-            # 3. Signal-based exit (death cross / RSI overbought) while in profit
+            # 3. Forecast-based early exit: momentum peaked — sell before trailing stop fires
+            #    Only exits when: forecast flips DOWN + EMA phase is "falling" + in profit
+            elif (
+                self.forecast_exit_enabled and
+                signal.get("forecast_direction") == "down" and
+                signal.get("forecast_phase") == "falling" and
+                change_from_buy > 0
+            ):
+                if not self.auto_trade:
+                    print(f"[ENGINE] {symbol} FORECAST EXIT triggered — auto-trade is OFF, skipping sell.")
+                    return
+                self.send_alert(
+                    f"FORECAST EXIT: {symbol} momentum peaked @ ${peak:.2f} "
+                    f"(+{change_from_buy*100:.1f}% since buy) — forecast flipped DOWN. "
+                    f"Selling @ ${price:.2f} before drop materialises.",
+                    level="warn", symbol=symbol,
+                )
+                self.sell(symbol, price, reason="forecast_exit")
+
+            # 4. Signal-based exit (death cross / RSI overbought) while in profit
             elif signal["verdict"] == "SELL" and change_from_buy > 0:
                 self.sell(symbol, price, reason="signal_exit")
 
@@ -1147,6 +1187,7 @@ class TradingEngine:
                 "rsi_buy_max":        self.rsi_buy_max,
                 "rsi_sell_min":       self.rsi_sell_min,
                 "sma_spread_min":     self.sma_spread_min,
+                "forecast_exit_enabled": self.forecast_exit_enabled,
             },
             "live_trading_enabled": self.live_enabled,
             "trading_mode":         self.trading_mode,

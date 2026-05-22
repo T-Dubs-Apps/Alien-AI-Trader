@@ -47,6 +47,12 @@ from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
+try:
+    from forecasting import get_forecast
+    _FORECAST_AVAILABLE = True
+except ImportError:
+    _FORECAST_AVAILABLE = False
+
 
 # ════════════════════════════════════════════════════════════════
 #  DATA STRUCTURES
@@ -64,25 +70,29 @@ class LadderEntry:
     volume_ratio:   float = 1.0        # current vol / 20d avg vol
     trend_pct:      float = 0.0        # % from 52-week low
     unrealized_pct: float = 0.0        # % gain if currently held
+    forecast_score: float = 0.0        # 0-15 from predictive forecasting
+    forecast_direction: str = "neutral"# up / down / neutral
     verdict:        str   = "HOLD"
     score_breakdown: Dict[str, float] = field(default_factory=dict)
     last_updated:   float = 0.0
 
     def to_dict(self) -> Dict[str, Any]:
         return {
-            "symbol":          self.symbol,
-            "score":           round(self.score, 2),
-            "tier":            self.tier,
-            "rsi":             self.rsi,
-            "sma20":           self.sma20,
-            "sma50":           self.sma50,
-            "price":           self.price,
-            "volume_ratio":    round(self.volume_ratio, 2),
-            "trend_pct":       round(self.trend_pct, 2),
-            "unrealized_pct":  round(self.unrealized_pct, 2),
-            "verdict":         self.verdict,
-            "score_breakdown": self.score_breakdown,
-            "last_updated":    self.last_updated,
+            "symbol":             self.symbol,
+            "score":              round(self.score, 2),
+            "tier":               self.tier,
+            "rsi":                self.rsi,
+            "sma20":              self.sma20,
+            "sma50":              self.sma50,
+            "price":              self.price,
+            "volume_ratio":       round(self.volume_ratio, 2),
+            "trend_pct":          round(self.trend_pct, 2),
+            "unrealized_pct":     round(self.unrealized_pct, 2),
+            "forecast_score":     round(self.forecast_score, 2),
+            "forecast_direction": self.forecast_direction,
+            "verdict":            self.verdict,
+            "score_breakdown":    self.score_breakdown,
+            "last_updated":       self.last_updated,
         }
 
 
@@ -98,11 +108,12 @@ class LadderScorer:
     """
 
     # ── Score weights (must sum to 100) ──────────────────────
-    W_RSI       = 25   # RSI in buying-dip sweet spot
-    W_MOMENTUM  = 25   # SMA crossover strength
-    W_VOLUME    = 20   # Volume surge confirmation
+    W_RSI       = 20   # RSI in buying-dip sweet spot
+    W_MOMENTUM  = 20   # SMA crossover strength
+    W_VOLUME    = 15   # Volume surge confirmation
     W_TREND     = 15   # 52-week position
     W_PROFIT    = 15   # Unrealized gain bonus (held positions)
+    W_FORECAST  = 15   # Predictive forecast (linear regression + EMA stacking)
 
     def score(
         self,
@@ -115,6 +126,7 @@ class LadderScorer:
         week52_high: Optional[float] = None,
         unrealized_pct: float = 0.0,
         rsi_buy_max: float = 55.0,
+        forecast_data: Optional[Dict[str, Any]] = None,
     ) -> Tuple[float, Dict[str, float]]:
         """
         Returns (total_score, breakdown_dict).
@@ -196,8 +208,23 @@ class LadderScorer:
             profit_score = -self.W_PROFIT * min(abs(unrealized_pct) / 10.0, 1.0)
         breakdown["profit"] = round(profit_score, 2)
 
+        # ── Forecast Score ────────────────────────────────────────
+        # Predictive forecast from linear regression + EMA stacking.
+        # Rewards stocks whose momentum model says "still climbing".
+        forecast_score = 0.0
+        if forecast_data:
+            raw_fc_score   = forecast_data.get("score", 0.0)          # 0-25 from get_forecast()
+            fc_direction   = forecast_data.get("forecast_direction", "neutral")
+            fc_phase       = forecast_data.get("forecast_phase",      "unknown")
+            # Map 0-25 forecast score onto W_FORECAST weight
+            forecast_score = self.W_FORECAST * (raw_fc_score / 25.0)
+            # Penalise falling forecasts
+            if fc_direction == "down" or fc_phase == "falling":
+                forecast_score = -self.W_FORECAST * 0.5
+        breakdown["forecast"] = round(forecast_score, 2)
+
         total = max(0.0, min(100.0,
-            rsi_score + momentum_score + volume_score + trend_score + profit_score
+            rsi_score + momentum_score + volume_score + trend_score + profit_score + forecast_score
         ))
         breakdown["total"] = round(total, 2)
 
@@ -385,6 +412,9 @@ class PortfolioLadderScanner:
             week52_low  = signal.get("week52_low")
             week52_high = signal.get("week52_high")
 
+            # Forecast data (attached by trading_engine._get_signal if forecasting.py is loaded)
+            forecast_data = signal.get("forecast")
+
             # Unrealized profit if held
             unrealized_pct = 0.0
             if symbol in holdings and price:
@@ -402,11 +432,15 @@ class PortfolioLadderScanner:
                 week52_high=week52_high,
                 unrealized_pct=unrealized_pct,
                 rsi_buy_max=self.rsi_buy_max,
+                forecast_data=forecast_data,
             )
 
             trend_pct = 0.0
             if price and week52_low and week52_high and week52_high > week52_low:
                 trend_pct = (price - week52_low) / (week52_high - week52_low) * 100
+
+            fc_score     = forecast_data.get("score", 0.0)            if forecast_data else 0.0
+            fc_direction = forecast_data.get("forecast_direction", "neutral") if forecast_data else "neutral"
 
             return LadderEntry(
                 symbol=symbol,
@@ -418,6 +452,8 @@ class PortfolioLadderScanner:
                 volume_ratio=volume_ratio,
                 trend_pct=trend_pct,
                 unrealized_pct=unrealized_pct,
+                forecast_score=fc_score,
+                forecast_direction=fc_direction,
                 score_breakdown=breakdown,
                 last_updated=time.time(),
             )

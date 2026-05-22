@@ -6,11 +6,12 @@ import requests
 
 from crash_notifier import send_crash_notification
 from trading_engine import TradingEngine
-from portfolio_ladder import PortfolioLadderScanner, DEFAULT_PORTFOLIO
+from portfolio_ladder import PortfolioLadderScanner, integrate_ladder_with_engine, DEFAULT_PORTFOLIO
 
 # Built by Troy Walker of T-Dub's Apps - 2026-04-26
 
-RUN_SECONDS = int(os.environ.get("RUN_SECONDS", "3300"))
+# 5 hours 59 minutes = 21540 seconds — restarts just under 6 hrs to avoid API rate charges.
+RUN_SECONDS     = int(os.environ.get("RUN_SECONDS",     "21540"))
 LADDER_INTERVAL = int(os.environ.get("LADDER_INTERVAL", "120"))
 
 # Module-level refs so the shutdown() signal handler can reach them
@@ -122,6 +123,9 @@ def main():
     # The trading engine's market-wide scan adds additional live momentum movers on top.
     ladder_symbols = list(dict.fromkeys(stock_list + DEFAULT_PORTFOLIO))
     ladder = PortfolioLadderScanner(symbols=ladder_symbols, engine=engine)
+
+    # Wire ladder approval gate into the engine so buys are gated by ladder tier
+    integrate_ladder_with_engine(engine, ladder)
 
     engine.start()
 

@@ -6,6 +6,7 @@ __pycache__/
 *.db
 *.sqlite3
 config.json
+trading_settings.json
 keys.bat
 .env
 *.log
@@ -20,6 +21,10 @@ keys.bat
 .env
 .env.local
 .env.production
+
+# Runtime-generated settings (saved by dashboard on user changes)
+trading_settings.json
+install_config.json
 
 # Virtual environment
 .venv/

@@ -4,6 +4,7 @@
 from gevent import monkey
 monkey.patch_all()
 
+import json
 import os
 import time
 from threading import Lock
@@ -21,6 +22,9 @@ from alpha_vantage.timeseries import TimeSeries
 # SMART PATHING: This finds 'templates' relative to where this script is sitting
 base_dir = os.path.dirname(os.path.abspath(__file__))
 template_dir = os.path.join(base_dir, "templates")
+
+# Settings are persisted here so they survive restarts
+SETTINGS_FILE = os.path.join(base_dir, "trading_settings.json")
 
 app = Flask(__name__, template_folder=template_dir)
 app.config["SECRET_KEY"] = os.environ.get("FLASK_SECRET", os.urandom(24).hex())
@@ -65,7 +69,7 @@ _ladder_top20: List[Dict[str, Any]] = []
 # In-memory AI trader toggle (can be overridden by worker via heartbeat)
 _ai_trader_enabled = True
 
-# Live trading settings — the engine polls this endpoint every cycle
+# In-memory live trading settings — the engine polls this endpoint every cycle
 _trading_settings: dict = {
     # ── Auto-trade master switch (toggled from UI) ───────────────────────────
     "auto_trade":          True,   # True = engine executes buys/sells autonomously
@@ -78,18 +82,44 @@ _trading_settings: dict = {
     "max_positions":       int(os.environ.get("MAX_POSITIONS",       "5")),
     "initial_capital":     float(os.environ.get("INITIAL_CAPITAL",   "0")),
     # ── Position sizing / risk controls ─────────────────────────────────────
-    # These scale automatically to whatever INITIAL_CAPITAL the user sets.
-    # A user with $100 gets small trades; a user with $50,000 gets larger ones.
-    # All values are adjustable live from the dashboard without restarting.
-    "risk_per_trade_pct":  float(os.environ.get("RISK_PER_TRADE_PCT",  "2.0")),   # % of capital per trade
-    "max_position_pct":    float(os.environ.get("MAX_POSITION_PCT",    "20.0")),  # % max in one stock
-    "min_positions":       int(os.environ.get("MIN_POSITIONS",         "5")),     # min spread across N stocks
-    "risk_per_trade_usd":  float(os.environ.get("RISK_PER_TRADE_USD",  "0")),     # hard $ cap (0=off)
+    "risk_per_trade_pct":  float(os.environ.get("RISK_PER_TRADE_PCT",  "2.0")),
+    "max_position_pct":    float(os.environ.get("MAX_POSITION_PCT",    "20.0")),
+    "min_positions":       int(os.environ.get("MIN_POSITIONS",         "5")),
+    "risk_per_trade_usd":  float(os.environ.get("RISK_PER_TRADE_USD",  "0")),
     # ── Signal quality filters ───────────────────────────────────────────────
-    "rsi_buy_max":         float(os.environ.get("RSI_BUY_MAX",    "50.0")),  # RSI must be below this to BUY
-    "rsi_sell_min":        float(os.environ.get("RSI_SELL_MIN",   "70.0")),  # RSI must be above this to SELL
-    "sma_spread_min":      float(os.environ.get("SMA_SPREAD_MIN", "0.1")),   # min SMA20/50 spread % for signal
+    "rsi_buy_max":         float(os.environ.get("RSI_BUY_MAX",    "50.0")),
+    "rsi_sell_min":        float(os.environ.get("RSI_SELL_MIN",   "70.0")),
+    "sma_spread_min":      float(os.environ.get("SMA_SPREAD_MIN", "0.1")),
+    # ── Forecast exit (sell before climb peaks) ──────────────────────────────
+    "forecast_exit_enabled": True,
 }
+
+
+def _load_saved_settings() -> None:
+    """Merge persisted settings from trading_settings.json into _trading_settings."""
+    global _trading_settings
+    if not os.path.exists(SETTINGS_FILE):
+        return
+    try:
+        with open(SETTINGS_FILE, "r") as f:
+            saved = json.load(f)
+        if isinstance(saved, dict):
+            _trading_settings.update(saved)
+    except Exception:
+        pass  # corrupted file — keep defaults
+
+
+def _save_settings() -> None:
+    """Write current _trading_settings to disk so they survive restarts."""
+    try:
+        with open(SETTINGS_FILE, "w") as f:
+            json.dump(_trading_settings, f, indent=2)
+    except Exception:
+        pass
+
+
+# Load any previously saved settings (overrides env var defaults)
+_load_saved_settings()
 
 # In-memory notifications log
 _notifications: List[Dict[str, Any]] = []
@@ -396,6 +426,8 @@ def trader_toggle():
         _ai_trader_enabled = not _ai_trader_enabled
     # Keep trading settings in sync so the engine picks it up on next poll
     _trading_settings["auto_trade"] = _ai_trader_enabled
+    # Persist so the auto-trade state survives restarts
+    _save_settings()
     socketio.emit("ai_trader_state", {"ai_trader_enabled": _ai_trader_enabled})
     return jsonify({"ai_trader_enabled": _ai_trader_enabled}), 200
 
@@ -461,10 +493,14 @@ def update_trading_settings():
         "risk_per_trade_pct", "max_position_pct", "min_positions", "risk_per_trade_usd",
         # Signal quality filters
         "rsi_buy_max", "rsi_sell_min", "sma_spread_min",
+        # Forecast-based exit
+        "forecast_exit_enabled",
     }
     for k, v in payload.items():
         if k in allowed:
             _trading_settings[k] = v
+    # Persist to disk so settings survive restarts
+    _save_settings()
     # Push updated settings to all browser clients so UI stays in sync
     socketio.emit("trading_settings", _trading_settings)
     return jsonify(_trading_settings), 200
