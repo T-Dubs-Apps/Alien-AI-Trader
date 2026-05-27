@@ -42,3 +42,6 @@ Thumbs.db
 
 # Project backups
 backup files zipped/
+
+# Claude local worktrees
+.claude/worktrees/
