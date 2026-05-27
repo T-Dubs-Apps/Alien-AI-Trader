@@ -222,6 +222,199 @@ def main():
         time.sleep(2)
 
 
+# ── Embedded mode (called by dashboard.py when EMBEDDED_WORKER=true) ─────────
+
+def _run_embedded_session(update_status_cb, add_notification_cb, ladder_update_cb,
+                           stock_list, mode, heartbeat_interval):
+    """Run one full worker session using direct callbacks instead of HTTP."""
+    eng = TradingEngine(stock_list=stock_list, mode=mode)
+    ladder_symbols = list(dict.fromkeys(stock_list + DEFAULT_PORTFOLIO))
+    lad = PortfolioLadderScanner(symbols=ladder_symbols, engine=eng)
+    integrate_ladder_with_engine(eng, lad)
+    eng.start()
+
+    def _cb_heartbeat_loop():
+        while getattr(eng, "running", True):
+            try:
+                with eng.lock:
+                    positions = {
+                        sym: {"price": h["price"], "qty": h["qty"]}
+                        for sym, h in eng.current_holdings.items()
+                    }
+                    signals_snapshot = dict(eng._symbol_signals)
+                    invested = sum(h["qty"] * h["price"] for h in eng.current_holdings.values())
+
+                ladder_top20 = []
+                try:
+                    ladder_top20 = lad.get_ladder()[:20]
+                    if ladder_top20:
+                        try:
+                            ladder_update_cb(ladder_top20)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+
+                payload = {
+                    "running":      eng.running,
+                    "mode":         eng.trading_mode,
+                    "stock_list":   eng.stock_list,
+                    "profit":       round(eng.profit, 4),
+                    "positions":    positions,
+                    "signals":      signals_snapshot,
+                    "message":      "alive",
+                    "trade_count":  len(eng.trade_log),
+                    "capital": {
+                        "initial":   round(eng.initial_capital, 2),
+                        "available": round(eng._available_capital, 2),
+                        "invested":  round(invested, 2),
+                        "total":     round(eng._available_capital + invested, 2),
+                        "mode":      "pool" if eng.initial_capital > 0 else "fixed_qty",
+                    },
+                    "trailing_stop_pct":    round(eng.trailing_stop_pct * 100, 2),
+                    "loss_threshold":       round(eng.loss_threshold * 100, 2),
+                    "scan_all_market":      eng.scan_all_market,
+                    "max_positions":        eng.max_positions,
+                    "min_positions":        eng.min_positions,
+                    "ladder_top20":         ladder_top20,
+                    "trading_mode":         eng.trading_mode,
+                    "live_trading_enabled": eng.live_enabled,
+                }
+                try:
+                    update_status_cb(payload)
+                except Exception:
+                    pass
+            except Exception:
+                pass
+            time.sleep(heartbeat_interval)
+
+    threading.Thread(target=_cb_heartbeat_loop, daemon=True, name="EmbeddedHeartbeat").start()
+
+    lad_thread = threading.Thread(
+        target=lad.run_forever,
+        kwargs={"interval_seconds": LADDER_INTERVAL},
+        daemon=True,
+        name="EmbeddedLadder",
+    )
+    lad_thread.start()
+    print(f"[EMBEDDED] Ladder scanner running (rescores every {LADDER_INTERVAL}s)")
+
+    eng_thread = threading.Thread(
+        target=eng.run_forever,
+        daemon=True,
+        name="EmbeddedEngine",
+    )
+    eng_thread.start()
+
+    start = time.time()
+    last_ladder_print = 0
+
+    while True:
+        now = time.time()
+
+        if not eng_thread.is_alive():
+            msg = "[EMBEDDED] Engine thread died -- restarting."
+            print(msg)
+            send_crash_notification(msg)
+            try:
+                add_notification_cb("alert", msg)
+            except Exception:
+                pass
+            eng.start()
+            eng_thread = threading.Thread(
+                target=eng.run_forever,
+                daemon=True,
+                name="EmbeddedEngine",
+            )
+            eng_thread.start()
+
+        if not lad_thread.is_alive():
+            msg = "[EMBEDDED] Ladder scanner thread died -- restarting."
+            print(msg)
+            send_crash_notification(msg)
+            try:
+                add_notification_cb("alert", msg)
+            except Exception:
+                pass
+            lad_thread = threading.Thread(
+                target=lad.run_forever,
+                kwargs={"interval_seconds": LADDER_INTERVAL},
+                daemon=True,
+                name="EmbeddedLadder",
+            )
+            lad_thread.start()
+
+        if now - last_ladder_print >= 30:
+            last_ladder_print = now
+            try:
+                summary = lad.summary()
+                top_names = [e["symbol"] for e in summary.get("top_5", [])]
+                if top_names:
+                    print(f"[EMBEDDED] Ladder top 5: {' -> '.join(top_names)} "
+                          f"(scan_all_market={eng.scan_all_market})")
+                else:
+                    print("[EMBEDDED] No top 5 found.")
+            except Exception as ex:
+                print(f"[EMBEDDED] Ladder summary error: {ex}")
+
+        if now - start >= RUN_SECONDS:
+            print(f"[EMBEDDED] RUN_SECONDS limit reached ({RUN_SECONDS // 60}min) -- recycling session.")
+            lad.stop()
+            eng.stop()
+            time.sleep(3)
+            return
+
+        time.sleep(2)
+
+
+def start_embedded(update_status_cb, add_notification_cb, ladder_update_cb):
+    """
+    Start the trading engine and ladder scanner as daemon threads inside
+    another process (e.g. the dashboard). Uses direct Python callbacks instead
+    of HTTP calls for zero-latency, zero-network-failure state updates.
+    Non-blocking — starts a supervisor daemon thread and returns immediately.
+    """
+    stock_list = [
+        s.strip().upper()
+        for s in os.environ.get("STOCK_LIST", "AAPL,GOOG,TSLA,MSFT,AMZN").split(",")
+        if s.strip()
+    ]
+    mode = os.environ.get("ENGINE_MODE", "AI")
+    heartbeat_interval = int(os.environ.get("HEARTBEAT_EVERY_SECONDS", "10"))
+
+    def _supervisor():
+        restart_count = 0
+        while True:
+            restart_count += 1
+            print(f"[EMBEDDED] {'Starting' if restart_count == 1 else 'Restarting'} "
+                  f"session #{restart_count} ...")
+            try:
+                _run_embedded_session(
+                    update_status_cb, add_notification_cb, ladder_update_cb,
+                    stock_list, mode, heartbeat_interval,
+                )
+            except SystemExit:
+                break
+            except Exception as e:
+                msg = f"[EMBEDDED] Unexpected crash in session #{restart_count}: {e}"
+                print(msg)
+                try:
+                    send_crash_notification(msg)
+                except Exception:
+                    pass
+                try:
+                    add_notification_cb("alert", msg)
+                except Exception:
+                    pass
+            print(f"[EMBEDDED] Session #{restart_count} ended. Sleeping 5s ...")
+            time.sleep(5)
+
+    threading.Thread(target=_supervisor, daemon=True, name="EmbeddedSupervisor").start()
+    print("[EMBEDDED] Supervisor thread launched.")
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+
 if __name__ == "__main__":
     signal.signal(signal.SIGTERM, shutdown)
     signal.signal(signal.SIGINT, shutdown)
