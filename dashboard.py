@@ -7,6 +7,7 @@ monkey.patch_all()
 import json
 import os
 import time
+import threading as _threading
 from threading import Lock
 from typing import Dict, Any, List
 
@@ -124,6 +125,81 @@ _load_saved_settings()
 # In-memory notifications log
 _notifications: List[Dict[str, Any]] = []
 
+# ── Embedded worker (replaces separate Render background worker service) ──────
+# When EMBEDDED_WORKER=true (default), the trading engine and ladder scanner run
+# as daemon threads inside this gunicorn process. Callbacks replace HTTP calls,
+# giving zero-latency, zero-network-failure state updates. Set EMBEDDED_WORKER=false
+# to revert to an external standalone worker (python worker.py) posting HTTP heartbeats.
+
+def _embedded_update_status(payload: dict):
+    """Direct callback — replaces POST /api/worker/heartbeat in embedded mode."""
+    global _worker_status, _ladder_top20
+    _worker_status.update({
+        "running":      bool(payload.get("running", True)),
+        "mode":         payload.get("mode",        _worker_status.get("mode")),
+        "stocks":       payload.get("stock_list",  payload.get("stocks", _worker_status.get("stocks"))),
+        "profit":       payload.get("profit",      _worker_status.get("profit")),
+        "positions":    payload.get("positions",   _worker_status.get("positions")),
+        "signals":      payload.get("signals",     _worker_status.get("signals")),
+        "trade_count":  payload.get("trade_count", _worker_status.get("trade_count")),
+        "capital":      payload.get("capital",     _worker_status.get("capital")),
+        "trailing_stop_pct":    payload.get("trailing_stop_pct",    _worker_status.get("trailing_stop_pct")),
+        "loss_threshold":       payload.get("loss_threshold",       _worker_status.get("loss_threshold")),
+        "scan_all_market":      payload.get("scan_all_market",      _worker_status.get("scan_all_market")),
+        "max_positions":        payload.get("max_positions",        _worker_status.get("max_positions")),
+        "min_positions":        payload.get("min_positions",        _worker_status.get("min_positions")),
+        "trading_mode":         payload.get("trading_mode",         _worker_status.get("trading_mode")),
+        "live_trading_enabled": payload.get("live_trading_enabled", _worker_status.get("live_trading_enabled", False)),
+        "risk_settings":        payload.get("risk_settings",        _worker_status.get("risk_settings", {})),
+        "message":      payload.get("message", "ok"),
+        "last_heartbeat": int(time.time()),
+    })
+    try:
+        socketio.emit("worker_status", _worker_status)
+    except Exception:
+        pass
+
+
+def _embedded_add_notification(level: str, message: str):
+    """Direct callback — replaces POST /api/notifications in embedded mode."""
+    global _notifications
+    note = {"time": int(time.time()), "level": level, "symbol": "", "message": message}
+    _notifications.append(note)
+    _notifications = _notifications[-200:]
+    try:
+        socketio.emit("notification", note)
+    except Exception:
+        pass
+
+
+def _embedded_ladder_update(ladder: list):
+    """Direct callback — replaces the ladder_top20 portion of the heartbeat in embedded mode."""
+    global _ladder_top20
+    _ladder_top20 = ladder
+    try:
+        socketio.emit("ladder_update", {"ladder": _ladder_top20})
+    except Exception:
+        pass
+
+
+def _launch_embedded_worker():
+    try:
+        from worker import start_embedded
+        start_embedded(
+            update_status_cb=_embedded_update_status,
+            add_notification_cb=_embedded_add_notification,
+            ladder_update_cb=_embedded_ladder_update,
+        )
+        print("[DASHBOARD] Embedded worker started successfully.")
+    except Exception as e:
+        print(f"[DASHBOARD] WARNING: Could not start embedded worker: {e}")
+
+
+if os.environ.get("EMBEDDED_WORKER", "true").lower() == "true":
+    _threading.Thread(target=_launch_embedded_worker, daemon=True, name="EmbeddedWorkerLauncher").start()
+
+# ─────────────────────────────────────────────────────────────────────────────
+
 # ---- Providers (server-side only) ----
 # These are safe because values come from Render env vars; never sent to browser.
 ALPACA_KEY = os.environ.get("ALPACA_KEY")
@@ -185,7 +261,10 @@ def receive_data():
     return jsonify({"status": "No Data"}), 200
 
 
-# --- Worker integration (Render Background Worker should call this) ---
+# --- Worker integration ---
+# NOTE: In embedded mode (EMBEDDED_WORKER=true) this endpoint is unused —
+# the worker calls _embedded_update_status() directly. Kept as a fallback
+# for standalone external worker mode (python worker.py + EMBEDDED_WORKER=false).
 
 @app.route("/api/worker/heartbeat", methods=["POST"])
 def worker_heartbeat():
