@@ -8,9 +8,38 @@ Built by **Troy Walker · T-Dub's Apps · 2026**
 
 ## ⬇️ Download — One Click to Get Started
 
-**[→ Click here to download the latest version (ZIP)](../../releases/latest)**
+**[→ Download latest ZIP from GitHub](https://github.com/T-Dubs-Apps/Alien-AI-Trader/archive/refs/heads/main.zip)**
 
 No account required. No coding. Just download, extract, and double-click.
+
+---
+
+## 🔗 GitHub Repository
+
+> **https://github.com/T-Dubs-Apps/Alien-AI-Trader**
+
+Share that link with anyone who wants to install Alien AI Trader.
+
+### Three ways to get the app from GitHub
+
+**Option A — Download as ZIP (easiest, no Git needed)**
+1. Go to **https://github.com/T-Dubs-Apps/Alien-AI-Trader**
+2. Click the green **`< > Code`** button
+3. Click **"Download ZIP"
+4. Extract the ZIP and double-click `LAUNCH.bat`
+
+**Option B — Direct ZIP link (share this with customers)**
+```
+https://github.com/T-Dubs-Apps/Alien-AI-Trader/archive/refs/heads/main.zip
+```
+This link always downloads the latest version.
+
+**Option C — Clone with Git (for developers)**
+```bash
+git clone https://github.com/T-Dubs-Apps/Alien-AI-Trader.git
+cd Alien-AI-Trader
+```
+Then run `LAUNCH.bat` or `INSTALL.ps1`.
 
 ---
 
@@ -113,12 +142,12 @@ Your dashboard will open automatically at: **http://localhost:5000**
 ## 📅 Daily Use
 
 ### Starting the app
-Double-click **"Alien AI Trader"** on your Desktop.
+Double-click **"Alien AI Trader"** on your Desktop (or double-click `START.bat`).
 
-Two windows will open (the Dashboard server and the Trading Worker). Your browser will open automatically to the dashboard. **Do not close those windows** while the app is running.
+One console window will open running the dashboard and trading engine together. Your browser will open automatically to **http://localhost:5000**. **Do not close that window** while the app is running.
 
 ### Stopping the app
-Close both console windows — the one labeled **Dashboard** and the one labeled **Worker**.
+Close the console window labeled **Alien AI Trader**.
 
 ### Re-running setup or updating your API keys
 Double-click `LAUNCH.bat` and choose **[3] Setup Keys**.
@@ -138,7 +167,7 @@ When the app opens in your browser, you'll see several tabs:
 | **Top 20** | The AI's best-ranked stocks right now, scored 0–100 |
 | **Portfolio** | Your capital balance, open positions, and live profit/loss |
 | **Backtest** | Test the AI's strategy on historical data before going live |
-| **Settings** | Worker status and advanced configuration |
+| **Settings** | Engine status and advanced configuration |
 
 ### The most important controls
 
