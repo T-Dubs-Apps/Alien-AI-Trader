@@ -221,6 +221,88 @@ class TradingEngine:
         self._market_candidates_cache: Tuple[List[str], float] = ([], 0.0)
         self._market_candidates_ttl = int(os.environ.get("MARKET_CANDIDATES_TTL", "600"))  # 10 min
 
+        # ── Portfolio Safety Shield ─────────────────────────────────────────────
+        # If the total portfolio value drops to/below this threshold,
+        # the engine pauses ALL new buys and fires an alert.
+        # 0 = disabled.  Example: start=$100k, set threshold=$99500 → max $500 loss.
+        self.portfolio_stop_loss   = float(os.environ.get("PORTFOLIO_STOP_LOSS",   "0"))    # 0 = off
+        self.portfolio_stop_buffer = float(os.environ.get("PORTFOLIO_STOP_BUFFER", "200"))  # recovery gap
+        self.shield_enabled        = True
+        self.shield_triggered      = False   # True = buys paused until recovery
+
+        # ── 5hr 59min Minimum Hold Rule ────────────────────────────────────────
+        # Don't exit a position until it has been held this many seconds.
+        # Default 21,540 s = 5h 59m. Prevents same-day round-trip (day trade) flagging.
+        # Emergency trailing-stops and hard stop-losses are EXEMPT (always fire).
+        self.min_hold_seconds = int(os.environ.get("MIN_HOLD_SECONDS", "21540"))
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Portfolio Safety Shield
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def _check_portfolio_shield(self):
+        """
+        Halt all new buys when total portfolio value drops to/below
+        self.portfolio_stop_loss.  Resume only when it recovers to
+        portfolio_stop_loss + portfolio_stop_buffer (hysteresis prevents flip-flop).
+        """
+        try:
+            total = self._available_capital
+            for sym, h in list(self.current_holdings.items()):
+                cached_price, cached_at = self._price_cache.get(sym, (h["price"], 0))
+                use_price = cached_price if (time.time() - cached_at) < 60 else h["price"]
+                total += use_price * h["qty"]
+
+            if total <= 0:
+                return
+
+            # Update capital high-water mark (the ladder never comes down)
+            if total > self._capital_hwm:
+                self._capital_hwm = total
+
+            if not self.shield_triggered:
+                # ── Trigger: portfolio fell to/below threshold ──
+                if total <= self.portfolio_stop_loss:
+                    self.shield_triggered = True
+                    self.auto_trade = False   # Halt new buys — sell logic still runs
+                    msg = (
+                        f"\U0001f6e1 SAFETY SHIELD TRIGGERED! Portfolio ${total:,.2f} "
+                        f"dropped to/below threshold ${self.portfolio_stop_loss:,.2f}. "
+                        f"ALL new buys PAUSED. Current positions held. "
+                        f"Will resume when value recovers to "
+                        f"${self.portfolio_stop_loss + self.portfolio_stop_buffer:,.2f}."
+                    )
+                    self.send_alert(msg, level="alert")
+                    self._send_pushover(
+                        title="\U0001f6e1 SAFETY SHIELD FIRED",
+                        message=(
+                            f"Portfolio: ${total:,.2f}\n"
+                            f"Threshold: ${self.portfolio_stop_loss:,.2f}\n"
+                            f"AI buys PAUSED until recovery to "
+                            f"${self.portfolio_stop_loss + self.portfolio_stop_buffer:,.2f}"
+                        ),
+                        priority=1,   # bypass quiet hours
+                    )
+            else:
+                # ── Recovery: portfolio climbed back above threshold + buffer ──
+                recovery_target = self.portfolio_stop_loss + self.portfolio_stop_buffer
+                if total >= recovery_target:
+                    self.shield_triggered = False
+                    self.auto_trade = True    # Resume AI trading
+                    msg = (
+                        f"\u2705 SAFETY SHIELD RESET — Portfolio recovered to ${total:,.2f} "
+                        f"(above ${recovery_target:,.2f}). Resuming AI trading."
+                    )
+                    self.send_alert(msg, level="rocket")
+                    self._send_pushover(
+                        title="\u2705 Shield Reset — Trading Resumed",
+                        message=f"Portfolio: ${total:,.2f}  Recovery target: ${recovery_target:,.2f}",
+                        priority=0,
+                    )
+        except Exception as e:
+            self.send_alert(f"[shield] check error: {e}", level="warn")
+
+
     def start(self):
         self.running = True
         # Start after-hours background watcher on its own daemon thread
@@ -239,6 +321,9 @@ class TradingEngine:
         while self.running:
             # Pick up live setting changes pushed from the dashboard UI
             self._poll_live_settings()
+            # Portfolio Safety Shield — halt buys if portfolio drops to threshold
+            if self.shield_enabled and self.portfolio_stop_loss > 0:
+                self._check_portfolio_shield()
             self._maybe_heartbeat(message="scan-start")
             symbols = list(self.stock_list)
 
@@ -305,6 +390,11 @@ class TradingEngine:
             if "rsi_sell_min"        in s: self.rsi_sell_min         = max(50.0, float(s["rsi_sell_min"]))
             if "sma_spread_min"      in s: self.sma_spread_min       = max(0.0,  float(s["sma_spread_min"]))
             if "forecast_exit_enabled" in s: self.forecast_exit_enabled = bool(s["forecast_exit_enabled"])
+            # Safety Shield live settings
+            if "portfolio_stop_loss"   in s: self.portfolio_stop_loss   = max(0.0, float(s["portfolio_stop_loss"]))
+            if "portfolio_stop_buffer" in s: self.portfolio_stop_buffer = max(0.0, float(s["portfolio_stop_buffer"]))
+            if "shield_enabled"        in s: self.shield_enabled         = bool(s["shield_enabled"])
+            if "min_hold_seconds"      in s: self.min_hold_seconds       = max(0, int(s["min_hold_seconds"]))
         except Exception:
             pass
 
@@ -850,6 +940,12 @@ class TradingEngine:
 
             drop_from_peak = (peak - price) / peak if peak > 0 else 0
 
+            # ── 5hr 59min minimum hold check ──
+            # Forecast + signal exits respect the minimum hold time.
+            # Emergency trailing-stop and hard stop-loss always fire immediately.
+            _hold_secs = time.time() - holding.get("time", time.time())
+            _min_hold_ok = self.min_hold_seconds <= 0 or _hold_secs >= self.min_hold_seconds
+
             # 1. Trailing stop — price fell X% below its peak since purchase → SELL
             if drop_from_peak >= self.trailing_stop_pct:
                 if not self.auto_trade:
@@ -873,8 +969,10 @@ class TradingEngine:
 
             # 3. Forecast-based early exit: momentum peaked — sell before trailing stop fires
             #    Only exits when: forecast flips DOWN + EMA phase is "falling" + in profit
+            #    Respects 5hr 59min minimum hold rule.
             elif (
                 self.forecast_exit_enabled and
+                _min_hold_ok and
                 signal.get("forecast_direction") == "down" and
                 signal.get("forecast_phase") == "falling" and
                 change_from_buy > 0
@@ -891,7 +989,8 @@ class TradingEngine:
                 self.sell(symbol, price, reason="forecast_exit")
 
             # 4. Signal-based exit (death cross / RSI overbought) while in profit
-            elif signal["verdict"] == "SELL" and change_from_buy > 0:
+            #    Respects 5hr 59min minimum hold rule — emergency stops above are exempt.
+            elif signal["verdict"] == "SELL" and change_from_buy > 0 and _min_hold_ok:
                 self.sell(symbol, price, reason="signal_exit")
 
     def should_buy(self, symbol: str, price: float) -> bool:

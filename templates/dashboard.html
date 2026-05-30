@@ -307,6 +307,27 @@
           <div class="stat-sub">Portfolio peak 🏆</div>
         </div>
       </div>
+      <div class="col-6 col-md-3">
+        <div class="stat-card" id="shieldCard">
+          <div class="stat-label"><i class="fa-solid fa-shield-halved me-1"></i>Safety Shield</div>
+          <div class="stat-value" id="statShield" style="font-size:1.1rem;">— OFF</div>
+          <div class="stat-sub" id="statShieldSub">Portfolio guard</div>
+        </div>
+      </div>
+      <div class="col-6 col-md-3">
+        <div class="stat-card">
+          <div class="stat-label"><i class="fa-solid fa-bullseye me-1"></i>Goal Progress</div>
+          <div class="stat-value" id="statGoalPct">—</div>
+          <div class="stat-sub" id="statGoalSub">Toward your goal</div>
+        </div>
+      </div>
+      <div class="col-6 col-md-3">
+        <div class="stat-card">
+          <div class="stat-label"><i class="fa-solid fa-receipt me-1"></i>Est. Fees Today</div>
+          <div class="stat-value" id="statFees">$0.00</div>
+          <div class="stat-sub" id="statFeesSub">API + trading costs</div>
+        </div>
+      </div>
     </div>
 
     <!-- ═══ TABS ═══ -->
@@ -342,137 +363,7 @@
           <i class="fa-solid fa-sliders me-1"></i>Settings
         </button>
       </li>
-          <!-- ══ BACKTEST TAB ══ -->
-          <div class="tab-pane fade" id="tabBacktest">
-            <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
-              <div>
-                <h5 class="mb-0 fw-bold">Trade Simulation & Backtest</h5>
-                <div class="small-muted">Upload historical CSV, run strategy simulation, and view results.</div>
-              </div>
-            </div>
-            <form id="backtestForm" class="row g-3 align-items-end mb-3">
-              <div class="col-md-4">
-                <label class="form-label">Symbol</label>
-                <input class="form-control" id="backtestSymbol" placeholder="AAPL">
-              </div>
-              <div class="col-md-3">
-                <label class="form-label">Start Date</label>
-                <input class="form-control" type="date" id="backtestStart">
-              </div>
-              <div class="col-md-3">
-                <label class="form-label">End Date</label>
-                <input class="form-control" type="date" id="backtestEnd">
-              </div>
-              <div class="col-md-2">
-                <label class="form-label">CSV File</label>
-                <input class="form-control" type="file" id="backtestCSV" accept=".csv">
-              </div>
-              <div class="col-12">
-                <button class="btn btn-primary" type="submit"><i class="fa-solid fa-play me-1"></i>Run Backtest</button>
-              </div>
-            </form>
-            <div id="backtestResult" class="mt-3"></div>
-            <canvas id="backtestChart" height="120" style="max-width:600px;"></canvas>
-          </div>
-		  
-        // ═══════════════════════════════════════════
-        // BACKTEST TAB LOGIC
-        // ═══════════════════════════════════════════
-        document.getElementById('backtestForm').addEventListener('submit', async function(e) {
-        e.preventDefault();
-
-        const symbol = document.getElementById('backtestSymbol').value.trim().toUpperCase();
-        const start = document.getElementById('backtestStart').value;
-        const end = document.getElementById('backtestEnd').value;
-        const fileEl = document.getElementById('backtestCSV');
-
-        if (!symbol || !start || !end || !fileEl.files.length) {
-        document.getElementById('backtestResult').innerHTML =
-        '<p>Please fill all fields and select a CSV file.</p>';
-        return;
-        }
-
-        const file = fileEl.files[0];
-        const reader = new FileReader();
-
-        reader.onload = function(evt) {
-        const csv = evt.target.result;
-        runBacktestCSV(symbol, start, end, csv);
-        };
-
-        reader.readAsText(file);
-        });
-
-        async function runBacktestCSV(symbol, start, end, csv) {
-          // Parse CSV (expects columns: date,close)
-          const rows = csv.split(/\r?\n/).map(l => l.split(','));
-          const header = rows[0].map(h => h.trim().toLowerCase());
-          const dateIdx = header.indexOf('date');
-          const closeIdx = header.indexOf('close');
-          if (dateIdx === -1 || closeIdx === -1) {
-            document.getElementById('backtestResult').innerHTML = '<span style="color:var(--down)">CSV must have date and close columns.</span>';
-            return;
-          }
-		  
-          const data = rows.slice(1).filter(r => r.length > closeIdx && r[dateIdx] && r[closeIdx]);
-          const filtered = data.filter(r => r[dateIdx] >= start && r[dateIdx] <= end);
-          if (!filtered.length) {
-            document.getElementById('backtestResult').innerHTML = '<span style="color:var(--down)">No data in selected date range.</span>';
-            return;
-          }
-		  
-          // Simple SMA/RSI/MACD backtest (BUY/SELL logic)
-          let holding = null, tradeLog = [], equity = 0, peak = 0, maxDD = 0, pnl = [];
-          filtered.forEach((row, idx) => {
-            const price = parseFloat(row[closeIdx]);
-            const date  = row[dateIdx];
-            // Simple: buy on first, sell on last
-            if (idx === 0) {
-              holding = { price, date };
-              tradeLog.push({ action: 'BUY', price, date });
-            }
-			
-            if (idx === filtered.length - 1 && holding) {
-              const profit = price - holding.price;
-              tradeLog.push({ action: 'SELL', price, date, pnl: profit });
-              pnl.push(profit);
-            }
-			
-            equity += pnl.length ? pnl[pnl.length-1] : 0;
-            if (equity > peak) peak = equity;
-            const dd = peak - equity; if (dd > maxDD) maxDD = dd;
-          });
-          const totalReturn = pnl.reduce((a,b) => a+b, 0);
-          const winRate = pnl.filter(x => x > 0).length / (pnl.length || 1);
-          document.getElementById('backtestResult').innerHTML =
-            `<div class='glass-card'><b>${symbol} Backtest Results</b><br>
-            Total Return: <b>${fmtMoney(totalReturn)}</b><br>
-            Win Rate: <b>${(winRate*100).toFixed(1)}%</b><br>
-            Max Drawdown: <b>${fmtMoney(maxDD)}</b><br>
-            Trades: <b>${pnl.length}</b></div>`;
-          // Plot equity curve
-          const ctx = document.getElementById('backtestChart').getContext('2d');
-          if (window.backtestChartObj) window.backtestChartObj.destroy();
-          window.backtestChartObj = new Chart(ctx, {
-            type: 'line',
-            data: {
-              labels: filtered.map(r => r[dateIdx]),
-              datasets: [{
-                label: symbol + ' Equity',
-                data: pnl.reduce((acc, x) => { acc.push((acc.length ? acc[acc.length-1] : 0) + x); return acc; }, []),
-                borderColor: '#3b82f6',
-                borderWidth: 2,
-                pointRadius: 0,
-                tension: 0.2,
-                fill: false,
-              }]
-            },
-            options: { plugins: { legend: { display: false } }, scales: { x: { display: false }, y: { display: true } } }
-          });
-        }
-		
-    
-	    </ul>
+    </ul>
 
     <div class="tab-content" id="dashboardTabsContent">
 
@@ -686,24 +577,6 @@
                     </label>
                   </div>
                 </div>
-                  // ═══════════════════════════════════════════
-                  //  AUTO-SAVE SCAN ALL MARKET
-                  // ═══════════════════════════════════════════
-                  function autoSaveScanAllMarket() {
-                    const checked = document.getElementById('scanAllMarket').checked;
-                    fetch('/api/settings/trading', {
-                      method: 'POST',
-                      headers: {'Content-Type': 'application/json'},
-                      body: JSON.stringify({ scan_all_market: checked }),
-                    })
-                    .then(r => r.json())
-                    .then(() => {
-                      addFeedSysLine(checked ? 'Scan Entire Market ENABLED' : 'Scan Entire Market DISABLED');
-                    })
-                    .catch(() => {
-                      addFeedSysLine('⚠ Failed to update Scan Entire Market setting');
-                    });
-                  }
               </div>
 
               <!-- Position Sizing & Signal Controls -->
@@ -853,6 +726,164 @@
           </div>
 
           <!-- Trading Mode -->
+          <!-- ── PORTFOLIO SAFETY SHIELD ── -->
+          <div class="col-12">
+            <div class="glass-card" style="border-color:rgba(245,158,11,.4);">
+              <div class="section-title" style="color:var(--warn);">
+                <i class="fa-solid fa-shield-halved me-1"></i>Portfolio Safety Shield
+                <span class="small-muted ms-2" style="font-size:.68rem;font-weight:400;color:var(--muted);">
+                  AI stops new buys + alerts you if total value drops below your threshold
+                </span>
+              </div>
+              <div class="row g-3 align-items-end">
+                <div class="col-md-4">
+                  <label class="form-label" title="When your total portfolio value drops to or below this dollar amount, the AI pauses ALL new buy orders and fires an alert.">
+                    Stop-Loss Threshold ($) <i class="fa-solid fa-circle-info fa-xs" style="color:var(--muted)"></i>
+                  </label>
+                  <div class="input-group">
+                    <span class="input-group-text" style="background:var(--card);border-color:var(--border);color:var(--muted);">$</span>
+                    <input class="form-control" type="number" id="shieldThreshold" value="0" min="0" step="10"
+                      placeholder="e.g. 99500 if you start with $100,000">
+                  </div>
+                  <div class="small-muted mt-1" style="font-size:.68rem;">
+                    Example: start $100,000 → set $99,500 = max $500 loss before AI pauses
+                  </div>
+                </div>
+                <div class="col-md-4">
+                  <label class="form-label" title="Once shield triggers, AI resumes only when portfolio rises back above threshold PLUS this buffer.">
+                    Resume Buffer ($) <i class="fa-solid fa-circle-info fa-xs" style="color:var(--muted)"></i>
+                  </label>
+                  <div class="input-group">
+                    <span class="input-group-text" style="background:var(--card);border-color:var(--border);color:var(--muted);">$</span>
+                    <input class="form-control" type="number" id="shieldBuffer" value="200" min="0" step="50">
+                  </div>
+                  <div class="small-muted mt-1" style="font-size:.68rem;">
+                    Prevents flip-flopping — value must recover this much above threshold before AI buys again
+                  </div>
+                </div>
+                <div class="col-md-4">
+                  <label class="form-label">5hr 59min Minimum Hold Rule</label>
+                  <div class="form-check form-switch mt-2">
+                    <input class="form-check-input" type="checkbox" id="minHoldToggle" checked>
+                    <label class="form-check-label" for="minHoldToggle">
+                      Hold each position ≥5h 59m before selling
+                    </label>
+                  </div>
+                  <div class="small-muted mt-1" style="font-size:.68rem;">
+                    Prevents rapid day-trading and avoids Pattern Day Trader flagging for accounts under $25K
+                  </div>
+                </div>
+              </div>
+              <div class="row g-3 mt-1">
+                <div class="col-md-6">
+                  <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" id="shieldEnabled" checked>
+                    <label class="form-check-label"><strong>Shield Active</strong> — AI stops buys at threshold</label>
+                  </div>
+                </div>
+                <div class="col-md-6">
+                  <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" id="shieldAfterHours" checked>
+                    <label class="form-check-label">Monitor &amp; alert after hours / weekends</label>
+                  </div>
+                </div>
+              </div>
+              <div id="shieldStatusBar" class="mt-3 d-none"
+                style="background:rgba(245,158,11,.12);border:1px solid rgba(245,158,11,.4);border-radius:8px;padding:10px 14px;">
+                <i class="fa-solid fa-triangle-exclamation text-warning me-2"></i>
+                <strong id="shieldStatusMsg">Shield not configured</strong>
+              </div>
+              <button class="btn btn-warning mt-3" onclick="saveShieldSettings()" style="color:#000;">
+                <i class="fa-solid fa-shield-halved me-1"></i>Activate Safety Shield
+              </button>
+              <div id="shieldResult" class="mt-2 small-muted"></div>
+            </div>
+          </div>
+
+          <!-- ── GOAL TRACKER ── -->
+          <div class="col-12">
+            <div class="glass-card" style="border-color:rgba(34,197,94,.3);">
+              <div class="section-title" style="color:var(--up);">
+                <i class="fa-solid fa-bullseye me-1"></i>Profit Goal Tracker — Ladder Effect
+              </div>
+              <div class="row g-3 align-items-end">
+                <div class="col-md-3">
+                  <label class="form-label">Starting Amount</label>
+                  <div class="input-group">
+                    <span class="input-group-text" style="background:var(--card);border-color:var(--border);color:var(--muted);">$</span>
+                    <input class="form-control" type="number" id="goalStart" value="100" min="1" step="10" placeholder="100">
+                  </div>
+                </div>
+                <div class="col-md-3">
+                  <label class="form-label">Goal Amount</label>
+                  <div class="input-group">
+                    <span class="input-group-text" style="background:var(--card);border-color:var(--border);color:var(--muted);">$</span>
+                    <input class="form-control" type="number" id="goalTarget" value="1000" min="1" step="100" placeholder="1000">
+                  </div>
+                </div>
+                <div class="col-md-3">
+                  <label class="form-label">Time Limit (days)</label>
+                  <input class="form-control" type="number" id="goalDays" value="30" min="1">
+                </div>
+                <div class="col-md-3">
+                  <button class="btn btn-success w-100" onclick="saveGoalSettings()">
+                    <i class="fa-solid fa-rocket me-1"></i>Set Goal
+                  </button>
+                </div>
+              </div>
+              <div class="mt-3" id="goalProgressWrap" style="display:none;">
+                <div class="d-flex justify-content-between mb-1" style="font-size:.8rem;">
+                  <span id="goalProgressLabel">$100 → $1,000</span>
+                  <span id="goalProgressPct" class="up fw-bold">0%</span>
+                </div>
+                <div class="progress" style="height:12px;background:var(--card2);border-radius:6px;">
+                  <div id="goalProgressBar" class="progress-bar bg-success" role="progressbar"
+                    style="width:0%;border-radius:6px;transition:width .5s;"></div>
+                </div>
+                <div class="d-flex justify-content-between mt-1" style="font-size:.72rem;color:var(--muted);">
+                  <span id="goalDayInfo">Day 1 of 30</span>
+                  <span id="goalETA">Est. completion: —</span>
+                </div>
+              </div>
+              <div id="goalResult" class="mt-2 small-muted"></div>
+            </div>
+          </div>
+
+          <!-- ── FEE TRANSPARENCY ── -->
+          <div class="col-12">
+            <div class="glass-card">
+              <div class="section-title"><i class="fa-solid fa-receipt me-1"></i>Fee Transparency &amp; Cost Tracker</div>
+              <div class="row g-2" style="font-size:.82rem;">
+                <div class="col-md-4">
+                  <div class="stat-card" style="padding:.7rem 1rem;">
+                    <div class="stat-label">Alpaca Trading Fees</div>
+                    <div class="stat-value" id="feeAlpaca" style="font-size:1.1rem;">$0.00</div>
+                    <div class="stat-sub">Paper: $0 · Live: regulatory + SEC/FINRA</div>
+                  </div>
+                </div>
+                <div class="col-md-4">
+                  <div class="stat-card" style="padding:.7rem 1rem;">
+                    <div class="stat-label">API Data Costs</div>
+                    <div class="stat-value" id="feeAPI" style="font-size:1.1rem;">$0.00</div>
+                    <div class="stat-sub">Alpha Vantage + Alpaca quotes today</div>
+                  </div>
+                </div>
+                <div class="col-md-4">
+                  <div class="stat-card" style="padding:.7rem 1rem;">
+                    <div class="stat-label">Net Profit After Fees</div>
+                    <div class="stat-value" id="feeNetProfit" style="font-size:1.1rem;">—</div>
+                    <div class="stat-sub" id="feeBreakEven">Break-even: —</div>
+                  </div>
+                </div>
+              </div>
+              <div class="mt-2 p-2 rounded" style="background:rgba(37,99,235,.08);border:1px solid rgba(37,99,235,.2);font-size:.75rem;color:var(--muted);">
+                <i class="fa-solid fa-info-circle me-1" style="color:var(--accent2);"></i>
+                <strong>Ladder Effect Strategy:</strong> AI buys rising stocks, sells before they peak, immediately reinvests.
+                Each profit step climbs the ladder. You keep climbing until you say stop — or until the Safety Shield fires.
+              </div>
+            </div>
+          </div>
+
           <div class="col-12">
             <div class="glass-card mb-4">
               <div class="section-title"><i class="fa-solid fa-toggle-on me-1"></i>Trading Mode</div>
@@ -907,72 +938,42 @@
               <ul id="cloudFileList" class="list-group mb-2"></ul>
             </div>
           </div>
-            // ═══════════════════════════════════════════
-            //  CLOUD SYNC (USER FILES)
-            // ═══════════════════════════════════════════
-            document.getElementById('cloudUploadForm').addEventListener('submit', async function(e) {
-              e.preventDefault();
-              const fileEl = document.getElementById('cloudFile');
-              const userId = document.getElementById('cloudUserId').value.trim() || 'demo';
-              if (!fileEl.files.length) return;
-              const file = fileEl.files[0];
-              const formData = new FormData();
-              formData.append('file', file);
-              document.getElementById('cloudUploadResult').textContent = 'Uploading...';
-              try {
-                const res = await fetch('/api/cloud/upload', {
-                  method: 'POST',
-                  headers: { 'X-User-ID': userId },
-                  body: formData
-                });
-                const data = await res.json();
-                if (data.status === 'ok') {
-                  document.getElementById('cloudUploadResult').innerHTML = `<span style='color:var(--up)'>Uploaded: ${data.filename}</span>`;
-                  listCloudFiles();
-                } else {
-                  document.getElementById('cloudUploadResult').innerHTML = `<span style='color:var(--down)'>${data.error||'Upload failed'}</span>`;
-                }
-              } catch (err) {
-                document.getElementById('cloudUploadResult').innerHTML = `<span style='color:var(--down)'>${err}</span>`;
-              }
-            });
-
-            async function listCloudFiles() {
-              const userId = document.getElementById('cloudUserId').value.trim() || 'demo';
-              const res = await fetch('/api/cloud/list', { headers: { 'X-User-ID': userId } });
-              const files = await res.json();
-              const ul = document.getElementById('cloudFileList');
-              ul.innerHTML = '';
-              if (!files.length) {
-                ul.innerHTML = '<li class="list-group-item small-muted">No files in cloud.</li>';
-                return;
-              }
-              files.forEach(fname => {
-                const li = document.createElement('li');
-                li.className = 'list-group-item d-flex justify-content-between align-items-center';
-                li.textContent = fname;
-                const btn = document.createElement('button');
-                btn.className = 'btn btn-outline-primary btn-sm';
-                btn.innerHTML = '<i class="fa-solid fa-download"></i>';
-                btn.onclick = () => downloadCloudFile(fname);
-                li.appendChild(btn);
-                ul.appendChild(li);
-              });
-            }
-
-            async function downloadCloudFile(fname) {
-              const userId = document.getElementById('cloudUserId').value.trim() || 'demo';
-              const url = `/api/cloud/download/${encodeURIComponent(fname)}`;
-              fetch(url, { headers: { 'X-User-ID': userId } })
-                .then(resp => resp.blob())
-                .then(blob => {
-                  const a = document.createElement('a');
-                  a.href = window.URL.createObjectURL(blob);
-                  a.download = fname;
-                  a.click();
-                });
-            }
         </div>
+      </div>
+
+      <!-- ══ BACKTEST TAB ══ -->
+      <div class="tab-pane fade" id="tabBacktest">
+        <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+          <div>
+            <h5 class="mb-0 fw-bold">Trade Simulation &amp; Backtest</h5>
+            <div class="small-muted">Upload a CSV (date,close columns) to replay your strategy.</div>
+          </div>
+        </div>
+        <form id="backtestForm" class="row g-3 align-items-end mb-3">
+          <div class="col-md-4">
+            <label class="form-label">Symbol</label>
+            <input class="form-control" id="backtestSymbol" placeholder="AAPL">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">Start Date</label>
+            <input class="form-control" type="date" id="backtestStart">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">End Date</label>
+            <input class="form-control" type="date" id="backtestEnd">
+          </div>
+          <div class="col-md-2">
+            <label class="form-label">CSV File</label>
+            <input class="form-control" type="file" id="backtestCSV" accept=".csv">
+          </div>
+          <div class="col-12">
+            <button class="btn btn-primary" type="submit">
+              <i class="fa-solid fa-play me-1"></i>Run Backtest
+            </button>
+          </div>
+        </form>
+        <div id="backtestResult" class="mt-3"></div>
+        <canvas id="backtestChart" height="120" style="max-width:700px;"></canvas>
       </div>
 
     </div><!-- /tab-content -->
@@ -1534,7 +1535,6 @@
       }
 
       // ROI % display
-      const cap = d.capital;
       const roiEl  = document.getElementById('statROI');
       const roiSub = document.getElementById('statROISub');
       const hwmEl  = document.getElementById('statHWM');
@@ -1554,6 +1554,9 @@
       if (hwmEl && d.capital_hwm != null) {
         hwmEl.textContent = fmtMoney(d.capital_hwm);
       }
+      // Update goal tracker with live capital total
+      if (d.capital && d.capital.total) updateGoalFromCapital(d.capital.total);
+      updateFeeDisplay();
 
       document.getElementById('engineStatus').textContent = JSON.stringify(d, null, 2);
     }
@@ -1698,11 +1701,359 @@
       });
     }
 
+
+    // ═══════════════════════════════════════════
+    //  BACKTEST TAB LOGIC
+    // ═══════════════════════════════════════════
+    document.getElementById('backtestForm').addEventListener('submit', async function(e) {
+      e.preventDefault();
+      const symbol = document.getElementById('backtestSymbol').value.trim().toUpperCase();
+      const start  = document.getElementById('backtestStart').value;
+      const end    = document.getElementById('backtestEnd').value;
+      const fileEl = document.getElementById('backtestCSV');
+      if (!symbol || !start || !end || !fileEl.files.length) {
+        document.getElementById('backtestResult').innerHTML =
+          '<p style="color:var(--warn)">Please fill all fields and select a CSV file.</p>';
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = evt => runBacktestCSV(symbol, start, end, evt.target.result);
+      reader.readAsText(fileEl.files[0]);
+    });
+
+    async function runBacktestCSV(symbol, start, end, csv) {
+      const rows     = csv.split(/\r?\n/).map(l => l.split(','));
+      const header   = rows[0].map(h => h.trim().toLowerCase());
+      const dateIdx  = header.indexOf('date');
+      const closeIdx = header.indexOf('close');
+      if (dateIdx === -1 || closeIdx === -1) {
+        document.getElementById('backtestResult').innerHTML =
+          '<span style="color:var(--down)">CSV must have <b>date</b> and <b>close</b> columns.</span>';
+        return;
+      }
+      const data     = rows.slice(1).filter(r => r.length > closeIdx && r[dateIdx] && r[closeIdx]);
+      const filtered = data.filter(r => r[dateIdx] >= start && r[dateIdx] <= end);
+      if (!filtered.length) {
+        document.getElementById('backtestResult').innerHTML =
+          '<span style="color:var(--down)">No data found in selected date range.</span>';
+        return;
+      }
+      let holding = null, pnl = [], equity = 0, peak = 0, maxDD = 0, wins = 0;
+      filtered.forEach((row, idx) => {
+        const price = parseFloat(row[closeIdx]);
+        const date  = row[dateIdx];
+        if (!holding) { holding = price; }
+        // Ladder effect sim: sell on each up-tick of >0.5%, rebuy immediately
+        if (idx > 0 && holding) {
+          const prev = parseFloat(filtered[idx - 1][closeIdx]);
+          const gain = (price - prev) / prev;
+          if (gain >= 0.005 || idx === filtered.length - 1) {
+            const profit = price - holding;
+            pnl.push({ profit, date, price });
+            if (profit > 0) wins++;
+            holding = price; // reinvest
+          }
+        }
+        equity = pnl.reduce((s, p) => s + p.profit, 0);
+        if (equity > peak) peak = equity;
+        const dd = peak - equity; if (dd > maxDD) maxDD = dd;
+      });
+      const totalReturn = pnl.reduce((s, p) => s + p.profit, 0);
+      const winRate     = pnl.length ? (wins / pnl.length * 100).toFixed(1) : 0;
+      document.getElementById('backtestResult').innerHTML =
+        `<div class="glass-card">
+          <b>${symbol} Ladder Backtest Results</b>
+          <div class="row g-2 mt-1" style="font-size:.85rem;">
+            <div class="col-6 col-md-3"><span class="stat-label">Total Return</span><br><b class="${totalReturn >= 0 ? 'up' : 'down'}">${fmtMoney(totalReturn)}</b></div>
+            <div class="col-6 col-md-3"><span class="stat-label">Win Rate</span><br><b>${winRate}%</b></div>
+            <div class="col-6 col-md-3"><span class="stat-label">Max Drawdown</span><br><b class="down">${fmtMoney(maxDD)}</b></div>
+            <div class="col-6 col-md-3"><span class="stat-label">Ladder Steps</span><br><b>${pnl.length}</b></div>
+          </div>
+        </div>`;
+      const ctx = document.getElementById('backtestChart').getContext('2d');
+      if (window.backtestChartObj) window.backtestChartObj.destroy();
+      let running = 0;
+      window.backtestChartObj = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: pnl.map(p => p.date),
+          datasets: [{
+            label: symbol + ' Ladder Equity',
+            data: pnl.map(p => { running += p.profit; return running; }),
+            borderColor: running >= 0 ? '#22c55e' : '#ef4444',
+            borderWidth: 2, pointRadius: 0, tension: 0.3, fill: true,
+            backgroundColor: 'rgba(34,197,94,.08)',
+          }]
+        },
+        options: { plugins: { legend: { display: false } },
+          scales: { x: { display: false }, y: { display: true, ticks: { color: '#64748b' }, grid: { color: 'rgba(255,255,255,.05)' } } }
+        }
+      });
+    }
+
+    // ═══════════════════════════════════════════
+    //  AUTO-SAVE SCAN ALL MARKET
+    // ═══════════════════════════════════════════
+    function autoSaveScanAllMarket() {
+      const checked = document.getElementById('scanAllMarket').checked;
+      fetch('/api/settings/trading', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scan_all_market: checked }),
+      })
+        .then(r => r.json())
+        .then(() => addFeedSysLine(checked ? '🌐 Scan Entire Market ENABLED' : '🔵 Scan Entire Market DISABLED'))
+        .catch(() => addFeedSysLine('⚠ Failed to update Scan Entire Market setting'));
+    }
+
+    // ═══════════════════════════════════════════
+    //  CLOUD SYNC (USER FILES)
+    // ═══════════════════════════════════════════
+    document.getElementById('cloudUploadForm').addEventListener('submit', async function(e) {
+      e.preventDefault();
+      const fileEl = document.getElementById('cloudFile');
+      const userId = document.getElementById('cloudUserId').value.trim() || 'demo';
+      if (!fileEl.files.length) return;
+      const formData = new FormData();
+      formData.append('file', fileEl.files[0]);
+      document.getElementById('cloudUploadResult').textContent = 'Uploading…';
+      try {
+        const res  = await fetch('/api/cloud/upload', { method: 'POST', headers: { 'X-User-ID': userId }, body: formData });
+        const data = await res.json();
+        if (data.status === 'ok') {
+          document.getElementById('cloudUploadResult').innerHTML =
+            `<span style="color:var(--up)">Uploaded: ${escHtml(data.filename)}</span>`;
+          listCloudFiles();
+        } else {
+          document.getElementById('cloudUploadResult').innerHTML =
+            `<span style="color:var(--down)">${escHtml(data.error || 'Upload failed')}</span>`;
+        }
+      } catch (err) {
+        document.getElementById('cloudUploadResult').innerHTML =
+          `<span style="color:var(--down)">${escHtml(String(err))}</span>`;
+      }
+    });
+
+    async function listCloudFiles() {
+      const userId = document.getElementById('cloudUserId').value.trim() || 'demo';
+      try {
+        const res   = await fetch('/api/cloud/list', { headers: { 'X-User-ID': userId } });
+        const files = await res.json();
+        const ul = document.getElementById('cloudFileList');
+        ul.innerHTML = '';
+        if (!files.length) {
+          ul.innerHTML = '<li class="list-group-item small-muted">No files in cloud.</li>';
+          return;
+        }
+        files.forEach(fname => {
+          const li  = document.createElement('li');
+          li.className = 'list-group-item d-flex justify-content-between align-items-center';
+          li.textContent = fname;
+          const btn = document.createElement('button');
+          btn.className = 'btn btn-outline-primary btn-sm';
+          btn.innerHTML = '<i class="fa-solid fa-download"></i>';
+          btn.onclick = () => downloadCloudFile(fname);
+          li.appendChild(btn);
+          ul.appendChild(li);
+        });
+      } catch {}
+    }
+
+    async function downloadCloudFile(fname) {
+      const userId = document.getElementById('cloudUserId').value.trim() || 'demo';
+      const res  = await fetch(`/api/cloud/download/${encodeURIComponent(fname)}`, { headers: { 'X-User-ID': userId } });
+      const blob = await res.blob();
+      const a = document.createElement('a');
+      a.href = window.URL.createObjectURL(blob);
+      a.download = fname;
+      a.click();
+    }
+
+    // ═══════════════════════════════════════════
+    //  PORTFOLIO SAFETY SHIELD
+    // ═══════════════════════════════════════════
+    const SHIELD_KEY = 'alien_ai_shield_v1';
+    const GOAL_KEY   = 'alien_ai_goal_v1';
+
+    function saveShieldSettings() {
+      const threshold = parseFloat(document.getElementById('shieldThreshold').value) || 0;
+      const buffer    = parseFloat(document.getElementById('shieldBuffer').value) || 200;
+      const enabled   = document.getElementById('shieldEnabled').checked;
+      const afterHours = document.getElementById('shieldAfterHours').checked;
+      const minHold   = document.getElementById('minHoldToggle').checked;
+      const cfg = { threshold, buffer, enabled, afterHours, minHold };
+      localStorage.setItem(SHIELD_KEY, JSON.stringify(cfg));
+
+      // Push to engine
+      fetch('/api/settings/trading', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          portfolio_stop_loss:   threshold,
+          portfolio_stop_buffer: buffer,
+          shield_enabled:        enabled,
+          min_hold_seconds:      minHold ? 5 * 3600 + 59 * 60 : 0,
+        }),
+      })
+        .then(r => r.json())
+        .then(() => {
+          document.getElementById('shieldResult').innerHTML =
+            `<span style="color:var(--up)">✓ Shield activated — AI will halt buys if portfolio drops to ${fmtMoney(threshold)}</span>`;
+          updateShieldUI(cfg);
+        })
+        .catch(() => {
+          document.getElementById('shieldResult').textContent = '✓ Shield saved locally. Engine picks up on next restart.';
+        });
+    }
+
+    function updateShieldUI(cfg) {
+      const el  = document.getElementById('statShield');
+      const sub = document.getElementById('statShieldSub');
+      const bar = document.getElementById('shieldStatusBar');
+      const msg = document.getElementById('shieldStatusMsg');
+      if (!cfg || !cfg.enabled || !cfg.threshold) {
+        el.textContent = '— OFF';
+        el.className = 'stat-value';
+        sub.textContent = 'Portfolio guard';
+        bar.classList.add('d-none');
+        return;
+      }
+      el.textContent = fmtMoney(cfg.threshold);
+      el.className = 'stat-value up';
+      sub.textContent = 'Shield threshold';
+      bar.classList.remove('d-none');
+      msg.textContent = `Shield active: AI halts new buys if portfolio drops to ${fmtMoney(cfg.threshold)}`;
+    }
+
+    function loadShieldSettings() {
+      try {
+        const cfg = JSON.parse(localStorage.getItem(SHIELD_KEY) || '{}');
+        if (cfg.threshold) document.getElementById('shieldThreshold').value = cfg.threshold;
+        if (cfg.buffer != null) document.getElementById('shieldBuffer').value = cfg.buffer;
+        if (cfg.enabled != null) document.getElementById('shieldEnabled').checked = cfg.enabled;
+        if (cfg.afterHours != null) document.getElementById('shieldAfterHours').checked = cfg.afterHours;
+        if (cfg.minHold != null) document.getElementById('minHoldToggle').checked = cfg.minHold;
+        updateShieldUI(cfg);
+      } catch {}
+    }
+
+    // ═══════════════════════════════════════════
+    //  GOAL TRACKER
+    // ═══════════════════════════════════════════
+    function saveGoalSettings() {
+      const start  = parseFloat(document.getElementById('goalStart').value) || 100;
+      const target = parseFloat(document.getElementById('goalTarget').value) || 1000;
+      const days   = parseInt(document.getElementById('goalDays').value) || 30;
+      const goal = { start, target, days, createdAt: Date.now() };
+      localStorage.setItem(GOAL_KEY, JSON.stringify(goal));
+      document.getElementById('goalResult').innerHTML =
+        `<span style="color:var(--up)">✓ Goal set: ${fmtMoney(start)} → ${fmtMoney(target)} in ${days} days</span>`;
+      updateGoalUI(goal, start); // start = current value initially
+    }
+
+    function updateGoalUI(goal, currentValue) {
+      if (!goal || !goal.target) return;
+      const wrap   = document.getElementById('goalProgressWrap');
+      const label  = document.getElementById('goalProgressLabel');
+      const pctEl  = document.getElementById('goalProgressPct');
+      const bar    = document.getElementById('goalProgressBar');
+      const dayEl  = document.getElementById('goalDayInfo');
+      const etaEl  = document.getElementById('goalETA');
+      const statEl = document.getElementById('statGoalPct');
+      const subEl  = document.getElementById('statGoalSub');
+
+      wrap.style.display = '';
+      const pct = Math.min(100, ((currentValue - goal.start) / (goal.target - goal.start)) * 100);
+      const daysPassed = Math.floor((Date.now() - (goal.createdAt || Date.now())) / 86400000);
+      const dailyGain  = daysPassed > 0 ? (currentValue - goal.start) / daysPassed : 0;
+      const daysLeft   = dailyGain > 0 ? Math.ceil((goal.target - currentValue) / dailyGain) : null;
+
+      label.textContent   = `${fmtMoney(goal.start)} → ${fmtMoney(goal.target)} (current: ${fmtMoney(currentValue)})`;
+      pctEl.textContent   = (pct >= 0 ? '+' : '') + pct.toFixed(1) + '%';
+      pctEl.className     = 'fw-bold ' + (pct >= 0 ? 'up' : 'down');
+      bar.style.width     = Math.max(0, pct) + '%';
+      dayEl.textContent   = `Day ${daysPassed + 1} of ${goal.days}`;
+      etaEl.textContent   = daysLeft != null ? `Est. ${daysLeft} more days to goal` : 'Est. completion: —';
+      statEl.textContent  = (pct >= 0 ? '+' : '') + pct.toFixed(1) + '%';
+      subEl.textContent   = `${fmtMoney(currentValue)} / ${fmtMoney(goal.target)}`;
+    }
+
+    function loadGoalSettings() {
+      try {
+        const goal = JSON.parse(localStorage.getItem(GOAL_KEY) || '{}');
+        if (goal.start)  document.getElementById('goalStart').value  = goal.start;
+        if (goal.target) document.getElementById('goalTarget').value = goal.target;
+        if (goal.days)   document.getElementById('goalDays').value   = goal.days;
+        if (goal.target) {
+          document.getElementById('goalProgressWrap').style.display = '';
+          updateGoalUI(goal, goal.start); // Will update with live data when available
+        }
+      } catch {}
+    }
+
+    // Update goal progress whenever worker reports capital
+    function updateGoalFromCapital(capTotal) {
+      try {
+        const goal = JSON.parse(localStorage.getItem(GOAL_KEY) || '{}');
+        if (goal.target && capTotal > 0) updateGoalUI(goal, capTotal);
+      } catch {}
+    }
+
+    // ═══════════════════════════════════════════
+    //  FEE TRACKER
+    // ═══════════════════════════════════════════
+    const _feeTracker = { trades: 0, apiCalls: 0, tradeVolume: 0 };
+
+    function trackTrade(qty, price) {
+      _feeTracker.trades++;
+      _feeTracker.tradeVolume += qty * price;
+      updateFeeDisplay();
+    }
+
+    function trackAPICall() {
+      _feeTracker.apiCalls++;
+      updateFeeDisplay();
+    }
+
+    function updateFeeDisplay() {
+      // Alpaca live fees: SEC fee ~$0.0000278/$ volume + FINRA TAF ~$0.000166/share (max $8.30)
+      // Paper trading: $0 fees
+      // Alpha Vantage free tier: 500 calls/day, paid plans vary
+      const mode = document.getElementById('tradingModeSelect') ?
+        document.getElementById('tradingModeSelect').value : 'paper';
+      const secFee   = mode === 'live' ? _feeTracker.tradeVolume * 0.0000278 : 0;
+      const finraFee = mode === 'live' ? Math.min(_feeTracker.trades * 0.000166, 8.30) : 0;
+      const apiFee   = _feeTracker.apiCalls > 500 ? (_feeTracker.apiCalls - 500) * 0.0001 : 0;
+      const total    = secFee + finraFee + apiFee;
+
+      const feeAlpacaEl    = document.getElementById('feeAlpaca');
+      const feeAPIEl       = document.getElementById('feeAPI');
+      const feeNetEl       = document.getElementById('feeNetProfit');
+      const feeBreakEvenEl = document.getElementById('feeBreakEven');
+      const statFeesEl     = document.getElementById('statFees');
+
+      if (feeAlpacaEl)    feeAlpacaEl.textContent    = fmtMoney(secFee + finraFee);
+      if (feeAPIEl)       feeAPIEl.textContent        = fmtMoney(apiFee);
+      if (statFeesEl)     statFeesEl.textContent      = fmtMoney(total);
+
+      const pnlVal = parseFloat(document.getElementById('statPnL').textContent.replace(/[$,]/g, '')) || 0;
+      const net    = pnlVal - total;
+      if (feeNetEl) {
+        feeNetEl.textContent  = fmtMoney(net);
+        feeNetEl.className    = 'stat-value ' + (net >= 0 ? 'up' : 'down');
+      }
+      if (feeBreakEvenEl) {
+        feeBreakEvenEl.textContent = total > 0 ? `Need >${fmtMoney(total)} profit/day to break even` : 'Paper mode — $0 fees';
+      }
+    }
+
     // ═══════════════════════════════════════════
     //  INIT
     // ═══════════════════════════════════════════
     loadAITraderState();
     loadRiskSettings();
+    loadShieldSettings();
+    loadGoalSettings();
     refreshQuotesNow();
     startPolling();
     fetchWorkerStatus();

@@ -6,6 +6,7 @@ monkey.patch_all()
 
 import json
 import os
+import threading
 import time
 from threading import Lock
 from typing import Dict, Any, List
@@ -14,6 +15,9 @@ from flask import Flask, render_template, request, jsonify
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 from license_api import register_license_routes
+from trading_engine import TradingEngine
+from portfolio_ladder import PortfolioLadderScanner, integrate_ladder_with_engine, DEFAULT_PORTFOLIO
+from crash_notifier import send_crash_notification
 
 # Market data providers (quotes + basic lookup)
 from alpaca_trade_api.rest import REST
@@ -69,6 +73,13 @@ _ladder_top20: List[Dict[str, Any]] = []
 # In-memory AI trader toggle (can be overridden by worker via heartbeat)
 _ai_trader_enabled = True
 
+# ── Integrated engine globals ────────────────────────────────────────────
+_engine: "TradingEngine | None" = None
+_ladder: "PortfolioLadderScanner | None" = None
+_RUN_SECONDS     = int(os.environ.get("RUN_SECONDS",             "21540"))
+_LADDER_INTERVAL = int(os.environ.get("LADDER_INTERVAL",         "120"))
+_HEARTBEAT_SECS  = int(os.environ.get("HEARTBEAT_EVERY_SECONDS", "10"))
+
 # In-memory live trading settings — the engine polls this endpoint every cycle
 _trading_settings: dict = {
     # ── Auto-trade master switch (toggled from UI) ───────────────────────────
@@ -92,6 +103,12 @@ _trading_settings: dict = {
     "sma_spread_min":      float(os.environ.get("SMA_SPREAD_MIN", "0.1")),
     # ── Forecast exit (sell before climb peaks) ──────────────────────────────
     "forecast_exit_enabled": True,
+    # ── Portfolio Safety Shield ─────────────────────────────────────────
+    "portfolio_stop_loss":   float(os.environ.get("PORTFOLIO_STOP_LOSS",   "0")),   # 0 = off
+    "portfolio_stop_buffer": float(os.environ.get("PORTFOLIO_STOP_BUFFER", "200")),  # recovery gap
+    "shield_enabled":        True,
+    # ── 5hr 59min minimum hold rule ───────────────────────────────────────────
+    "min_hold_seconds":      int(os.environ.get("MIN_HOLD_SECONDS", "21540")),  # 5h 59m
 }
 
 
@@ -495,6 +512,10 @@ def update_trading_settings():
         "rsi_buy_max", "rsi_sell_min", "sma_spread_min",
         # Forecast-based exit
         "forecast_exit_enabled",
+        # Portfolio Safety Shield
+        "portfolio_stop_loss", "portfolio_stop_buffer", "shield_enabled",
+        # 5hr 59min minimum hold rule
+        "min_hold_seconds",
     }
     for k, v in payload.items():
         if k in allowed:
@@ -516,6 +537,176 @@ def on_connect():
     emit("notifications_init", {"notifications": _notifications[-50:]})
     emit("trading_settings", _trading_settings)
     emit("ladder_update", {"ladder": _ladder_top20})
+
+
+# ── Integrated trading engine (replaces separate worker.py process) ─────
+
+def _internal_heartbeat(eng: TradingEngine, lad: PortfolioLadderScanner) -> None:
+    """Update _worker_status and _ladder_top20 in-process (no HTTP round-trip)."""
+    global _worker_status, _ladder_top20
+    while getattr(eng, "running", True):
+        try:
+            with eng.lock:
+                positions = {
+                    sym: {"price": h["price"], "qty": h["qty"]}
+                    for sym, h in eng.current_holdings.items()
+                }
+                signals_snapshot = dict(eng._symbol_signals)
+                invested = sum(h["qty"] * h["price"] for h in eng.current_holdings.values())
+
+            top20: list = []
+            try:
+                top20 = lad.get_ladder()[:20]
+            except Exception:
+                pass
+
+            _worker_status.update({
+                "running":              eng.running,
+                "mode":                 eng.trading_mode,
+                "stocks":               eng.stock_list,
+                "profit":               round(eng.profit, 4),
+                "positions":            positions,
+                "signals":              signals_snapshot,
+                "message":              "alive",
+                "trade_count":          len(eng.trade_log),
+                "capital": {
+                    "initial":   round(eng.initial_capital, 2),
+                    "available": round(eng._available_capital, 2),
+                    "invested":  round(invested, 2),
+                    "total":     round(eng._available_capital + invested, 2),
+                    "mode":      "pool" if eng.initial_capital > 0 else "fixed_qty",
+                },
+                "trailing_stop_pct":    round(eng.trailing_stop_pct * 100, 2),
+                "loss_threshold":       round(eng.loss_threshold * 100, 2),
+                "scan_all_market":      eng.scan_all_market,
+                "max_positions":        eng.max_positions,
+                "min_positions":        eng.min_positions,
+                "trading_mode":         eng.trading_mode,
+                "live_trading_enabled": eng.live_enabled,
+                "last_heartbeat":       int(time.time()),
+            })
+
+            if top20:
+                _ladder_top20 = top20
+                socketio.emit("ladder_update", {"ladder": _ladder_top20})
+
+            socketio.emit("worker_status", _worker_status)
+        except Exception:
+            pass
+        time.sleep(_HEARTBEAT_SECS)
+
+
+def _engine_session(session_num: int) -> None:
+    """Run one 5h59m trading session then return so the supervisor can restart."""
+    global _engine, _ladder
+
+    stock_list = [
+        s.strip().upper()
+        for s in os.environ.get("STOCK_LIST", "AAPL,GOOG,TSLA,MSFT,AMZN").split(",")
+        if s.strip()
+    ]
+    mode = os.environ.get("ENGINE_MODE", "AI")
+
+    _engine = TradingEngine(stock_list=stock_list, mode=mode)
+    ladder_symbols = list(dict.fromkeys(stock_list + DEFAULT_PORTFOLIO))
+    _ladder = PortfolioLadderScanner(symbols=ladder_symbols, engine=_engine)
+    integrate_ladder_with_engine(_engine, _ladder)
+    _engine.start()
+    print(f"[ENGINE] Session #{session_num} started (mode={mode}, stocks={stock_list}).")
+
+    hb_thread = threading.Thread(
+        target=_internal_heartbeat, args=(_engine, _ladder),
+        daemon=True, name="Heartbeat"
+    )
+    hb_thread.start()
+
+    ladder_thread = threading.Thread(
+        target=_ladder.run_forever,
+        kwargs={"interval_seconds": _LADDER_INTERVAL},
+        daemon=True, name="LadderScanner"
+    )
+    ladder_thread.start()
+
+    engine_thread = threading.Thread(
+        target=_engine.run_forever,
+        daemon=True, name="TradingEngine"
+    )
+    engine_thread.start()
+
+    start = time.time()
+    last_summary = 0.0
+
+    while True:
+        now = time.time()
+
+        if not engine_thread.is_alive():
+            msg = f"[ENGINE] Engine thread died (session #{session_num}) — restarting."
+            print(msg)
+            send_crash_notification(msg)
+            _engine.start()
+            engine_thread = threading.Thread(
+                target=_engine.run_forever, daemon=True, name="TradingEngine"
+            )
+            engine_thread.start()
+
+        if not ladder_thread.is_alive():
+            msg = f"[ENGINE] Ladder thread died (session #{session_num}) — restarting."
+            print(msg)
+            send_crash_notification(msg)
+            ladder_thread = threading.Thread(
+                target=_ladder.run_forever,
+                kwargs={"interval_seconds": _LADDER_INTERVAL},
+                daemon=True, name="LadderScanner"
+            )
+            ladder_thread.start()
+
+        if now - last_summary >= 30:
+            last_summary = now
+            try:
+                summary = _ladder.summary()
+                top5 = [e["symbol"] for e in summary.get("top_5", [])]
+                if top5:
+                    print(f"[ENGINE] Ladder top 5: {' -> '.join(top5)}")
+            except Exception:
+                pass
+
+        if now - start >= _RUN_SECONDS:
+            print(f"[ENGINE] Session #{session_num} complete ({_RUN_SECONDS // 60}min) — recycling.")
+            _ladder.stop()
+            _engine.stop()
+            time.sleep(3)
+            return
+
+        time.sleep(2)
+
+
+def _engine_supervisor() -> None:
+    """Outer loop: starts sessions indefinitely, restarting after each one ends or crashes."""
+    session = 0
+    while True:
+        session += 1
+        print(f"[ENGINE] {'Starting' if session == 1 else 'Restarting'} session #{session} ...")
+        try:
+            _engine_session(session)
+        except SystemExit:
+            raise
+        except Exception as e:
+            msg = f"[ENGINE] Crash in session #{session}: {e}"
+            print(msg)
+            try:
+                send_crash_notification(msg)
+            except Exception:
+                pass
+        print(f"[ENGINE] Session #{session} ended. Next session in 5s ...")
+        time.sleep(5)
+
+
+# Start the integrated engine as a background daemon — works both locally and on Render.
+_supervisor_thread = threading.Thread(
+    target=_engine_supervisor, daemon=True, name="EngineSupervisor"
+)
+_supervisor_thread.start()
+print("[DASHBOARD] Integrated trading engine supervisor started.")
 
 
 if __name__ == "__main__":

@@ -55,18 +55,10 @@ if exist "keys.bat" (
     echo  [OK] Environment variables loaded.
 )
 
-REM ── Launch dashboard (web service) ───────────────────────
+REM ── Launch dashboard (web service + integrated trading engine) ──────────
 echo.
-echo  Starting dashboard server...
-start "Alien AI Trader - Dashboard" cmd /k "title Dashboard ^& .venv\Scripts\activate.bat ^& python dashboard.py"
-
-REM ── Wait for dashboard to be ready ──────────────────────
-echo  Waiting for dashboard to start...
-timeout /t 4 /nobreak >nul
-
-REM ── Launch worker (trading engine) ───────────────────────
-echo  Starting trading worker...
-start "Alien AI Trader - Worker" cmd /k "title Worker ^& .venv\Scripts\activate.bat ^& call keys.bat ^& python worker.py"
+echo  Starting Alien AI Trader...
+start "Alien AI Trader" cmd /k "title Alien AI Trader ^& .venv\Scripts\activate.bat ^& call keys.bat ^& python dashboard.py"
 
 REM ── Open browser ─────────────────────────────────────────
 timeout /t 2 /nobreak >nul
