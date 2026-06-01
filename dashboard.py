@@ -702,11 +702,16 @@ def _engine_supervisor() -> None:
 
 
 # Start the integrated engine as a background daemon — works both locally and on Render.
-_supervisor_thread = threading.Thread(
-    target=_engine_supervisor, daemon=True, name="EngineSupervisor"
-)
-_supervisor_thread.start()
-print("[DASHBOARD] Integrated trading engine supervisor started.")
+# Set DISABLE_INTEGRATED_ENGINE=true when deploying the Render background worker
+# so only one engine runs at a time (prevents duplicate orders).
+if os.environ.get("DISABLE_INTEGRATED_ENGINE", "false").lower() != "true":
+    _supervisor_thread = threading.Thread(
+        target=_engine_supervisor, daemon=True, name="EngineSupervisor"
+    )
+    _supervisor_thread.start()
+    print("[DASHBOARD] Integrated trading engine supervisor started.")
+else:
+    print("[DASHBOARD] Integrated engine disabled — external background worker is expected.")
 
 
 if __name__ == "__main__":
