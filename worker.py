@@ -2,6 +2,7 @@ import os
 import signal
 import time
 import threading
+import datetime
 import requests
 
 from crash_notifier import send_crash_notification
@@ -9,10 +10,41 @@ from trading_engine import TradingEngine
 from portfolio_ladder import PortfolioLadderScanner, integrate_ladder_with_engine, DEFAULT_PORTFOLIO
 
 # Built by Troy Walker of T-Dub's Apps - 2026-04-26
+# Cost-saving update 2026-06: MARKET_HOURS_ONLY pauses engine outside 9:30-16:00 ET Mon-Fri
 
 # 5 hours 59 minutes = 21540 seconds — restarts just under 6 hrs to avoid API rate charges.
 RUN_SECONDS     = int(os.environ.get("RUN_SECONDS",     "21540"))
 LADDER_INTERVAL = int(os.environ.get("LADDER_INTERVAL", "120"))
+
+# When True the engine pauses outside US market hours (saves ~65% of Render CPU cost)
+MARKET_HOURS_ONLY = os.environ.get("MARKET_HOURS_ONLY", "true").lower() == "true"
+
+
+def _is_market_hours() -> bool:
+    """Return True if current UTC time falls within US market hours Mon-Fri 9:30-16:00 ET.
+    ET = UTC-4 (EDT summer) / UTC-5 (EST winter). Using UTC-4 as conservative estimate.
+    """
+    now_utc = datetime.datetime.utcnow()
+    if now_utc.weekday() >= 5:          # Saturday=5, Sunday=6
+        return False
+    # Convert UTC -> ET (approximate: UTC-4 during EDT)
+    now_et = now_utc - datetime.timedelta(hours=4)
+    market_open  = now_et.replace(hour=9,  minute=25, second=0, microsecond=0)
+    market_close = now_et.replace(hour=16, minute=5,  second=0, microsecond=0)
+    return market_open <= now_et <= market_close
+
+
+def _wait_for_market_open(dashboard_url: str) -> None:
+    """Sleep until US market hours. Posts a status update to dashboard every 30 min."""
+    while not _is_market_hours():
+        now_utc = datetime.datetime.utcnow()
+        now_et  = now_utc - datetime.timedelta(hours=4)
+        msg = (f"[WORKER] Market closed — engine paused to save Render costs. "
+               f"ET: {now_et.strftime('%a %H:%M')}. Checking again in 30 min.")
+        print(msg)
+        safe_dashboard_notify(dashboard_url, "info", msg)
+        time.sleep(1800)   # check every 30 minutes
+    print("[WORKER] Market open — starting trading engine.")
 
 # Module-level refs so the shutdown() signal handler can reach them
 engine = None
@@ -105,6 +137,14 @@ def main():
         or os.environ.get("DASHBOARD_URL")
         or ""
     ).rstrip("/")
+
+    if not dashboard_url:
+        print("[WORKER] WARNING: DASHBOARD_BASE_URL is NOT SET.")
+        print("[WORKER] The UI will show no activity. Fix: Render dashboard -> worker -> Environment -> add DASHBOARD_BASE_URL.")
+
+    # Cost-saving: wait for market hours before starting engine
+    if MARKET_HOURS_ONLY:
+        _wait_for_market_open(dashboard_url)
 
     heartbeat_interval = int(os.environ.get("HEARTBEAT_EVERY_SECONDS", "10"))
 
@@ -208,6 +248,26 @@ def main():
                     print("[WORKER] No top 5 found. Likely no market candidates or scan issue.")
             except Exception as ex:
                 print(f"[WORKER] Ladder summary error: {ex}")
+
+        # Cost-saving: pause engine when US market closes
+        if MARKET_HOURS_ONLY and not _is_market_hours():
+            print("[WORKER] Market closed. Pausing engine to save Render costs.")
+            engine.stop()
+            ladder.stop()
+            safe_dashboard_notify(dashboard_url, "info", "Market closed — engine paused until next open.")
+            _wait_for_market_open(dashboard_url)
+            # Restart engine when market opens again
+            engine.start()
+            engine_thread = threading.Thread(
+                target=engine.run_forever, daemon=True, name="TradingEngine")
+            engine_thread.start()
+            ladder_thread = threading.Thread(
+                target=ladder.run_forever,
+                kwargs={"interval_seconds": LADDER_INTERVAL},
+                daemon=True, name="LadderScanner")
+            ladder_thread.start()
+            start = time.time()   # reset session timer
+            print("[WORKER] Engine restarted for new market session.")
 
         if now - start >= RUN_SECONDS:
             print(
