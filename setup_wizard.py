@@ -12,6 +12,7 @@ collecting your API keys, and writing them to keys.bat automatically.
 
 import os
 import sys
+import stat
 import time
 import webbrowser
 import re
@@ -309,11 +310,10 @@ def write_keys_sh(keys: dict):
         f.write("\n".join(lines))
 
     # Make the file executable on non-Windows
-    import stat as _stat
     if sys.platform != "win32":
         try:
             p = os.path.abspath("keys.sh")
-            os.chmod(p, os.stat(p).st_mode | _stat.S_IXUSR | _stat.S_IXGRP)
+            os.chmod(p, os.stat(p).st_mode | stat.S_IXUSR | stat.S_IXGRP)
         except Exception:
             pass
     success("keys.sh written successfully (Mac/Linux: run 'source keys.sh').")

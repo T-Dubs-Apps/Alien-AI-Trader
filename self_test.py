@@ -199,27 +199,40 @@ def test_forecasting_logic():
         import pandas as pd
         from forecasting import get_forecast, linear_forecast, momentum_forecast
 
-        closes = pd.Series([100.0 + i * 0.5 + (i % 3) * 0.2 for i in range(35)])
+        # Upward trend: expect direction='up'
+        up_closes = pd.Series([100.0 + i * 1.5 for i in range(35)])
+        lf_up = linear_forecast(up_closes)
+        assert isinstance(lf_up, dict), "linear_forecast must return dict"
+        assert "direction" in lf_up and "confidence" in lf_up, "missing keys in linear_forecast"
+        assert lf_up["direction"] == "up", f"rising series should forecast 'up', got '{lf_up['direction']}'"
+        assert lf_up["confidence"] > 0.8, f"clean trend should have high confidence, got {lf_up['confidence']}"
 
-        # linear_forecast
-        lf = linear_forecast(closes)
-        assert isinstance(lf, dict), "linear_forecast must return dict"
-        assert "direction" in lf and "confidence" in lf, "missing keys in linear_forecast"
-        assert lf["direction"] in ("up", "down", "neutral"), f"bad direction: {lf['direction']}"
+        # Downward trend: expect direction='down'
+        down_closes = pd.Series([200.0 - i * 1.5 for i in range(35)])
+        lf_down = linear_forecast(down_closes)
+        assert lf_down["direction"] == "down", \
+            f"falling series should forecast 'down', got '{lf_down['direction']}'"
 
-        # momentum_forecast
-        mf = momentum_forecast(closes)
+        # momentum_forecast on upward stacked series
+        mf = momentum_forecast(up_closes)
         assert isinstance(mf, dict), "momentum_forecast must return dict"
-        assert "phase" in mf, "missing 'phase' key"
         assert mf["phase"] in ("climbing", "falling", "consolidating", "unknown")
+        assert mf["phase"] == "climbing", \
+            f"strong uptrend should be 'climbing', got '{mf['phase']}'"
 
-        # get_forecast (combined)
-        gf = get_forecast(closes)
+        # get_forecast (combined) — upward trend should score > 0
+        gf = get_forecast(up_closes)
         assert isinstance(gf, dict), "get_forecast must return dict"
         assert "score" in gf, "missing 'score' key"
         assert 0.0 <= gf["score"] <= 25.0, f"score out of range: {gf['score']}"
-        assert gf["forecast_direction"] in ("up", "down", "neutral"), \
-            f"bad forecast_direction: {gf['forecast_direction']}"
+        assert gf["score"] > 0, f"upward trend should score > 0, got {gf['score']}"
+        assert gf["forecast_direction"] == "up", \
+            f"upward trend should forecast 'up', got '{gf['forecast_direction']}'"
+
+        # get_forecast — too few bars should return safe neutral defaults
+        short_closes = pd.Series([100.0, 101.0, 102.0])
+        gf_short = get_forecast(short_closes)
+        assert 0.0 <= gf_short["score"] <= 25.0, "short series should return valid score"
 
         record("Forecasting logic", True)
     except Exception as e:
@@ -231,18 +244,46 @@ def test_dynamic_position_logic():
         import pandas as pd
         from dynamic_position import calc_volatility, adjust_risk_for_streak, adjust_risk_for_volatility
 
+        # Normal volatility
         closes = pd.Series([100.0 + i * 0.3 + (i % 5) * 0.1 for i in range(26)])
-
         vol = calc_volatility(closes)
         assert isinstance(vol, float), "calc_volatility must return float"
         assert vol >= 0, "volatility must be non-negative"
 
-        adjusted = adjust_risk_for_volatility(2.0, vol)
-        assert 0.5 <= adjusted <= 5.0, f"risk out of bounds: {adjusted}"
+        # Fallback when insufficient data
+        short_closes = pd.Series([100.0, 101.0])
+        fallback_vol = calc_volatility(short_closes)
+        assert fallback_vol == 0.02, f"short series should use 2% fallback, got {fallback_vol}"
 
-        trade_log = [{"action": "SELL", "profit": 5.0}] * 5
-        streaked = adjust_risk_for_streak(2.0, trade_log)
-        assert isinstance(streaked, float), "streak result must be float"
+        # High volatility → risk reduced
+        high_vol_risk = adjust_risk_for_volatility(2.0, 0.05)  # vol > 4%
+        assert high_vol_risk < 2.0, f"high vol should reduce risk below 2.0, got {high_vol_risk}"
+        assert high_vol_risk >= 0.5, f"high vol risk should not go below min (0.5), got {high_vol_risk}"
+
+        # Low volatility → risk may increase
+        low_vol_risk = adjust_risk_for_volatility(2.0, 0.005)  # vol < 1%
+        assert low_vol_risk > 2.0, f"low vol should increase risk above 2.0, got {low_vol_risk}"
+        assert low_vol_risk <= 5.0, f"low vol risk should not exceed max (5.0), got {low_vol_risk}"
+
+        # Normal volatility → no change
+        normal_vol_risk = adjust_risk_for_volatility(2.0, 0.02)
+        assert normal_vol_risk == 2.0, f"normal vol should keep base risk, got {normal_vol_risk}"
+
+        # Streak: all wins → risk increases
+        win_log = [{"action": "SELL", "profit": 5.0}] * 5
+        win_risk = adjust_risk_for_streak(2.0, win_log)
+        assert win_risk >= 2.0, f"win streak should keep or increase risk, got {win_risk}"
+        assert win_risk <= 5.0, f"win risk should not exceed max (5.0), got {win_risk}"
+
+        # Streak: all losses → risk decreases
+        loss_log = [{"action": "SELL", "profit": -3.0}] * 5
+        loss_risk = adjust_risk_for_streak(2.0, loss_log)
+        assert loss_risk <= 2.0, f"loss streak should reduce risk, got {loss_risk}"
+        assert loss_risk >= 0.5, f"loss risk should not go below min (0.5), got {loss_risk}"
+
+        # Empty trade log → base risk unchanged
+        empty_risk = adjust_risk_for_streak(2.0, [])
+        assert empty_risk == 2.0, f"empty log should return base risk, got {empty_risk}"
 
         record("Dynamic position sizing", True)
     except Exception as e:
