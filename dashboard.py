@@ -680,10 +680,41 @@ def _engine_session(session_num: int) -> None:
         time.sleep(2)
 
 
+_MARKET_HOURS_ONLY = os.environ.get("MARKET_HOURS_ONLY", "true").lower() == "true"
+
+
+def _is_market_hours() -> bool:
+    """Return True if current time falls within US market hours Mon-Fri 9:25-16:05 ET."""
+    import datetime
+    now_utc = datetime.datetime.utcnow()
+    if now_utc.weekday() >= 5:
+        return False
+    now_et = now_utc - datetime.timedelta(hours=4)
+    open_  = now_et.replace(hour=9,  minute=25, second=0, microsecond=0)
+    close_ = now_et.replace(hour=16, minute=5,  second=0, microsecond=0)
+    return open_ <= now_et <= close_
+
+
+def _wait_for_market_open() -> None:
+    """Sleep until market hours. Updates worker status so the UI shows a reason."""
+    import datetime
+    while not _is_market_hours():
+        now_et = datetime.datetime.utcnow() - datetime.timedelta(hours=4)
+        msg = (f"Market closed — engine paused until 9:30 ET. "
+               f"ET now: {now_et.strftime('%a %H:%M')}. Checking again in 30 min.")
+        print(f"[ENGINE] {msg}")
+        _worker_status.update({"running": False, "message": msg, "last_heartbeat": int(time.time())})
+        socketio.emit("worker_status", _worker_status)
+        time.sleep(1800)
+    print("[ENGINE] Market open — starting trading session.")
+
+
 def _engine_supervisor() -> None:
     """Outer loop: starts sessions indefinitely, restarting after each one ends or crashes."""
     session = 0
     while True:
+        if _MARKET_HOURS_ONLY:
+            _wait_for_market_open()
         session += 1
         print(f"[ENGINE] {'Starting' if session == 1 else 'Restarting'} session #{session} ...")
         try:
