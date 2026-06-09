@@ -6,8 +6,9 @@ This file provides essential instructions and conventions for AI coding agents w
 
 ## Quick Start
 - **Install:** Run `INSTALL.ps1` with PowerShell (auto-installs Python 3.10+, creates `.venv`, installs dependencies)
-- **Configure API Keys:** Run `RUN-SETUP-WIZARD.bat` (writes `keys.bat`)
+- **Configure API Keys:** Run `LAUNCH.bat` → option `[3] SETUP KEYS`, or run `python setup_wizard.py` directly (writes `keys.bat`)
 - **Launch:** Run `START.bat` (activates venv, loads keys, starts dashboard and worker)
+- **Self-Test:** Run `SELF_TEST.bat` (or `python self_test.py`) to verify your installation
 
 ## Build/Test/Run Commands
 - **Install dependencies:** `INSTALL.ps1` (preferred) or manually: `python -m venv .venv && .venv\Scripts\activate && pip install -r requirements.txt`

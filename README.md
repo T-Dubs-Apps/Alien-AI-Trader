@@ -139,6 +139,35 @@ Your dashboard will open automatically at: **http://localhost:5000**
 
 ---
 
+## 🧪 Self-Test — Verify Your Installation
+
+Run the self-test at any time to confirm everything is working correctly:
+
+**Windows:** Double-click `SELF_TEST.bat`
+
+**Mac / Linux:**
+```bash
+python self_test.py
+```
+
+The self-test checks:
+- Python version (3.10+ required)
+- All required files are present
+- All Python packages are installed
+- Core logic (forecasting, indicators, position sizing)
+- API key configuration
+- Dashboard template
+
+If any tests fail, the self-test will explain what's wrong and ask if you'd like to auto-repair:
+
+```
+  Would you like to auto-repair the fixable issues now? (y/N):
+```
+
+You can also run `python self_test.py --repair` to repair automatically without prompting.
+
+---
+
 ## 📅 Daily Use
 
 ### Starting the app
@@ -378,16 +407,20 @@ The app deploys as two services on Render via `render.yaml`:
 Alien_AI_Trader/
 ├── LAUNCH.bat              ← Start here — installer menu
 ├── START.bat               ← Daily launch (after install)
+├── SELF_TEST.bat           ← Run self-test to verify installation
 ├── INSTALL.ps1             ← Full automated installer
-├── dashboard.py            ← Web server + dashboard + API
+├── ONE_CLICK_INSTALL.bat   ← Full install + GitHub push + Render deploy
+├── dashboard.py            ← Web server + dashboard + API + integrated engine
 ├── trading_engine.py       ← AI brain: signals, buy/sell, position sizing
-├── worker.py               ← Background runner: engine + ladder scanner
+├── worker.py               ← Standalone background runner (cloud/Render)
 ├── portfolio_ladder.py     ← Ladder scorer: ranks all stocks 0-100
 ├── forecasting.py          ← Predictive forecasting: regression + EMA stacking
+├── self_test.py            ← Self-test & diagnostic tool
 ├── setup_wizard.py         ← API key setup wizard
 ├── config_loader.py        ← Loads keys from env or config.json
 ├── backtest.py             ← Strategy backtesting engine
-├── requirements.txt        ← Python package list
+├── requirements.txt        ← Python package list (cloud/minimal)
+├── requirements-local.txt  ← Python package list (local/full install)
 ├── render.yaml             ← Cloud deployment blueprint (Render.com)
 ├── keys.bat                ← YOUR private API keys (never share this file!)
 └── templates/
@@ -399,7 +432,8 @@ Alien_AI_Trader/
 ## 🔒 Security — Keep Your Keys Safe
 
 **Never share these files with anyone:**
-- `keys.bat` — contains all your API keys
+- `keys.bat` — contains all your API keys (Windows)
+- `keys.sh` — contains all your API keys (Mac/Linux)
 - `.env` — alternative key storage
 - `config.json` — your configuration
 
@@ -452,7 +486,31 @@ Alpaca's free API has hourly usage limits. The worker automatically restarts eve
 The worker has a built-in crash recovery loop. If the trading engine or ladder scanner thread dies unexpectedly, the worker automatically restarts it and sends you an alert.
 
 **Q: Can I run this on a Mac or Linux?**
-The installer (LAUNCH.bat, INSTALL.ps1) is Windows-only. The Python code itself runs on any platform — Mac/Linux users can run `python dashboard.py` and `python worker.py` directly in separate terminals after installing requirements with `pip install -r requirements.txt`.
+The installer (LAUNCH.bat, INSTALL.ps1) is Windows-only. The Python code itself runs on any platform. Mac/Linux users:
+```bash
+# 1. Install Python 3.10+ if needed
+#    Mac:   brew install python@3.12
+#    Linux: sudo apt install python3.12 python3.12-venv
+
+# 2. Clone or extract the repo
+git clone https://github.com/T-Dubs-Apps/Alien-AI-Trader.git
+cd Alien-AI-Trader
+
+# 3. Create a virtual environment and install packages
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements-local.txt
+
+# 4. Set up your API keys
+python setup_wizard.py     # creates keys.sh with your keys
+
+# 5. Load keys and launch
+source keys.sh
+python dashboard.py        # opens dashboard at http://localhost:5000
+
+# 6. (Optional) Run the self-test first
+python self_test.py
+```
 
 ---
 

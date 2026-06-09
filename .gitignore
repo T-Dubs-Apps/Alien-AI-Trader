@@ -8,6 +8,7 @@ __pycache__/
 config.json
 trading_settings.json
 keys.bat
+keys.sh
 .env
 *.log
 dist/
@@ -18,6 +19,7 @@ build/
 
 # Local environment & keys
 keys.bat
+keys.sh
 .env
 .env.local
 .env.production
