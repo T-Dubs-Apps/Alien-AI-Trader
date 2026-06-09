@@ -105,9 +105,6 @@ services:
         value: "21540"
       - key: HEARTBEAT_EVERY_SECONDS
         value: "10"
-      # -- Engine runs inside the dashboard process (no separate worker needed) --
-      - key: DISABLE_INTEGRATED_ENGINE
-        value: "false"
       # -- Market hours only: engine pauses outside 9:30-16:00 ET Mon-Fri ------
       - key: MARKET_HOURS_ONLY
         value: "true"
@@ -115,4 +112,3 @@ services:
 # Built by Troy Walker of T-Dub's Apps -- 2026-04-28
 # 2026-06: Collapsed to single-service architecture. Worker service suspended on Render.
 #          Engine runs inside dashboard process. Saves ~$7/mo.
-# (sync:false means it will NOT auto-populate from this file)

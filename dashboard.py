@@ -63,8 +63,8 @@ _worker_status: Dict[str, Any] = {
     "running": False,
     "mode": os.environ.get("TRADING_MODE", "paper"),
     "stocks": [s.strip().upper() for s in os.environ.get("STOCK_LIST", "AAPL,GOOG,TSLA,MSFT,AMZN").split(",") if s.strip()],
-    "last_heartbeat": None,
-    "message": "Worker has not checked in yet."
+    "last_heartbeat": int(time.time()),
+    "message": "Engine starting up..."
 }
 
 # In-memory ladder top 20 (updated every heartbeat)
@@ -732,17 +732,13 @@ def _engine_supervisor() -> None:
         time.sleep(5)
 
 
-# Start the integrated engine as a background daemon — works both locally and on Render.
-# Set DISABLE_INTEGRATED_ENGINE=true when deploying the Render background worker
-# so only one engine runs at a time (prevents duplicate orders).
-if os.environ.get("DISABLE_INTEGRATED_ENGINE", "false").lower() != "true":
-    _supervisor_thread = threading.Thread(
-        target=_engine_supervisor, daemon=True, name="EngineSupervisor"
-    )
-    _supervisor_thread.start()
-    print("[DASHBOARD] Integrated trading engine supervisor started.")
-else:
-    print("[DASHBOARD] Integrated engine disabled — external background worker is expected.")
+# Engine always starts inside the dashboard process.
+# The separate worker service has been removed to reduce Render costs.
+_supervisor_thread = threading.Thread(
+    target=_engine_supervisor, daemon=True, name="EngineSupervisor"
+)
+_supervisor_thread.start()
+print("[DASHBOARD] Trading engine supervisor started.")
 
 
 if __name__ == "__main__":
