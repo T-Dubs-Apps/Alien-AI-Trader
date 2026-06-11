@@ -6,7 +6,7 @@
       "billingType": "monthly",
       "durationDays": 30,
       "price": 19.99,
-      "buyUrl": "https://buy.stripe.com/REPLACE_WITH_MONTHLY_LINK"
+      "buyUrl": "https://buy.stripe.com/00w3cv81S6yMdAP2ises005"
     },
     "annual": {
       "priceId": "price_1Th32JFZpNdjWKvv5QjUlYKy",
@@ -14,7 +14,7 @@
       "billingType": "annual",
       "durationDays": 365,
       "price": 99.0,
-      "buyUrl": "https://buy.stripe.com/REPLACE_WITH_ANNUAL_LINK"
+      "buyUrl": "https://buy.stripe.com/8x2bJ13LCbT68gvf5ees006"
     }
   },
   "ai-assistant-pro": {
