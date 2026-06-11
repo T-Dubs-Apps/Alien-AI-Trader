@@ -193,20 +193,27 @@ Write-Teach "          __pycache__ (compiled bytecode, auto-regenerated)."
 $sourceDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 if ($sourceDir -ne $installPath) {
-    $robocopyArgs = @(
-        $sourceDir, $installPath,
-        "/E",
-        "/XD", ".venv", "__pycache__", ".git", ".claude",
-        "/XF", "keys.bat", "*.pyc", "*.pyo", "*.db", "*.sqlite3",
-        "/NFL", "/NDL", "/NP", "/NJS", "/NJH"
-    )
-    $rc = (Start-Process "robocopy" -ArgumentList $robocopyArgs -Wait -PassThru).ExitCode
+    # Direct invocation (&) quotes paths with spaces correctly — Start-Process
+    # -ArgumentList does NOT, which silently broke installs from folders like
+    # "Alien-AI-Trader-main (2)".
+    & robocopy $sourceDir $installPath /E `
+        /XD .venv __pycache__ .git .claude .github legacy `
+        /XF keys.bat license.json trading_settings.json .env "*.bak" "*.pyc" "*.pyo" "*.db" "*.sqlite3" `
+        /NFL /NDL /NP /NJS /NJH | Out-Null
+    $rc = $LASTEXITCODE
     if ($rc -ge 8) {
-        Write-Err "File copy encountered errors (robocopy exit: $rc)."
-        Write-Warn "Continuing anyway — some files may be missing."
-    } else {
-        Write-OK "Files copied successfully."
+        Write-Err "File copy FAILED (robocopy exit: $rc). Cannot continue without the app files."
+        Write-Info "Make sure the extracted folder is not open in another program and try again."
+        Pause-Continue "Press ENTER to exit..."
+        exit 1
     }
+    # Sanity check: the app's core files must exist or nothing will run later
+    if (-not (Test-Path (Join-Path $installPath "dashboard.py"))) {
+        Write-Err "Copy verification failed — dashboard.py is missing from $installPath"
+        Pause-Continue "Press ENTER to exit..."
+        exit 1
+    }
+    Write-OK "Files copied and verified."
 } else {
     Write-Info "Source and destination are the same — no copy needed."
 }
