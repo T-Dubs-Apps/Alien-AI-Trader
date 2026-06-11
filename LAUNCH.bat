@@ -51,7 +51,13 @@ echo.
 echo  Starting installer...
 echo  (This may take a few minutes — installing Python packages)
 echo.
-powershell -ExecutionPolicy Bypass -File "INSTALL.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "INSTALL.ps1"
+if errorlevel 1 (
+    echo.
+    echo  [ERROR] The installer did not finish. Read any message above,
+    echo          then try again or run INSTALL.ps1 directly:
+    echo          Right-click INSTALL.ps1 - "Run with PowerShell"
+)
 goto :END
 
 REM ─────────────────────────────────────────────────────────────
@@ -95,3 +101,4 @@ echo   Thank you for choosing Alien AI Trader!
 echo   Dashboard: http://localhost:5000
 echo  ══════════════════════════════════════════════════════════
 echo.
+pause
