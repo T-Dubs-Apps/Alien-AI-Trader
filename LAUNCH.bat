@@ -67,7 +67,7 @@ REM -------------------------------------------------------------
 :RUN_NOW
 echo.
 if exist "START.bat" (
-    call START.bat
+    call "%~dp0START.bat"
 ) else (
     echo  [ERROR] START.bat not found. Please run option 1 to install first.
     pause

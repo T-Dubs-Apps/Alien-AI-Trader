@@ -40,14 +40,15 @@ if not exist "keys.bat" (
 
 REM -- Load environment variables ---------------------------
 if exist "keys.bat" (
-    call keys.bat
+    call "%~dp0keys.bat"
     echo  [OK] Environment variables loaded.
 )
 
 REM -- Launch dashboard (web service + integrated trading engine) ----------
+REM RUN_APP.bat does activate + keys + python with no quoting tricks.
 echo.
 echo  Starting Alien AI Trader...
-start "Alien AI Trader" cmd /k "title Alien AI Trader ^& .venv\Scripts\activate.bat ^& call keys.bat ^& python dashboard.py"
+start "Alien AI Trader" /D "%~dp0" cmd /k "%~dp0RUN_APP.bat"
 
 REM -- Open browser -----------------------------------------
 timeout /t 2 /nobreak >nul

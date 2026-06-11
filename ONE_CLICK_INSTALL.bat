@@ -82,7 +82,7 @@ REM -------------------------------------------------------------
 :github_push
 REM Load keys into this session so deploy_to_render.py can read them
 if exist "keys.bat" (
-    call keys.bat
+    call "%~dp0keys.bat"
 ) else (
     echo  [WARN] keys.bat not found. Run the setup wizard first.
     echo  Double-click RUN-SETUP-WIZARD.bat then re-run this file.
@@ -192,7 +192,7 @@ REM Launch local app if not already running.
 REM The AI trading engine runs INSIDE dashboard.py - one window is all you need.
 if exist ".venv\Scripts\python.exe" (
     echo  Starting Alien AI Trader...
-    start "Alien AI Trader" cmd /k "title Alien AI Trader ^& cd /d "%~dp0" ^& call .venv\Scripts\activate.bat ^& call keys.bat ^& python dashboard.py"
+    start "Alien AI Trader" /D "%~dp0" cmd /k "%~dp0RUN_APP.bat"
     timeout /t 4 /nobreak >nul
     echo  Opening browser...
     start http://localhost:5000
@@ -223,7 +223,7 @@ goto :eof
 REM -------------------------------------------------------------
 :launch_app
 if exist "START.bat" (
-    call START.bat
+    call "%~dp0START.bat"
 ) else (
     echo  [ERROR] START.bat not found. Run option 1 to install first.
     pause
