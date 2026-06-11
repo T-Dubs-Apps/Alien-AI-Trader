@@ -13,25 +13,14 @@ echo.
 REM -- Locate script directory ------------------------------
 cd /d "%~dp0"
 
-REM -- Check Python -----------------------------------------
-python --version >nul 2>&1
-if errorlevel 1 (
-    echo  [ERROR] Python not found.
-    echo.
-    echo  Please run INSTALL.ps1 first:
-    echo    Right-click INSTALL.ps1 -> Run with PowerShell
-    echo.
-    pause
-    exit /b 1
-)
-
 REM -- Activate virtual environment -------------------------
-if exist ".venv\Scripts\activate.bat" (
+REM The app's own venv is all we need - no system Python required.
+if exist ".venv\Scripts\python.exe" (
     call .venv\Scripts\activate.bat
     echo  [OK] Virtual environment activated.
 ) else (
     echo  [WARN] No virtual environment found. Running INSTALL.ps1 now...
-    powershell -ExecutionPolicy Bypass -File "INSTALL.ps1"
+    powershell -NoProfile -ExecutionPolicy Bypass -File "INSTALL.ps1"
     if errorlevel 1 ( pause & exit /b 1 )
     call .venv\Scripts\activate.bat
 )
