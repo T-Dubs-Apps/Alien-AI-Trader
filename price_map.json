@@ -1,7 +1,7 @@
 {
   "alien-ai-trader": {
     "monthly": {
-      "priceId": "price_REPLACE_WITH_MONTHLY_ID",
+      "priceId": "price_1TgxIPFZpNdjWKvv9aLmJK1E",
       "mode": "subscription",
       "billingType": "monthly",
       "durationDays": 30,
@@ -9,7 +9,7 @@
       "buyUrl": "https://buy.stripe.com/REPLACE_WITH_MONTHLY_LINK"
     },
     "annual": {
-      "priceId": "price_REPLACE_WITH_ANNUAL_ID",
+      "priceId": "price_1Th32JFZpNdjWKvv5QjUlYKy",
       "mode": "subscription",
       "billingType": "annual",
       "durationDays": 365,
