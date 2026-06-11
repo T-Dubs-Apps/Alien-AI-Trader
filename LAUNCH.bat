@@ -1,39 +1,42 @@
 @echo off
 chcp 65001 >nul 2>&1
-title Alien AI Trader — Installer
+title Alien AI Trader - Installer
 color 0B
 cd /d "%~dp0"
 
 echo.
-echo  ╔══════════════════════════════════════════════════════════╗
-echo  ║                                                          ║
-echo  ║          👽  ALIEN AI TRADER  👽                         ║
-echo  ║          AI-Powered Stock Trading                        ║
-echo  ║          Built by Troy Walker — T-Dub's Apps            ║
-echo  ║                                                          ║
-echo  ╚══════════════════════════════════════════════════════════╝
+echo  +==========================================================+
+echo  ^|                                                          ^|
+echo  ^|                 ALIEN  AI  TRADER                        ^|
+echo  ^|              AI-Powered Stock Trading                    ^|
+echo  ^|         Built by Troy Walker - T-Dub's Apps              ^|
+echo  ^|                                                          ^|
+echo  +==========================================================+
 echo.
 
-REM ── Open the animated splash screen in the default browser ────
+REM -- Open the animated splash screen in the default browser ----
 echo  Opening launch screen...
 if exist "splash\index.html" (
     start "" "splash\index.html"
     timeout /t 2 /nobreak >nul
 ) else (
-    echo  [INFO] Splash screen not found — continuing with console installer.
+    echo  [INFO] Splash screen not found - continuing with console installer.
 )
 
-REM ── Show menu ─────────────────────────────────────────────────
+REM -- Show menu -------------------------------------------------
 echo.
-echo  What would you like to do?
+echo  ============================================================
+echo   Just press ENTER to INSTALL - or pick another option:
+echo  ============================================================
 echo.
-echo    [1] INSTALL — Copy to your PC and run full setup
-echo    [2] RUN NOW — I already installed, just launch the app
-echo    [3] SETUP KEYS — Re-run the API key wizard
-echo    [4] OPEN README — Read the full documentation
+echo    [1] INSTALL - Copy to your PC and run full setup
+echo    [2] RUN NOW - I already installed, just launch the app
+echo    [3] SETUP KEYS - Re-run the API key wizard
+echo    [4] OPEN README - Read the full documentation
 echo    [5] EXIT
 echo.
-set /p "CHOICE=  Enter 1-5: "
+set /p "CHOICE=  Press ENTER to install (or type 1-5): "
+if "%CHOICE%"=="" set "CHOICE=1"
 
 if "%CHOICE%"=="1" goto :INSTALL
 if "%CHOICE%"=="2" goto :RUN_NOW
@@ -45,11 +48,11 @@ echo  [ERROR] Invalid choice. Please run again and enter 1-5.
 pause
 goto :END
 
-REM ─────────────────────────────────────────────────────────────
+REM -------------------------------------------------------------
 :INSTALL
 echo.
 echo  Starting installer...
-echo  (This may take a few minutes — installing Python packages)
+echo  (This may take a few minutes - installing Python packages)
 echo.
 powershell -NoProfile -ExecutionPolicy Bypass -File "INSTALL.ps1"
 if errorlevel 1 (
@@ -60,7 +63,7 @@ if errorlevel 1 (
 )
 goto :END
 
-REM ─────────────────────────────────────────────────────────────
+REM -------------------------------------------------------------
 :RUN_NOW
 echo.
 if exist "START.bat" (
@@ -71,7 +74,7 @@ if exist "START.bat" (
 )
 goto :END
 
-REM ─────────────────────────────────────────────────────────────
+REM -------------------------------------------------------------
 :SETUP_KEYS
 echo.
 if exist ".venv\Scripts\python.exe" (
@@ -83,7 +86,7 @@ if exist ".venv\Scripts\python.exe" (
 )
 goto :END
 
-REM ─────────────────────────────────────────────────────────────
+REM -------------------------------------------------------------
 :OPEN_README
 echo.
 if exist "README.md" (
@@ -93,12 +96,12 @@ if exist "README.md" (
 )
 goto :END
 
-REM ─────────────────────────────────────────────────────────────
+REM -------------------------------------------------------------
 :END
 echo.
-echo  ══════════════════════════════════════════════════════════
+echo  ==========================================================
 echo   Thank you for choosing Alien AI Trader!
 echo   Dashboard: http://localhost:5000
-echo  ══════════════════════════════════════════════════════════
+echo  ==========================================================
 echo.
 pause

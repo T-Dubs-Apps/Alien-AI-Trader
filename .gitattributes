@@ -1,0 +1,8 @@
+# Batch files MUST keep Windows (CRLF) line endings — cmd.exe goto/labels
+# break with Unix (LF) endings. -text stores bytes exactly as committed so
+# GitHub ZIP downloads and clones both receive working files.
+*.bat -text
+*.ps1 -text
+
+# Everything else: normal auto handling
+* text=auto

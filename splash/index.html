@@ -617,21 +617,20 @@ function setStatus(msg) {
 
 function startInstall() {
   revUp();
-  setStatus('Switch to the console window to complete installation…');
   markStep(1);
-  // If we're running from the disc/folder, the console installer is already open.
-  // The user just needs to switch to it and press enter.
-  setTimeout(() => {
-    setStatus('Installation in progress in the console window. Follow the prompts!');
-  }, 2500);
+  setStatus('👉 INSTALL IS READY: find the black "Alien AI Trader — Installer" window in your taskbar and press ENTER there!');
+  // A browser page cannot launch programs (security) — the console window
+  // opened by LAUNCH.bat is already waiting one keypress away.
+  let flashes = 0;
+  const flasher = setInterval(() => {
+    statusEl.style.color = (flashes % 2 === 0) ? '#4ade80' : '#e2e8f0';
+    if (++flashes > 10) { clearInterval(flasher); statusEl.style.color = ''; }
+  }, 400);
 }
 
 function openWizard() {
   revUp();
-  setStatus('Opening API Key Setup Wizard — switch to the console window…');
-  setTimeout(() => {
-    setStatus('Follow each step in the wizard to register and enter your API keys.');
-  }, 2000);
+  setStatus('👉 In the black console window: type 3 and press ENTER — or double-click "SETUP API KEYS.bat" in the app folder.');
 }
 
 function openDocs() {

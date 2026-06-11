@@ -1,25 +1,25 @@
 @echo off
 chcp 65001 >nul 2>&1
-title 👽 Alien AI Trader — Download and Install
+title  Alien AI Trader - Download and Install
 color 0B
 echo.
-echo  ╔══════════════════════════════════════════════════════════╗
-echo  ║                                                          ║
-echo  ║          👽  ALIEN AI TRADER                            ║
-echo  ║              Download and Install                        ║
-echo  ║          Built by Troy Walker — T-Dub's Apps            ║
-echo  ║                                                          ║
-echo  ║  This will:                                              ║
-echo  ║    1. Download the app from GitHub                       ║
-echo  ║    2. Run the full installer automatically               ║
-echo  ║    3. Walk you through getting your API keys             ║
-echo  ║    4. Deploy to the cloud (optional)                     ║
-echo  ║    5. Launch your dashboard                              ║
-echo  ║                                                          ║
-echo  ╚══════════════════════════════════════════════════════════╝
+echo  +==========================================================+
+echo  ^|                                                          ^|
+echo  ^|            ALIEN AI TRADER                            ^|
+echo  ^|              Download and Install                        ^|
+echo  ^|          Built by Troy Walker - T-Dub's Apps            ^|
+echo  ^|                                                          ^|
+echo  ^|  This will:                                              ^|
+echo  ^|    1. Download the app from GitHub                       ^|
+echo  ^|    2. Run the full installer automatically               ^|
+echo  ^|    3. Walk you through getting your API keys             ^|
+echo  ^|    4. Deploy to the cloud (optional)                     ^|
+echo  ^|    5. Launch your dashboard                              ^|
+echo  ^|                                                          ^|
+echo  +==========================================================+
 echo.
 
-REM ── Check for git ────────────────────────────────────────────
+REM -- Check for git --------------------------------------------
 where git >nul 2>&1
 if errorlevel 1 (
     echo  [ERROR] Git is not installed on this machine.
@@ -39,13 +39,13 @@ if errorlevel 1 (
 echo  [OK] Git found.
 echo.
 
-REM ── Choose install location ───────────────────────────────────
+REM -- Choose install location -----------------------------------
 set "INSTALL_DIR=%USERPROFILE%\Desktop\Alien_AI_Trader"
 
 echo  Install location: %INSTALL_DIR%
 echo.
 
-REM ── Clone or update the repo ──────────────────────────────────
+REM -- Clone or update the repo ----------------------------------
 if exist "ONE_CLICK_INSTALL.bat" (
     echo  [OK] Alien AI Trader is already available in this folder.
     set "INSTALL_DIR=%CD%"

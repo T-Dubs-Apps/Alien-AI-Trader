@@ -1,36 +1,36 @@
 @echo off
 chcp 65001 >nul 2>&1
-title 👽 Alien AI Trader — One-Click Install and Deploy
+title  Alien AI Trader - One-Click Install and Deploy
 color 0B
 cd /d "%~dp0"
 
 echo.
-echo  ╔══════════════════════════════════════════════════════════╗
-echo  ║                                                          ║
-echo  ║          👽  ALIEN AI TRADER                            ║
-echo  ║              One-Click Install and Deploy               ║
-echo  ║          Built by Troy Walker — T-Dub's Apps            ║
-echo  ║                                                          ║
-echo  ║  What this does (fully automated):                       ║
-echo  ║    PHASE 1 — Install on this machine                     ║
-echo  ║              Python, packages, API keys, shortcut        ║
-echo  ║    PHASE 2 — Push latest code to GitHub                  ║
-echo  ║              So Render always gets the newest version     ║
-echo  ║    PHASE 3 — Deploy to Render (cloud)                    ║
-echo  ║              Push your API keys and trigger redeploy     ║
-echo  ║    PHASE 4 — Open dashboards                             ║
-echo  ║              Local + cloud, both ready to trade          ║
-echo  ║                                                          ║
-echo  ╚══════════════════════════════════════════════════════════╝
+echo  +==========================================================+
+echo  ^|                                                          ^|
+echo  ^|            ALIEN AI TRADER                            ^|
+echo  ^|              One-Click Install and Deploy               ^|
+echo  ^|          Built by Troy Walker - T-Dub's Apps            ^|
+echo  ^|                                                          ^|
+echo  ^|  What this does (fully automated):                       ^|
+echo  ^|    PHASE 1 - Install on this machine                     ^|
+echo  ^|              Python, packages, API keys, shortcut        ^|
+echo  ^|    PHASE 2 - Push latest code to GitHub                  ^|
+echo  ^|              So Render always gets the newest version     ^|
+echo  ^|    PHASE 3 - Deploy to Render (cloud)                    ^|
+echo  ^|              Push your API keys and trigger redeploy     ^|
+echo  ^|    PHASE 4 - Open dashboards                             ^|
+echo  ^|              Local + cloud, both ready to trade          ^|
+echo  ^|                                                          ^|
+echo  +==========================================================+
 echo.
 
-REM ── Open animated splash screen ──────────────────────────────
+REM -- Open animated splash screen ------------------------------
 if exist "splash\index.html" (
     start "" "splash\index.html"
     timeout /t 2 /nobreak >nul
 )
 
-REM ── Detect if already installed ──────────────────────────────
+REM -- Detect if already installed ------------------------------
 set "ALREADY_INSTALLED=0"
 if exist ".venv\Scripts\python.exe" (
     if exist "keys.bat" (
@@ -51,12 +51,12 @@ if "%ALREADY_INSTALLED%"=="1" (
     goto :skip_local_install
 )
 
-REM ─────────────────────────────────────────────────────────────
+REM -------------------------------------------------------------
 :full_install
 echo.
-echo  ══════════════════════════════════════════════════════════
-echo   PHASE 1 of 4 — Local Install
-echo  ══════════════════════════════════════════════════════════
+echo  ==========================================================
+echo   PHASE 1 of 4 - Local Install
+echo  ==========================================================
 echo.
 echo  Starting installer... follow the prompts.
 echo  (The wizard will open each API service in your browser)
@@ -73,12 +73,12 @@ echo.
 echo  [OK] PHASE 1 complete.
 goto :github_push
 
-REM ─────────────────────────────────────────────────────────────
+REM -------------------------------------------------------------
 :skip_local_install
 echo.
 echo  [SKIP] Local install skipped (already installed).
 
-REM ─────────────────────────────────────────────────────────────
+REM -------------------------------------------------------------
 :github_push
 REM Load keys into this session so deploy_to_render.py can read them
 if exist "keys.bat" (
@@ -91,12 +91,12 @@ if exist "keys.bat" (
 )
 
 echo.
-echo  ══════════════════════════════════════════════════════════
-echo   PHASE 2 of 4 — GitHub Sync
-echo  ══════════════════════════════════════════════════════════
+echo  ==========================================================
+echo   PHASE 2 of 4 - GitHub Sync
+echo  ==========================================================
 echo.
 echo  Pushing latest code to GitHub so Render gets the newest version...
-echo  (Your private keys are NEVER pushed — they are gitignored)
+echo  (Your private keys are NEVER pushed - they are gitignored)
 echo.
 
 where git >nul 2>&1
@@ -141,12 +141,12 @@ if errorlevel 1 (
     echo  [OK] Code pushed to GitHub successfully.
 )
 
-REM ─────────────────────────────────────────────────────────────
+REM -------------------------------------------------------------
 :render_deploy
 echo.
-echo  ══════════════════════════════════════════════════════════
-echo   PHASE 3 of 4 — Render Cloud Deploy
-echo  ══════════════════════════════════════════════════════════
+echo  ==========================================================
+echo   PHASE 3 of 4 - Render Cloud Deploy
+echo  ==========================================================
 echo.
 
 if "%RENDER_API_KEY%"=="" (
@@ -154,8 +154,8 @@ if "%RENDER_API_KEY%"=="" (
     echo.
     echo  To enable automatic Render deployment:
     echo    1. Log in to render.com
-    echo    2. Click your profile icon  →  Account Settings
-    echo    3. Click API Keys  →  Create API Key
+    echo    2. Click your profile icon  ->  Account Settings
+    echo    3. Click API Keys  ->  Create API Key
     echo    4. Copy the key (starts with rnd_...)
     echo    5. Add this line to keys.bat:
     echo         set RENDER_API_KEY=rnd_xxxxxxxxxxxxxxxxxxxx
@@ -180,16 +180,16 @@ if exist ".venv\Scripts\python.exe" (
     goto :done
 )
 
-REM ─────────────────────────────────────────────────────────────
+REM -------------------------------------------------------------
 :done
 echo.
-echo  ══════════════════════════════════════════════════════════
-echo   PHASE 4 of 4 — Opening Dashboards
-echo  ══════════════════════════════════════════════════════════
+echo  ==========================================================
+echo   PHASE 4 of 4 - Opening Dashboards
+echo  ==========================================================
 echo.
 
 REM Launch local app if not already running.
-REM The AI trading engine runs INSIDE dashboard.py — one window is all you need.
+REM The AI trading engine runs INSIDE dashboard.py - one window is all you need.
 if exist ".venv\Scripts\python.exe" (
     echo  Starting Alien AI Trader...
     start "Alien AI Trader" cmd /k "title Alien AI Trader ^& cd /d "%~dp0" ^& call .venv\Scripts\activate.bat ^& call keys.bat ^& python dashboard.py"
@@ -205,22 +205,22 @@ if not "%RENDER_API_KEY%"=="" (
 )
 
 echo.
-echo  ╔══════════════════════════════════════════════════════════╗
-echo  ║                                                          ║
-echo  ║   ✦  All Done! Alien AI Trader is running.              ║
-echo  ║                                                          ║
-echo  ║   Local:  http://localhost:5000                          ║
-echo  ║   Cloud:  alien-ai-trader-dashboard.onrender.com         ║
-echo  ║                                                          ║
-echo  ║   Tip: The cloud service takes 3-5 min to rebuild.      ║
-echo  ║   Tip: Start in Paper Trading mode (fake money) first!  ║
-echo  ║                                                          ║
-echo  ╚══════════════════════════════════════════════════════════╝
+echo  +==========================================================+
+echo  ^|                                                          ^|
+echo  ^|   *  All Done! Alien AI Trader is running.              ^|
+echo  ^|                                                          ^|
+echo  ^|   Local:  http://localhost:5000                          ^|
+echo  ^|   Cloud:  alien-ai-trader-dashboard.onrender.com         ^|
+echo  ^|                                                          ^|
+echo  ^|   Tip: The cloud service takes 3-5 min to rebuild.      ^|
+echo  ^|   Tip: Start in Paper Trading mode (fake money) first!  ^|
+echo  ^|                                                          ^|
+echo  +==========================================================+
 echo.
 pause
 goto :eof
 
-REM ─────────────────────────────────────────────────────────────
+REM -------------------------------------------------------------
 :launch_app
 if exist "START.bat" (
     call START.bat
