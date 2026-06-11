@@ -42,6 +42,9 @@ TWILIO_FROM_NUMBER = os.getenv('TWILIO_FROM_NUMBER')
 
 def register_license_routes(app):
     init_db()
+    if STRIPE_SECRET_KEY and LICENSE_SECRET == 'CHANGE_ME':
+        print("[LICENSE] WARNING: LICENSE_SECRET is still the default. "
+              "Set a strong LICENSE_SECRET env var before selling licenses.")
 
     @app.route('/api/license/start', methods=['POST'])
     def start_verification():
@@ -198,6 +201,56 @@ def register_license_routes(app):
             'billingType': price_info.get('billingType', 'monthly'),
         }
         return jsonify(response)
+
+    @app.route('/api/license/pricing', methods=['GET'])
+    def license_pricing():
+        """Public price list for one app — the user's installed copy fetches this
+        so Buy buttons always show current prices without re-downloading the app."""
+        app_id = (request.args.get('appId') or '').strip()
+        if not app_id:
+            return jsonify({'error': 'appId required'}), 400
+        tiers = load_price_map().get(app_id, {})
+        out = []
+        for tier, info in tiers.items():
+            if isinstance(info, dict):
+                out.append({
+                    'tier': tier,
+                    'price': info.get('price'),
+                    'billingType': info.get('billingType', 'one_time'),
+                    'buyUrl': info.get('buyUrl', ''),
+                })
+        return jsonify(out), 200
+
+    @app.route('/api/license/validate', methods=['POST'])
+    def validate_license():
+        """Activation check used by installed copies of the app.
+        Order of truth: local DB first, then Stripe directly — so licenses
+        survive a Render disk wipe and Payment Link purchases are honored."""
+        payload = request.json or {}
+        email = (payload.get('email') or '').strip()
+        app_id = (payload.get('appId') or '').strip()
+        if not email or not app_id:
+            return jsonify({'error': 'email and appId required'}), 400
+
+        record = get_license(email, app_id)
+        if record and record['expires_at'] > datetime.now(timezone.utc):
+            return jsonify(_license_response(record)), 200
+
+        found = find_active_stripe_purchase(email, app_id)
+        if found:
+            license_key = record['license_key'] if record else generate_license_key()
+            store_license(
+                email=email,
+                app_id=app_id,
+                tier=found['tier'],
+                license_key=license_key,
+                expires_at=found['expires_at'],
+                session_id='stripe-lookup',
+                billing_type=found['billing_type'],
+            )
+            return jsonify(_license_response(get_license(email, app_id))), 200
+
+        return jsonify({'status': 'none'}), 200
 
     @app.route('/api/license/status', methods=['POST'])
     def license_status():
@@ -369,6 +422,59 @@ def parse_license_row(row):
         'expires_at': datetime.fromisoformat(row['expires_at']),
         'billing_type': row['billing_type'],
     }
+
+
+def _license_response(record):
+    return {
+        'appId': record['app_id'],
+        'tier': record['tier'],
+        'email': record['email'],
+        'licenseKey': record['license_key'],
+        'status': 'active',
+        'activatedAt': int(record['activated_at'].timestamp() * 1000),
+        'expiresAt': int(record['expires_at'].timestamp() * 1000),
+        'billingType': record['billing_type'],
+    }
+
+
+def find_active_stripe_purchase(email, app_id):
+    """Look the buyer up directly in Stripe by email and return their active
+    subscription tier, or None. Stripe is the permanent record — the local
+    SQLite DB is just a cache that may be wiped on redeploy."""
+    if not STRIPE_SECRET_KEY:
+        return None
+    stripe.api_key = STRIPE_SECRET_KEY
+
+    app_prices = load_price_map().get(app_id, {})
+    price_to_tier = {}
+    for tier, info in app_prices.items():
+        pid = info.get('priceId') if isinstance(info, dict) else info
+        if pid:
+            price_to_tier[pid] = (tier, info if isinstance(info, dict) else {})
+
+    try:
+        customers = stripe.Customer.list(email=email, limit=10)
+        for cust in customers.get('data', []):
+            subs = stripe.Subscription.list(customer=cust['id'], status='active', limit=20)
+            for sub in subs.get('data', []):
+                for item in sub.get('items', {}).get('data', []):
+                    pid = item.get('price', {}).get('id')
+                    if pid in price_to_tier:
+                        tier, info = price_to_tier[pid]
+                        period_end = sub.get('current_period_end')
+                        if period_end:
+                            expires_at = datetime.fromtimestamp(period_end, tz=timezone.utc)
+                        else:
+                            days = info.get('durationDays', 30)
+                            expires_at = datetime.now(timezone.utc) + timedelta(days=days)
+                        return {
+                            'tier': tier,
+                            'expires_at': expires_at,
+                            'billing_type': info.get('billingType', 'monthly'),
+                        }
+    except Exception:
+        return None
+    return None
 
 
 def hash_code(code):

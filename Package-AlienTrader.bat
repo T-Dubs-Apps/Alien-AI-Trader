@@ -45,7 +45,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "/XD '.venv' '__pycache__' '.git' '.claude' '.github' 'installer' 'legacy' " ^
         "'black_box' 'agent ADAM' 'adam_agent' 'user_cloud' 'backup files zipped' " ^
         "'Extractor zip location' " ^
-    "/XF 'keys.bat' '.env' 'trading_settings.json' 'config.json' '*.bak' " ^
+    "/XF 'keys.bat' 'license.json' '.env' 'trading_settings.json' 'config.json' '*.bak' " ^
         "'*.code-workspace' 'export_render_env.*' '*.pyc' '*.pyo' '*.db' " ^
         "'*.sqlite3' '*.log' " ^
     "/NFL /NDL /NP /NJS /NJH | Out-Null; " ^

@@ -26,6 +26,9 @@ keys.bat
 trading_settings.json
 install_config.json
 
+# Per-machine license activation (issued after purchase — never commit)
+license.json
+
 # Virtual environment
 .venv/
 venv/

@@ -698,6 +698,34 @@
             </div>
           </div>
 
+          <!-- License / Live Trading -->
+          <div class="col-lg-6">
+            <div class="glass-card">
+              <div class="section-title"><i class="fa-solid fa-key me-1"></i>License — Live Trading</div>
+              <div class="d-flex align-items-center gap-3 mb-2">
+                <span id="licensePill" class="status-pill unknown">Checking…</span>
+                <span class="small-muted" id="licenseInfo"></span>
+              </div>
+              <div class="small-muted mb-3">
+                Paper trading (fake money) is <strong>free forever</strong>.
+                A license unlocks <strong>live trading</strong> with your real Alpaca account.
+              </div>
+              <div class="d-flex gap-2 mb-3 flex-wrap" id="licenseBuyButtons"></div>
+              <div class="row g-2">
+                <div class="col-12 col-md-7">
+                  <input id="licEmail" type="email" class="form-control form-control-sm" placeholder="Email used at purchase">
+                </div>
+                <div class="col-12 col-md-5">
+                  <input id="licKey" type="text" class="form-control form-control-sm" placeholder="License key (optional)">
+                </div>
+              </div>
+              <button class="btn btn-sm btn-outline-secondary mt-2" onclick="activateLicense()">
+                <i class="fa-solid fa-unlock me-1"></i>Activate
+              </button>
+              <div class="small-muted mt-2" id="licenseResult"></div>
+            </div>
+          </div>
+
           <!-- Notification Settings -->
           <div class="col-lg-6">
             <div class="glass-card">
@@ -1581,6 +1609,73 @@
     }
 
     // ═══════════════════════════════════════════
+    //  LICENSE (paper free / live licensed)
+    // ═══════════════════════════════════════════
+    async function fetchLicenseStatus() {
+      const pill = document.getElementById('licensePill');
+      const info = document.getElementById('licenseInfo');
+      try {
+        const r = await fetch('/api/license/local');
+        const d = await r.json();
+        if (d.licensed) {
+          pill.className = 'status-pill online';
+          pill.innerHTML = '&#x25cf; Licensed';
+          const exp = d.expiresAt ? new Date(+d.expiresAt).toLocaleDateString() : '';
+          info.textContent = (d.tier ? d.tier + ' plan' : '') + (exp ? ' · renews/expires ' + exp : '');
+        } else {
+          pill.className = 'status-pill unknown';
+          pill.innerHTML = '&#x25cf; Free plan';
+          info.textContent = 'Paper trading only';
+        }
+      } catch {}
+    }
+
+    async function loadLicensePricing() {
+      const wrap = document.getElementById('licenseBuyButtons');
+      try {
+        const r = await fetch('/api/license/pricing-proxy');
+        const tiers = await r.json();
+        wrap.innerHTML = '';
+        tiers.forEach(t => {
+          if (!t.buyUrl || t.buyUrl.indexOf('REPLACE') !== -1) return;
+          const label = t.billingType === 'annual'
+            ? `Buy Annual — $${t.price}/yr`
+            : `Buy Monthly — $${t.price}/mo`;
+          const a = document.createElement('a');
+          a.href = t.buyUrl; a.target = '_blank'; a.rel = 'noopener';
+          a.className = 'btn btn-sm btn-success';
+          a.innerHTML = '<i class="fa-solid fa-cart-shopping me-1"></i>' + label;
+          wrap.appendChild(a);
+        });
+        if (!wrap.children.length) {
+          wrap.innerHTML = '<span class="small-muted">Purchase links coming soon — already bought? Activate below.</span>';
+        }
+      } catch {}
+    }
+
+    async function activateLicense() {
+      const email  = document.getElementById('licEmail').value.trim();
+      const key    = document.getElementById('licKey').value.trim();
+      const result = document.getElementById('licenseResult');
+      if (!email) { result.textContent = '⚠ Enter the email you used at purchase.'; return; }
+      result.textContent = 'Checking your purchase…';
+      try {
+        const r = await fetch('/api/license/activate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: email, licenseKey: key })
+        });
+        const d = await r.json();
+        result.innerHTML = d.status === 'ok'
+          ? `<span class="text-success">✔ ${d.message}</span>`
+          : `<span class="text-warning">⚠ ${d.message}</span>`;
+        fetchLicenseStatus();
+      } catch {
+        result.innerHTML = '<span class="text-warning">⚠ Could not reach the server. Is the app running?</span>';
+      }
+    }
+
+    // ═══════════════════════════════════════════
     //  TRADE PANEL
     // ═══════════════════════════════════════════
     async function submitOrder(side) {
@@ -2099,6 +2194,8 @@
     startPolling();
     fetchWorkerStatus();
     fetchAndRenderNotifs();
+    fetchLicenseStatus();
+    loadLicensePricing();
 
     // Fallback REST pollers (WebSocket is primary; these catch up if WS stalls)
     setInterval(fetchWorkerStatus, 20000);

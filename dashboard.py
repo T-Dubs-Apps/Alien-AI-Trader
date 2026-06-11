@@ -8,6 +8,7 @@ import json
 import os
 import threading
 import time
+import requests
 from threading import Lock
 from typing import Dict, Any, List
 
@@ -52,8 +53,43 @@ socketio = SocketIO(
     ping_interval=25,
 )
 
-# License routes
+# License routes (server side — only does anything on the central deployment
+# that holds the Stripe keys; inert on user machines)
 register_license_routes(app)
+
+# ── License client (every installed copy) ────────────────────────────────
+# Paper trading is free forever. Live trading requires an active license,
+# validated against the central license server below.
+APP_ID = "alien-ai-trader"
+LICENSE_SERVER_URL = os.environ.get(
+    "LICENSE_SERVER_URL", "https://alien-ai-trader-dashboard.onrender.com"
+).rstrip("/")
+LICENSE_FILE = os.path.join(base_dir, "license.json")
+
+
+def _load_local_license() -> dict:
+    try:
+        with open(LICENSE_FILE, "r") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_local_license(data: dict) -> None:
+    try:
+        with open(LICENSE_FILE, "w") as f:
+            json.dump(data, f, indent=2)
+    except Exception:
+        pass
+
+
+def _license_is_active(lic: dict | None = None) -> bool:
+    lic = lic if lic is not None else _load_local_license()
+    try:
+        return lic.get("status") == "active" and int(lic.get("expiresAt", 0)) > int(time.time() * 1000)
+    except Exception:
+        return False
 
 # In-memory warehouse for ticker/market data sent to the dashboard
 market_data = []
@@ -440,6 +476,59 @@ def api_quotes():
 
 
 # -----------------------------------------------
+# License (client side — talks to the central license server)
+# -----------------------------------------------
+@app.route("/api/license/local", methods=["GET"])
+def license_local():
+    lic = _load_local_license()
+    return jsonify({
+        "licensed":  _license_is_active(lic),
+        "tier":      lic.get("tier"),
+        "email":     lic.get("email"),
+        "expiresAt": lic.get("expiresAt"),
+    }), 200
+
+
+@app.route("/api/license/activate", methods=["POST"])
+def license_activate():
+    payload = request.json or {}
+    email = (payload.get("email") or "").strip()
+    if not email:
+        return jsonify({"status": "error", "message": "Enter the email address you used at purchase."}), 400
+    try:
+        r = requests.post(
+            f"{LICENSE_SERVER_URL}/api/license/validate",
+            json={"email": email, "appId": APP_ID,
+                  "licenseKey": (payload.get("licenseKey") or "").strip()},
+            timeout=20,
+        )
+        data = r.json()
+    except Exception:
+        return jsonify({"status": "error",
+                        "message": "Could not reach the license server. Check your internet connection and try again."}), 502
+
+    if data.get("status") == "active":
+        _save_local_license(data)
+        return jsonify({"status": "ok", "licensed": True, "tier": data.get("tier"),
+                        "expiresAt": data.get("expiresAt"),
+                        "message": "License activated — live trading is unlocked. Restart the app to trade live."}), 200
+
+    return jsonify({"status": "error", "licensed": False,
+                    "message": "No active purchase found for that email. "
+                               "Use the exact email you entered at checkout, or buy a license below."}), 200
+
+
+@app.route("/api/license/pricing-proxy", methods=["GET"])
+def license_pricing_proxy():
+    try:
+        r = requests.get(f"{LICENSE_SERVER_URL}/api/license/pricing",
+                         params={"appId": APP_ID}, timeout=15)
+        return jsonify(r.json()), 200
+    except Exception:
+        return jsonify([]), 200
+
+
+# -----------------------------------------------
 # Manual Orders (Trade tab Buy/Sell buttons)
 # -----------------------------------------------
 @app.route("/api/order", methods=["POST"])
@@ -675,6 +764,15 @@ def _internal_heartbeat(eng: TradingEngine, lad: PortfolioLadderScanner) -> None
 def _engine_session(session_num: int) -> None:
     """Run one 5h59m trading session then return so the supervisor can restart."""
     global _engine, _ladder
+
+    # License gate: live trading requires an active license. Paper is free.
+    if os.environ.get("TRADING_MODE", "paper").strip().lower() == "live" and not _license_is_active():
+        os.environ["TRADING_MODE"] = "paper"
+        os.environ["LIVE_TRADING_ENABLED"] = "false"
+        msg = ("Live trading requires an active license — running in PAPER mode. "
+               "Activate in Settings → License.")
+        print(f"[LICENSE] {msg}")
+        _worker_status["message"] = msg
 
     stock_list = [
         s.strip().upper()
