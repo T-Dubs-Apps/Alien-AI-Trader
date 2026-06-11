@@ -1,3 +1,18 @@
+# ╔══════════════════════════════════════════════════════════════════╗
+# ║  LEGACY FILE — DO NOT RUN.                                       ║
+# ║  The trading engine now runs INSIDE dashboard.py automatically. ║
+# ║  Running this alongside the dashboard starts a SECOND engine    ║
+# ║  and places duplicate orders. Kept for reference only.          ║
+# ╚══════════════════════════════════════════════════════════════════╝
+import sys
+
+print("=" * 68)
+print("  WARNING: worker.py is LEGACY. The engine already runs inside")
+print("  dashboard.py. Running this too would DOUBLE-TRADE your account.")
+print("=" * 68)
+if input("  Type YES to run anyway (anything else exits): ").strip() != "YES":
+    sys.exit(0)
+
 import os
 import signal
 import time

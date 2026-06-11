@@ -2,14 +2,12 @@
 """
 deploy_to_render.py — Alien AI Trader
 Reads your API keys from the environment (loaded from keys.bat),
-finds your Render services, pushes all keys as environment variables,
-and triggers a redeploy on both the dashboard and worker services.
+finds your Render dashboard service, pushes all keys as environment
+variables, and triggers a redeploy. The AI trading engine runs inside
+the dashboard service — there is no separate worker service.
 
 Requires:
     RENDER_API_KEY in your environment (add to keys.bat)
-
-Optional (auto-creates Render services if missing):
-    See the first-time setup instructions printed when services aren't found.
 
 Usage:
     python deploy_to_render.py            # full deploy
@@ -29,10 +27,9 @@ import webbrowser
 # ── Render API config ────────────────────────────────────────────────────────
 RENDER_API      = "https://api.render.com/v1"
 DASHBOARD_NAME  = "alien-ai-trader-dashboard"
-WORKER_NAME     = "alien-ai-trader-worker"
 RENDER_DASH_URL = "https://dashboard.render.com"
 
-# All keys pushed to BOTH services (dashboard + worker)
+# All keys pushed to the dashboard service (the engine runs inside it)
 SHARED_KEYS = [
     "ALPACA_KEY",
     "ALPACA_SECRET",
@@ -47,18 +44,17 @@ SHARED_KEYS = [
     "TWILIO_TO_NUMBER",
 ]
 
-# Keys only pushed to the dashboard service
+# Dashboard / engine settings
 DASHBOARD_ONLY_KEYS = [
     "FLASK_SECRET",
     "ALLOWED_ORIGINS",
-]
-
-# Keys only pushed to the worker service
-WORKER_ONLY_KEYS = [
-    "DASHBOARD_BASE_URL",
     "RUN_SECONDS",
     "HEARTBEAT_EVERY_SECONDS",
 ]
+
+# No separate worker service anymore — the engine was integrated into the
+# dashboard process in 2026-06 to cut Render costs.
+WORKER_ONLY_KEYS = []
 
 
 # ── Terminal colors ──────────────────────────────────────────────────────────
@@ -242,7 +238,7 @@ def check_keys():
 # ── Status mode ──────────────────────────────────────────────────────────────
 def show_status():
     head("Render Service Status")
-    for name in [DASHBOARD_NAME, WORKER_NAME]:
+    for name in [DASHBOARD_NAME]:
         sid, url = find_service(name)
         if sid:
             status, _ = get_service_status(sid)
@@ -266,9 +262,8 @@ def first_time_setup_guide():
     2. Click  "New +"  →  "Blueprint"
     3. Connect your GitHub account if prompted
     4. Select the repo:  T-Dubs-Apps/Alien-AI-Trader
-    5. Click  "Apply"  — Render reads render.yaml and creates both services:
-         • alien-ai-trader-dashboard  (web service)
-         • alien-ai-trader-worker     (background worker)
+    5. Click  "Apply"  — Render reads render.yaml and creates the service:
+         • alien-ai-trader-dashboard  (web service — AI engine runs inside it)
 
   {C.BOLD}Step 2: Re-run ONE_CLICK_INSTALL.bat{C.RESET}
     After the services are created, this script will automatically
@@ -314,55 +309,33 @@ def main():
 
     info(f"Found {len(all_user_keys)} key(s) to push")
 
-    # ── Find services on Render ───────────────────────────────────────────────
-    sub("Locating Render services")
+    # ── Find the dashboard service on Render ─────────────────────────────────
+    sub("Locating Render service")
     dash_id, dash_url = find_service(DASHBOARD_NAME)
-    work_id, work_url = find_service(WORKER_NAME)
 
-    if not dash_id and not work_id:
-        err("No services found on Render.")
+    if not dash_id:
+        err("No service found on Render.")
         first_time_setup_guide()
         sys.exit(0)
 
-    if dash_id:
-        ok(f"Dashboard:  {DASHBOARD_NAME}")
-        if dash_url:
-            dim(f"            {dash_url}")
-    else:
-        warn(f"Dashboard service not found: {DASHBOARD_NAME}")
-
-    if work_id:
-        ok(f"Worker:     {WORKER_NAME}")
-    else:
-        warn(f"Worker service not found: {WORKER_NAME}")
+    ok(f"Dashboard:  {DASHBOARD_NAME}")
+    if dash_url:
+        dim(f"            {dash_url}")
 
     # ── Push environment variables ────────────────────────────────────────────
     sub("Pushing API keys to Render")
+    dash_keys = {k: all_user_keys[k] for k in SHARED_KEYS + DASHBOARD_ONLY_KEYS if k in all_user_keys}
+    push_env_vars(dash_id, dash_keys, "Dashboard")
 
-    if dash_id:
-        dash_keys = {k: all_user_keys[k] for k in SHARED_KEYS + DASHBOARD_ONLY_KEYS if k in all_user_keys}
-        push_env_vars(dash_id, dash_keys, "Dashboard")
-
-    if work_id:
-        # Worker also needs DASHBOARD_BASE_URL pointing at the deployed dashboard
-        work_keys = {k: all_user_keys[k] for k in SHARED_KEYS + WORKER_ONLY_KEYS if k in all_user_keys}
-        if dash_url and "DASHBOARD_BASE_URL" not in work_keys:
-            work_keys["DASHBOARD_BASE_URL"] = dash_url
-        push_env_vars(work_id, work_keys, "Worker")
-
-    # ── Trigger deploys ───────────────────────────────────────────────────────
-    sub("Triggering redeploys")
-    if dash_id:
-        trigger_deploy(dash_id, "Dashboard")
-        time.sleep(1)  # brief pause so Render registers the first deploy
-    if work_id:
-        trigger_deploy(work_id, "Worker")
+    # ── Trigger deploy ────────────────────────────────────────────────────────
+    sub("Triggering redeploy")
+    trigger_deploy(dash_id, "Dashboard")
 
     # ── Summary ───────────────────────────────────────────────────────────────
     live_url = dash_url or "https://alien-ai-trader-dashboard.onrender.com"
     print(f"""
   {C.BOLD}{C.GREEN}  ╔══════════════════════════════════════════════════════════╗
-  ║  ✦  Deployment triggered! Both services are rebuilding.  ║
+  ║  ✦  Deployment triggered! Your service is rebuilding.    ║
   ╚══════════════════════════════════════════════════════════╝{C.RESET}
 
   {C.CYAN}Dashboard URL:   {live_url}{C.RESET}

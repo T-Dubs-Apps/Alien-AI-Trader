@@ -58,9 +58,11 @@ register_license_routes(app)
 # In-memory warehouse for ticker/market data sent to the dashboard
 market_data = []
 
-# In-memory worker status (the worker will POST heartbeat updates here)
+# In-memory engine status (updated in-process by the integrated engine heartbeat).
+# "state" is one of: starting | trading | paused | offline
 _worker_status: Dict[str, Any] = {
     "running": False,
+    "state": "starting",
     "mode": os.environ.get("TRADING_MODE", "paper"),
     "stocks": [s.strip().upper() for s in os.environ.get("STOCK_LIST", "AAPL,GOOG,TSLA,MSFT,AMZN").split(",") if s.strip()],
     "last_heartbeat": int(time.time()),
@@ -202,7 +204,9 @@ def receive_data():
     return jsonify({"status": "No Data"}), 200
 
 
-# --- Worker integration (Render Background Worker should call this) ---
+# --- Engine heartbeat ingest ---
+# The integrated engine updates _worker_status in-process; this HTTP route is
+# kept so an external engine process (legacy/worker.py) can still report in.
 
 @app.route("/api/worker/heartbeat", methods=["POST"])
 def worker_heartbeat():
@@ -244,19 +248,24 @@ def get_ladder():
     return jsonify(_ladder_top20), 200
 
 
-@app.route("/api/worker/status", methods=["GET"])
+@app.route("/api/worker/status", methods=["GET"])   # legacy path, kept for compatibility
+@app.route("/api/engine/status", methods=["GET"])
 def worker_status():
     status = dict(_worker_status)
     last = status.get("last_heartbeat")
     if last is None:
         status["running"] = False
+        status["state"] = "offline"
         status["stale_seconds"] = None
     else:
         stale = int(time.time()) - int(last)
         status["stale_seconds"] = stale
+        # A paused engine refreshes its heartbeat while sleeping, so a truly
+        # stale heartbeat means the engine thread is gone — report offline.
         if stale > int(os.environ.get("WORKER_STALE_AFTER_SECONDS", "60")):
             status["running"] = False
-            status["message"] = "Worker heartbeat is stale."
+            status["state"] = "offline"
+            status["message"] = "Engine heartbeat is stale — it may be restarting."
     return jsonify(status), 200
 
 
@@ -431,6 +440,72 @@ def api_quotes():
 
 
 # -----------------------------------------------
+# Manual Orders (Trade tab Buy/Sell buttons)
+# -----------------------------------------------
+@app.route("/api/order", methods=["POST"])
+def submit_order():
+    """Submit a real order through Alpaca. Paper or live depends on ALPACA_BASE_URL."""
+    if not _alpaca:
+        return jsonify({
+            "status": "error",
+            "message": "Alpaca keys are not configured. Run the Setup Wizard (LAUNCH.bat → option 3) first.",
+        }), 503
+
+    payload = request.json or {}
+    symbol = str(payload.get("symbol", "")).strip().upper()
+    side   = str(payload.get("side", "")).strip().lower()
+    otype  = str(payload.get("type", "market")).strip().lower()
+    tif    = str(payload.get("tif", "day")).strip().lower()
+
+    try:
+        qty = float(payload.get("qty", 0))
+    except (TypeError, ValueError):
+        qty = 0
+
+    if not symbol or side not in ("buy", "sell") or qty <= 0:
+        return jsonify({"status": "error", "message": "Symbol, side (buy/sell) and a positive quantity are required."}), 400
+    if otype not in ("market", "limit"):
+        return jsonify({"status": "error", "message": "Order type must be 'market' or 'limit'."}), 400
+
+    order_kwargs = {
+        "symbol": symbol,
+        "qty": qty,
+        "side": side,
+        "type": otype,
+        "time_in_force": tif,
+    }
+    if otype == "limit":
+        try:
+            limit_price = float(payload.get("limit_price", 0))
+        except (TypeError, ValueError):
+            limit_price = 0
+        if limit_price <= 0:
+            return jsonify({"status": "error", "message": "A positive limit price is required for limit orders."}), 400
+        order_kwargs["limit_price"] = limit_price
+
+    is_paper = "paper" in ALPACA_BASE_URL.lower()
+    try:
+        order = _alpaca.submit_order(**order_kwargs)
+        note = {
+            "time": int(time.time()),
+            "level": "trade",
+            "symbol": symbol,
+            "message": f"Manual {side.upper()} {qty:g}x {symbol} ({otype}) submitted — {'PAPER' if is_paper else 'LIVE'} account.",
+        }
+        _notifications.append(note)
+        socketio.emit("notification", note)
+        return jsonify({
+            "status": "ok",
+            "paper": is_paper,
+            "order_id": getattr(order, "id", None),
+            "order_status": getattr(order, "status", None),
+            "message": f"{side.upper()} order for {qty:g}x {symbol} accepted by Alpaca ({'paper' if is_paper else 'LIVE'} account).",
+        }), 200
+    except Exception as e:
+        return jsonify({"status": "error", "paper": is_paper, "message": f"Alpaca rejected the order: {e}"}), 400
+
+
+# -----------------------------------------------
 # AI Trader Toggle
 # -----------------------------------------------
 @app.route("/api/trader/toggle", methods=["POST"])
@@ -562,6 +637,7 @@ def _internal_heartbeat(eng: TradingEngine, lad: PortfolioLadderScanner) -> None
 
             _worker_status.update({
                 "running":              eng.running,
+                "state":                "trading" if eng.running else "offline",
                 "mode":                 eng.trading_mode,
                 "stocks":               eng.stock_list,
                 "profit":               round(eng.profit, 4),
@@ -683,29 +759,45 @@ def _engine_session(session_num: int) -> None:
 _MARKET_HOURS_ONLY = os.environ.get("MARKET_HOURS_ONLY", "true").lower() == "true"
 
 
+def _now_eastern():
+    """Current time in US Eastern, DST-aware. Falls back to UTC-4 if tz data is missing."""
+    import datetime
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.datetime.now(ZoneInfo("America/New_York"))
+    except Exception:
+        return datetime.datetime.utcnow() - datetime.timedelta(hours=4)
+
+
 def _is_market_hours() -> bool:
     """Return True if current time falls within US market hours Mon-Fri 9:25-16:05 ET."""
-    import datetime
-    now_utc = datetime.datetime.utcnow()
-    if now_utc.weekday() >= 5:
+    now_et = _now_eastern()
+    if now_et.weekday() >= 5:
         return False
-    now_et = now_utc - datetime.timedelta(hours=4)
     open_  = now_et.replace(hour=9,  minute=25, second=0, microsecond=0)
     close_ = now_et.replace(hour=16, minute=5,  second=0, microsecond=0)
     return open_ <= now_et <= close_
 
 
 def _wait_for_market_open() -> None:
-    """Sleep until market hours. Updates worker status so the UI shows a reason."""
-    import datetime
+    """Sleep until market hours. Refreshes the heartbeat every 30s so the UI
+    shows 'Paused — market closed' instead of going stale/offline."""
+    announced = 0.0
     while not _is_market_hours():
-        now_et = datetime.datetime.utcnow() - datetime.timedelta(hours=4)
-        msg = (f"Market closed — engine paused until 9:30 ET. "
-               f"ET now: {now_et.strftime('%a %H:%M')}. Checking again in 30 min.")
-        print(f"[ENGINE] {msg}")
-        _worker_status.update({"running": False, "message": msg, "last_heartbeat": int(time.time())})
+        now_et = _now_eastern()
+        msg = (f"Market closed — engine paused until 9:30 ET "
+               f"(ET now: {now_et.strftime('%a %H:%M')}).")
+        _worker_status.update({
+            "running": False,
+            "state": "paused",
+            "message": msg,
+            "last_heartbeat": int(time.time()),
+        })
+        if time.time() - announced >= 1800:
+            announced = time.time()
+            print(f"[ENGINE] {msg}")
         socketio.emit("worker_status", _worker_status)
-        time.sleep(1800)
+        time.sleep(30)
     print("[ENGINE] Market open — starting trading session.")
 
 

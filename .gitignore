@@ -42,6 +42,13 @@ Thumbs.db
 
 # Project backups
 backup files zipped/
+*.bak
 
 # Claude local worktrees
 .claude/worktrees/
+
+# Standalone apps live outside this project (../Standalone Apps/)
+black_box/
+adam_agent/
+agent ADAM/
+user_cloud/

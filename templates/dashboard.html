@@ -198,12 +198,13 @@
 
     .section-title { font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin-bottom: 10px; }
 
-    /* worker status pill */
+    /* engine status pill */
     .status-pill {
       display: inline-flex; align-items: center; gap: 6px;
       padding: 4px 12px; border-radius: 999px; font-size: 0.78rem; font-weight: 700;
     }
     .status-pill.online  { background: rgba(34,197,94,.15); color: var(--up); border: 1px solid rgba(34,197,94,.35); }
+    .status-pill.paused  { background: rgba(245,158,11,.12); color: #f59e0b; border: 1px solid rgba(245,158,11,.35); }
     .status-pill.offline { background: rgba(239,68,68,.12);  color: var(--down); border: 1px solid rgba(239,68,68,.3); }
     .status-pill.unknown { background: rgba(148,163,184,.1); color: var(--muted); border: 1px solid var(--border); }
 
@@ -234,7 +235,7 @@
 
       <div class="ms-auto d-flex align-items-center gap-3 flex-wrap">
         <span class="mode-badge">Mode: {{ mode }}</span>
-        <span class="mode-badge" id="workerNavPill">Worker: --</span>
+        <span class="mode-badge" id="workerNavPill">Engine: --</span>
         <span class="small-muted" id="navLastUpdate" style="font-size:.75rem;"></span>
       </div>
     </div>
@@ -267,7 +268,7 @@
       </div>
       <div class="col-6 col-md-3">
         <div class="stat-card">
-          <div class="stat-label">Worker P&amp;L</div>
+          <div class="stat-label">Engine P&amp;L</div>
           <div class="stat-value" id="statPnL">—</div>
           <div class="stat-sub">Session profit/loss</div>
         </div>
@@ -433,7 +434,7 @@
         <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
           <div>
             <h5 class="mb-0 fw-bold">Trade Alerts &amp; Notifications</h5>
-            <div class="small-muted">Signals, stop-loss triggers, and system messages from the worker</div>
+            <div class="small-muted">Signals, stop-loss triggers, and system messages from the AI engine</div>
           </div>
           <div class="d-flex gap-2">
             <div class="form-check form-switch d-flex align-items-center gap-2 mb-0">
@@ -685,10 +686,10 @@
       <!-- ══ SETTINGS TAB ══ -->
       <div class="tab-pane fade" id="tabSettings">
         <div class="row g-4">
-          <!-- Worker Status -->
+          <!-- Engine Status -->
           <div class="col-lg-6">
             <div class="glass-card">
-              <div class="section-title"><i class="fa-solid fa-microchip me-1"></i>Worker Status</div>
+              <div class="section-title"><i class="fa-solid fa-microchip me-1"></i>Engine Status</div>
               <div class="d-flex align-items-center gap-3 mb-2">
                 <span id="workerStatusPill" class="status-pill unknown">Unknown</span>
                 <span class="small-muted" id="workerStaleInfo"></span>
@@ -915,7 +916,7 @@
               </div>
               <div class="alert mt-3 mb-0 py-2" style="background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.3);color:var(--warn);font-size:.8rem;border-radius:8px;">
                 <i class="fa-solid fa-triangle-exclamation me-1"></i>
-                <strong>Mode changes apply on next worker restart.</strong> Paper mode is always safe. Live mode uses real funds.
+                <strong>Mode changes apply on next engine restart.</strong> Paper mode is always safe. Live mode uses real funds.
               </div>
             </div>
 
@@ -1029,7 +1030,7 @@
       renderNotifs(_notifications_cache);
     });
     socket.on('market_update', (data) => {
-      // Worker pushed fresh market data directly
+      // Engine pushed fresh market data directly
       const quotes = {};
       (data.tickers || []).forEach(t => { quotes[t.symbol] = t; });
       renderWatchlistCards(quotes);
@@ -1476,11 +1477,11 @@
     });
 
     // ═══════════════════════════════════════════
-    //  WORKER STATUS
+    //  ENGINE STATUS
     // ═══════════════════════════════════════════
     async function fetchWorkerStatus() {
       try {
-        const r = await fetch('/api/worker/status');
+        const r = await fetch('/api/engine/status');
         const d = await r.json();
         renderWorkerStatus(d);
       } catch {}
@@ -1492,11 +1493,29 @@
       const staleEl = document.getElementById('workerStaleInfo');
       const pnlEl   = document.getElementById('statPnL');
 
-      const isOnline = d.running;
-      pill.className = 'status-pill ' + (isOnline ? 'online' : 'offline');
-      pill.innerHTML = (isOnline ? '&#x25cf; Online' : '&#x25cf; Offline');
-      navPill.textContent = 'Worker: ' + (isOnline ? 'Online' : 'Offline');
-      if (d.stale_seconds != null) staleEl.textContent = 'Last heartbeat: ' + d.stale_seconds + 's ago';
+      // Three states: trading (green) / paused (yellow, market closed) / offline (red)
+      const state = d.state || (d.running ? 'trading' : 'offline');
+      if (state === 'trading') {
+        pill.className = 'status-pill online';
+        pill.innerHTML = '&#x25cf; Trading';
+        navPill.textContent = 'Engine: Trading';
+        staleEl.textContent = (d.stale_seconds != null) ? ('Last heartbeat: ' + d.stale_seconds + 's ago') : '';
+      } else if (state === 'paused') {
+        pill.className = 'status-pill paused';
+        pill.innerHTML = '&#x25cf; Paused';
+        navPill.textContent = 'Engine: Paused (market closed)';
+        staleEl.textContent = d.message || 'Market closed — the engine resumes at 9:30 AM ET.';
+      } else if (state === 'starting') {
+        pill.className = 'status-pill unknown';
+        pill.innerHTML = '&#x25cf; Starting…';
+        navPill.textContent = 'Engine: Starting…';
+        staleEl.textContent = d.message || '';
+      } else {
+        pill.className = 'status-pill offline';
+        pill.innerHTML = '&#x25cf; Offline';
+        navPill.textContent = 'Engine: Offline';
+        staleEl.textContent = d.message || '';
+      }
 
       if (d.profit != null) {
         const v = +d.profit;
@@ -1564,7 +1583,7 @@
     // ═══════════════════════════════════════════
     //  TRADE PANEL
     // ═══════════════════════════════════════════
-    function submitOrder(side) {
+    async function submitOrder(side) {
       const sym = normalizeSymbol(document.getElementById('orderSymbol').value);
       const qty = document.getElementById('orderQty').value;
       const type = document.getElementById('orderType').value;
@@ -1573,10 +1592,32 @@
       const result = document.getElementById('orderResult');
 
       if (!sym || !qty) { result.textContent = '⚠ Symbol and quantity are required.'; return; }
+      if (type === 'limit' && !lp) { result.textContent = '⚠ A limit price is required for limit orders.'; return; }
 
-      result.innerHTML = `<span class="text-warning">⚠ Order submission requires the worker to be running and a live Alpaca connection. `
-        + `Simulated ${side.toUpperCase()} order: ${qty}x ${sym} ${type.toUpperCase()} ${lp ? '@ $'+lp : ''} ${tif.toUpperCase()}</span>`;
-      addLocalNotif(`${side.toUpperCase()} ${qty}x ${sym} ${type} ${lp ? '@ $'+lp : ''} [${tif}] — submitted`, 'info', sym);
+      const desc = `${side.toUpperCase()} ${qty}x ${sym} (${type.toUpperCase()}${lp ? ' @ $' + lp : ''}, ${tif.toUpperCase()})`;
+      if (!confirm(`Submit this order to your Alpaca account?\n\n${desc}\n\nPaper accounts use fake money. Live accounts use REAL money.`)) {
+        result.textContent = 'Order cancelled.';
+        return;
+      }
+
+      result.innerHTML = '<span class="small-muted">Submitting order…</span>';
+      try {
+        const r = await fetch('/api/order', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ symbol: sym, qty: qty, side: side, type: type, tif: tif, limit_price: lp || null })
+        });
+        const d = await r.json();
+        if (d.status === 'ok') {
+          const acct = d.paper ? 'PAPER' : 'LIVE';
+          result.innerHTML = `<span class="text-success">✔ ${d.message}</span>`;
+          addLocalNotif(`${desc} — accepted (${acct} account)`, 'trade', sym);
+        } else {
+          result.innerHTML = `<span class="text-warning">⚠ ${d.message}</span>`;
+        }
+      } catch (e) {
+        result.innerHTML = '<span class="text-warning">⚠ Could not reach the server. Is the app running?</span>';
+      }
     }
 
     function saveRiskSettings() {
@@ -1991,7 +2032,7 @@
       } catch {}
     }
 
-    // Update goal progress whenever worker reports capital
+    // Update goal progress whenever the engine reports capital
     function updateGoalFromCapital(capTotal) {
       try {
         const goal = JSON.parse(localStorage.getItem(GOAL_KEY) || '{}');

@@ -188,13 +188,12 @@ echo   PHASE 4 of 4 — Opening Dashboards
 echo  ══════════════════════════════════════════════════════════
 echo.
 
-REM Launch local app if not already running
+REM Launch local app if not already running.
+REM The AI trading engine runs INSIDE dashboard.py — one window is all you need.
 if exist ".venv\Scripts\python.exe" (
-    echo  Starting local dashboard...
-    start "Dashboard" cmd /k "title Alien AI Trader - Dashboard ^& cd /d "%~dp0" ^& call .venv\Scripts\activate.bat ^& call keys.bat ^& python dashboard.py"
+    echo  Starting Alien AI Trader...
+    start "Alien AI Trader" cmd /k "title Alien AI Trader ^& cd /d "%~dp0" ^& call .venv\Scripts\activate.bat ^& call keys.bat ^& python dashboard.py"
     timeout /t 4 /nobreak >nul
-    start "Worker" cmd /k "title Alien AI Trader - Worker ^& cd /d "%~dp0" ^& call .venv\Scripts\activate.bat ^& call keys.bat ^& python worker.py"
-    timeout /t 2 /nobreak >nul
     echo  Opening browser...
     start http://localhost:5000
 )
@@ -213,7 +212,7 @@ echo  ║                                                          ║
 echo  ║   Local:  http://localhost:5000                          ║
 echo  ║   Cloud:  alien-ai-trader-dashboard.onrender.com         ║
 echo  ║                                                          ║
-echo  ║   Tip: The cloud services take 3-5 min to rebuild.      ║
+echo  ║   Tip: The cloud service takes 3-5 min to rebuild.      ║
 echo  ║   Tip: Start in Paper Trading mode (fake money) first!  ║
 echo  ║                                                          ║
 echo  ╚══════════════════════════════════════════════════════════╝

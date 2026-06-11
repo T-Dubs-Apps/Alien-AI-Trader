@@ -71,9 +71,9 @@ echo   Alien AI Trader is RUNNING!
 echo  ══════════════════════════════════════════════════════
 echo.
 echo   Dashboard:  http://localhost:5000
-echo   Worker:     Running in background window
+echo   The AI trading engine runs inside the same window.
 echo.
-echo   To stop: close both console windows (Dashboard + Worker)
+echo   To stop: close the "Alien AI Trader" console window
 echo  ══════════════════════════════════════════════════════
 echo.
 pause

@@ -7,19 +7,18 @@ This file provides essential instructions and conventions for AI coding agents w
 ## Quick Start
 - **Install:** Run `INSTALL.ps1` with PowerShell (auto-installs Python 3.10+, creates `.venv`, installs dependencies)
 - **Configure API Keys:** Run `LAUNCH.bat` and choose **[3] SETUP KEYS** (or run `python setup_wizard.py` directly) — writes `keys.bat`
-- **Launch:** Run `START.bat` (activates venv, loads keys, starts dashboard and worker)
+- **Launch:** Run `START.bat` (activates venv, loads keys, starts the dashboard — the AI trading engine runs inside it)
 
 ## Build/Test/Run Commands
 - **Install dependencies:** `INSTALL.ps1` (preferred) or manually: `python -m venv .venv && .venv\Scripts\activate && pip install -r requirements.txt`
 - **Run main app:** `START.bat` (preferred)
-- **Run dashboard only:** `python dashboard.py`
+- **Run everything (dashboard + integrated engine):** `python dashboard.py`
 - **Run trading engine only:** `python trading_engine.py`
-- **Run worker only:** `python worker.py`
 
 ## Project Structure
-- **dashboard.py** — Flask web dashboard (local UI)
+- **dashboard.py** — Flask web dashboard + integrated AI trading engine (single process)
 - **trading_engine.py** — Main trading logic
-- **worker.py** — Background trading worker
+- **legacy/worker.py** — Old standalone engine process (no longer used; engine was integrated into dashboard.py in 2026-06 to cut Render costs)
 - **portfolio_ladder.py** — Portfolio scoring logic
 - **config_loader.py** — Loads config from JSON/YAML
 - **setup_wizard.py** — Interactive setup for API keys
@@ -41,7 +40,6 @@ This file provides essential instructions and conventions for AI coding agents w
 
 ## Links
 - [README.md](README.md) — Full documentation, setup, and architecture
-- [runner structure.txt](runner%20structure.txt) — Runner/agent architecture outline
 - [QUICK SETUP.txt](QUICK%20SETUP.txt) — Short setup guide
 - [Install istructions for Alien AI Trader.txt](Install%20istructions%20for%20Alien%20AI%20Trader.txt) — Additional install notes
 

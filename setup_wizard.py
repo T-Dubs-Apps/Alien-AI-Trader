@@ -78,6 +78,16 @@ def validate_phone(number: str) -> bool:
     """Basic E.164 format check: +1XXXXXXXXXX"""
     return bool(re.match(r"^\+\d{10,15}$", number))
 
+def offer_skip(service: str, why: str) -> bool:
+    """Optional services can be skipped — the app works without them.
+    Returns True if the user wants to set the service up now."""
+    print(f"  {C.DIM}{why}{C.RESET}")
+    ans = input(f"  {C.BOLD}{C.WHITE}➜ Set up {service} now? [Y/n] (ENTER = yes, n = skip): {C.RESET}").strip().lower()
+    if ans in ("n", "no", "skip"):
+        warn(f"{service} skipped — you can add it later via LAUNCH.bat → [3] Setup Keys.")
+        return False
+    return True
+
 # ════════════════════════════════════════════════════════════════
 #  SERVICE COLLECTORS
 # ════════════════════════════════════════════════════════════════
@@ -136,7 +146,9 @@ def collect_alpha_vantage(keys: dict):
 
 
 def collect_pushover(keys: dict):
-    step_header(3, 6, "Pushover — Push Notifications", "🔔")
+    step_header(3, 6, "Pushover — Push Notifications (Optional)", "🔔")
+    if not offer_skip("Pushover", "Optional: phone push alerts. The app trades fine without it."):
+        return
     print(f"""  {C.WHITE}Pushover sends real-time push notifications to your phone
   for trade alerts and app events.{C.RESET}
 
@@ -157,7 +169,9 @@ def collect_pushover(keys: dict):
 
 
 def collect_twilio(keys: dict):
-    step_header(4, 6, "Twilio — SMS Text Alerts", "📱")
+    step_header(4, 6, "Twilio — SMS Text Alerts (Optional)", "📱")
+    if not offer_skip("Twilio", "Optional: SMS/phone-call alerts. The app trades fine without it."):
+        return
     print(f"""  {C.WHITE}Twilio sends SMS text message alerts for trades and events.{C.RESET}
 
     1. Sign up at twilio.com (free trial includes credits)
@@ -198,7 +212,7 @@ def collect_twilio(keys: dict):
 def collect_render(keys: dict):
     step_header(5, 6, "Render — Cloud Deployment API Key (Optional)", "☁")
     print(f"""  {C.WHITE}Render is the cloud platform that hosts your dashboard
-  and trading worker so they run 24/7 without your PC being on.{C.RESET}
+  (the AI trading engine runs inside it) 24/7 without your PC being on.{C.RESET}
 
   {C.YELLOW}Why you need a Render API key:{C.RESET}
     Without it you can still run Alien AI Trader locally.
@@ -215,8 +229,8 @@ def collect_render(keys: dict):
 
   {C.DIM}First-time Render setup: after getting the key, go to
   dashboard.render.com/blueprints → New Blueprint Instance →
-  connect your GitHub repo → Apply.  This creates both services
-  from render.yaml automatically.{C.RESET}
+  connect your GitHub repo → Apply.  This creates the single
+  dashboard service from render.yaml automatically.{C.RESET}
 """)
     open_url("https://dashboard.render.com/account/api-keys")
     render_key = input(f"  {C.BOLD}{C.WHITE}➜ Render API Key (press ENTER to skip): {C.RESET}").strip()
@@ -228,7 +242,9 @@ def collect_render(keys: dict):
 
 
 def collect_pushbullet(keys: dict):
-    step_header(6, 6, "Pushbullet — Device Sync & Notifications", "🔗")
+    step_header(6, 6, "Pushbullet — Device Sync & Notifications (Optional)", "🔗")
+    if not offer_skip("Pushbullet", "Optional: syncs alerts across devices. The app trades fine without it."):
+        return
     print(f"""  {C.WHITE}Pushbullet syncs notifications across your devices.{C.RESET}
 
     1. Sign in at pushbullet.com (use Google or email)
@@ -296,7 +312,7 @@ def print_render_instructions(keys: dict):
   In your Render dashboard:
     1. Go to your {C.YELLOW}Web Service{C.RESET} → Environment → Add Secret File
        {C.DIM}OR{C.RESET} use Environment Variables for each key below
-    2. Repeat for your {C.YELLOW}Worker Service{C.RESET}
+       {C.DIM}(One service is all there is — the AI engine runs inside it.){C.RESET}
 
   {C.WHITE}Copy these key=value pairs:{C.RESET}
 """)
@@ -384,7 +400,7 @@ def main():
 
   {C.WHITE}Render:{C.RESET}
     1. Add the environment variables shown above
-       to BOTH your web and worker services
+       to your web service (the AI engine runs inside it)
     2. Trigger a manual deploy
 
   {C.WHITE}Your dashboard:{C.RESET}

@@ -13,7 +13,7 @@ EASIEST WAY TO GET THE APP
 Option A (recommended):
 1. Download the latest ZIP from the GitHub Releases page
 2. Extract it anywhere on your PC
-3. Open the Alien_AI_Trader folder
+3. Open the extracted folder (named Alien-AI-Trader-main or similar)
 4. Double-click LAUNCH.bat
 5. Choose [1] Install
 
@@ -25,7 +25,7 @@ Option B (most automatic):
 
 FIRST TIME SETUP (do this once)
 --------------------------------
-1. Open the Alien_AI_Trader folder
+1. Open the app folder you extracted
 2. Double-click:  LAUNCH.bat
 3. Choose: [1] Install
    - Installs Python if needed

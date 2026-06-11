@@ -24,6 +24,9 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, 'license_store.db')
 PRICE_MAP_PATH = os.getenv('PRICE_MAP_PATH', os.path.join(BASE_DIR, 'price_map.json'))
 LICENSE_SECRET = os.getenv('LICENSE_SECRET', 'CHANGE_ME')
+if LICENSE_SECRET == 'CHANGE_ME':
+    print("[LICENSE] WARNING: LICENSE_SECRET is using the default value. "
+          "Set the LICENSE_SECRET env var in production or license keys can be forged.")
 
 STRIPE_SECRET_KEY = os.getenv('STRIPE_SECRET_KEY')
 STRIPE_WEBHOOK_SECRET = os.getenv('STRIPE_WEBHOOK_SECRET')

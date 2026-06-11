@@ -62,7 +62,7 @@ Then run `LAUNCH.bat` or `INSTALL.ps1`.
 1. Right-click the downloaded ZIP file
 2. Click **"Extract All..."**
 3. Click **Extract** (the default location is fine)
-4. A new folder called `Alien_AI_Trader` will appear — open it
+4. A new folder called `Alien-AI-Trader-main` will appear — open it
 
 > **What is "extracting"?**
 > A ZIP file is like a compressed envelope. Extracting unpackages everything inside it onto your computer.
@@ -322,19 +322,23 @@ To deploy your own instance, see the **Render Deployment** section below.
 
 This section is for users who want to run the app in the cloud. Skip this if you just want to run it on your own PC.
 
-The app deploys as two services on Render via `render.yaml`:
+The app deploys as a **single service** on Render via `render.yaml` — the AI trading
+engine runs inside the dashboard process, so there is nothing else to set up (and
+nothing else to pay for):
 
 | Service | Type | What it does |
 |---------|------|-------------|
-| `alien-ai-trader-dashboard` | Web Service | Flask dashboard + API + WebSocket |
-| `alien-ai-trader-worker` | Background Worker | Trading engine + ladder scanner |
+| `alien-ai-trader-dashboard` | Web Service | Flask dashboard + API + WebSocket + AI trading engine |
 
 **Steps:**
-1. Fork this repository on GitHub
+1. Fork this repository on GitHub (or use your own copy)
 2. Go to [render.com](https://render.com) → New → Blueprint
 3. Connect your forked repo
-4. Render will find `render.yaml` and create both services automatically
+4. Render will find `render.yaml` and create the service automatically
 5. Set your environment variables (API keys) in the Render dashboard
+
+> **Tip:** every user can run their own private cloud copy this way — your keys,
+> your account, your trades. Nothing is shared.
 
 ---
 
@@ -379,9 +383,8 @@ Alien_AI_Trader/
 ├── LAUNCH.bat              ← Start here — installer menu
 ├── START.bat               ← Daily launch (after install)
 ├── INSTALL.ps1             ← Full automated installer
-├── dashboard.py            ← Web server + dashboard + API
+├── dashboard.py            ← Web server + dashboard + API + AI trading engine
 ├── trading_engine.py       ← AI brain: signals, buy/sell, position sizing
-├── worker.py               ← Background runner: engine + ladder scanner
 ├── portfolio_ladder.py     ← Ladder scorer: ranks all stocks 0-100
 ├── forecasting.py          ← Predictive forecasting: regression + EMA stacking
 ├── setup_wizard.py         ← API key setup wizard
@@ -390,6 +393,8 @@ Alien_AI_Trader/
 ├── requirements.txt        ← Python package list
 ├── render.yaml             ← Cloud deployment blueprint (Render.com)
 ├── keys.bat                ← YOUR private API keys (never share this file!)
+├── legacy/
+│   └── worker.py           ← Old standalone engine (no longer used — kept for reference)
 └── templates/
     └── dashboard.html      ← Dashboard web interface
 ```
@@ -421,7 +426,7 @@ These files are excluded from GitHub automatically by `.gitignore`. The app will
 | Charts | Chart.js |
 | UI | Bootstrap 5 + Font Awesome |
 | Mobile alerts | Pushbullet · Pushover · Twilio |
-| Cloud deployment | Render.com (web + worker blueprint) |
+| Cloud deployment | Render.com (single web service blueprint) |
 
 ---
 
@@ -446,13 +451,16 @@ Not in Paper Mode (the default). Paper trading uses fake money. You have to manu
 By default it monitors Apple, Google, Tesla, Microsoft, and Amazon. You can add any US stock ticker in the Settings tab. Turn on "Scan Entire Market" to let the AI hunt through all 8,000+ US equities.
 
 **Q: How does the 5h 59m restart work?**
-Alpaca's free API has hourly usage limits. The worker automatically restarts every 5 hours and 59 minutes to stay within those limits. Your settings, open positions, and trade history are all preserved — only the internal scan session resets.
+Alpaca's free API has hourly usage limits. The engine automatically recycles its scan session every 5 hours and 59 minutes to stay within those limits. Your settings, open positions, and trade history are all preserved — only the internal scan session resets.
 
 **Q: What if the app crashes?**
-The worker has a built-in crash recovery loop. If the trading engine or ladder scanner thread dies unexpectedly, the worker automatically restarts it and sends you an alert.
+The engine has a built-in crash recovery supervisor. If the trading engine or ladder scanner thread dies unexpectedly, it is automatically restarted and you get an alert.
+
+**Q: Why does the dashboard say "Paused"?**
+The engine only trades during US market hours (9:30 AM–4:00 PM Eastern, Monday–Friday). Outside those hours it shows a yellow **Paused** badge and waits — this is normal and saves API usage. It resumes automatically when the market opens.
 
 **Q: Can I run this on a Mac or Linux?**
-The installer (LAUNCH.bat, INSTALL.ps1) is Windows-only. The Python code itself runs on any platform — Mac/Linux users can run `python dashboard.py` and `python worker.py` directly in separate terminals after installing requirements with `pip install -r requirements.txt`.
+The installer (LAUNCH.bat, INSTALL.ps1) is Windows-only. The Python code itself runs on any platform — Mac/Linux users can run `python dashboard.py` in a terminal after installing requirements with `pip install -r requirements.txt`. The trading engine starts automatically inside it.
 
 ---
 

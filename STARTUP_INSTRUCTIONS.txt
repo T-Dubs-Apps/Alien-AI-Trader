@@ -11,7 +11,7 @@ FOR MOST NEW USERS — DO THIS
 1. Go to the GitHub Releases page for Alien AI Trader
 2. Download the latest ZIP file
 3. Right-click the ZIP and choose "Extract All"
-4. Open the extracted Alien_AI_Trader folder
+4. Open the extracted folder (named Alien-AI-Trader-main or similar)
 5. Double-click: LAUNCH.bat
 6. Choose: [1] Install
 7. Follow the on-screen setup wizard
