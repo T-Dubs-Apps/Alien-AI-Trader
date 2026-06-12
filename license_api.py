@@ -202,6 +202,26 @@ def register_license_routes(app):
         }
         return jsonify(response)
 
+    @app.route('/api/license/diag', methods=['GET'])
+    def license_diag():
+        """Support diagnostic - reports which pieces are configured.
+        Booleans and modes only; never returns secret values."""
+        key = STRIPE_SECRET_KEY or ''
+        mode = 'live' if key.startswith('sk_live_') else ('test' if key.startswith('sk_test_') else 'unset/invalid')
+        price_map = load_price_map().get('alien-ai-trader', {})
+        tiers = {}
+        for tier, info in price_map.items():
+            pid = info.get('priceId', '') if isinstance(info, dict) else str(info)
+            tiers[tier] = {'priceId_set': bool(pid) and 'REPLACE' not in pid,
+                           'priceId_prefix': pid[:9] if pid else ''}
+        return jsonify({
+            'stripe_key_present': bool(key),
+            'stripe_key_mode': mode,
+            'license_secret_set': LICENSE_SECRET != 'CHANGE_ME',
+            'sendgrid_set': bool(SENDGRID_API_KEY and SENDGRID_FROM_EMAIL),
+            'price_map_tiers': tiers,
+        }), 200
+
     @app.route('/api/license/pricing', methods=['GET'])
     def license_pricing():
         """Public price list for one app — the user's installed copy fetches this
