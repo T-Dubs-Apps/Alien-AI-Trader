@@ -206,6 +206,41 @@ def health():
     return jsonify({"status": "ok"}), 200
 
 
+@app.route("/thankyou", methods=["GET"])
+def thankyou():
+    """Post-purchase landing page — Stripe payment links redirect here so
+    buyers know exactly how to activate. No payment data touches this page."""
+    return """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Payment received — Alien AI Trader</title>
+<style>body{background:#060c18;color:#e2e8f0;font-family:'Segoe UI',system-ui,sans-serif;
+display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:16px}
+.card{background:#0d1626;border:1px solid #1e3058;border-radius:14px;max-width:560px;padding:32px}
+h1{font-size:1.5rem;background:linear-gradient(135deg,#4ade80,#60a5fa);
+-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.step{display:flex;gap:12px;margin:14px 0;align-items:flex-start}
+.n{background:#22c55e;color:#fff;border-radius:50%;width:26px;height:26px;flex-shrink:0;
+display:flex;align-items:center;justify-content:center;font-weight:700;font-size:.85rem}
+p,li{color:#94a3b8;line-height:1.6;font-size:.95rem}
+.hl{color:#4ade80;font-weight:600}
+.note{background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.3);
+border-radius:8px;padding:10px 14px;font-size:.85rem;color:#fbbf24;margin-top:18px}</style>
+</head><body><div class="card">
+<h1>&#128640; Payment received — let's unlock live trading</h1>
+<p>Your subscription is active. Three steps to switch on live trading:</p>
+<div class="step"><div class="n">1</div><p>Open <span class="hl">Alien AI Trader</span> on your computer
+(double-click the desktop shortcut).</p></div>
+<div class="step"><div class="n">2</div><p>Go to the <span class="hl">Settings</span> tab →
+<span class="hl">License — Live Trading</span> card.</p></div>
+<div class="step"><div class="n">3</div><p>Enter <span class="hl">the email you just used at checkout</span>
+and click <span class="hl">Activate</span>. The badge flips to &#128994; Licensed.</p></div>
+<div class="note">&#9888; Use the exact checkout email. If Stripe auto-filled your saved details
+(“Link”), that saved email is the one to use. Find it on your receipt from Stripe.</div>
+<p style="margin-top:18px;font-size:.8rem">Need help? Reply to your receipt email.
+— Troy Walker · T-Dub's Apps</p>
+</div></body></html>""", 200
+
+
 @app.route("/")
 def index():
     mode = "VIP" if request.args.get("access") == "SOVEREIGN_TESTER" else "GUEST"
