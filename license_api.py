@@ -202,6 +202,30 @@ def register_license_routes(app):
         }
         return jsonify(response)
 
+    @app.route('/api/license/grant', methods=['POST'])
+    def grant_license():
+        """Owner-only: issue a license for an email, guarded by LICENSE_SECRET.
+        Used to grant test/comp licenses without a Stripe purchase."""
+        payload = request.json or {}
+        secret = (payload.get('secret') or '').strip()
+        if LICENSE_SECRET == 'CHANGE_ME' or not secret or secret != LICENSE_SECRET:
+            return jsonify({'error': 'unauthorized'}), 403
+        email = (payload.get('email') or '').strip()
+        app_id = (payload.get('appId') or 'alien-ai-trader').strip()
+        tier = (payload.get('tier') or 'monthly').strip()
+        if not email:
+            return jsonify({'error': 'email required'}), 400
+        price_info = get_price_info(app_id, tier) or {}
+        duration = price_info.get('durationDays', 365)
+        expires_at = datetime.now(timezone.utc) + timedelta(days=duration)
+        key = generate_license_key()
+        store_license(email=email, app_id=app_id, tier=tier, license_key=key,
+                      expires_at=expires_at, session_id='manual-grant',
+                      billing_type=price_info.get('billingType', 'monthly'))
+        return jsonify({'status': 'granted', 'email': email, 'tier': tier,
+                        'licenseKey': key,
+                        'expiresAt': int(expires_at.timestamp() * 1000)}), 200
+
     @app.route('/api/license/diag', methods=['GET'])
     def license_diag():
         """Support diagnostic - reports which pieces are configured.
@@ -296,6 +320,254 @@ def register_license_routes(app):
             'billingType': record['billing_type'],
         }
         return jsonify(response)
+
+    # ── Stripe webhook: auto-provision license the moment payment clears ──────
+    @app.route('/api/stripe/webhook', methods=['POST'])
+    def stripe_webhook():
+        """Stripe calls this URL immediately after a successful payment.
+        Configure it in Stripe Dashboard → Developers → Webhooks pointing to:
+          https://alien-ai-trader-dashboard.onrender.com/api/stripe/webhook
+        Events to send: checkout.session.completed
+        """
+        payload = request.get_data()
+        sig_header = request.headers.get('Stripe-Signature', '')
+
+        if STRIPE_WEBHOOK_SECRET:
+            try:
+                event = stripe.Webhook.construct_event(
+                    payload, sig_header, STRIPE_WEBHOOK_SECRET
+                )
+            except stripe.error.SignatureVerificationError:
+                return jsonify({'error': 'invalid signature'}), 400
+            except Exception as exc:
+                return jsonify({'error': str(exc)}), 400
+        else:
+            # No webhook secret configured — accept but log a warning
+            print('[WEBHOOK] WARNING: STRIPE_WEBHOOK_SECRET not set. '
+                  'Webhook signature not verified — set it in Render env vars.')
+            try:
+                event = json.loads(payload)
+            except Exception:
+                return jsonify({'error': 'invalid JSON'}), 400
+
+        event_type = event.get('type') if isinstance(event, dict) else event['type']
+        obj = (event.get('data', {}).get('object', {})
+               if isinstance(event, dict)
+               else event['data']['object'])
+
+        if event_type == 'checkout.session.completed':
+            _webhook_provision_license(obj)
+
+        return jsonify({'status': 'ok'}), 200
+
+    # ── Debug endpoint: why is a specific email not activating? ───────────────
+    @app.route('/api/license/debug', methods=['POST'])
+    def license_debug():
+        """Diagnostic only — returns detailed reason why activation fails for
+        a given email. Never exposes secret values."""
+        payload = request.json or {}
+        email = (payload.get('email') or '').strip().lower()
+        app_id = (payload.get('appId') or 'alien-ai-trader').strip()
+        if not email:
+            return jsonify({'error': 'email required'}), 400
+
+        result = {'email': email, 'app_id': app_id, 'checks': []}
+
+        # 1. Local DB check
+        record = get_license(email, app_id)
+        if record:
+            active = record['expires_at'] > datetime.now(timezone.utc)
+            result['checks'].append({
+                'check': 'local_db',
+                'found': True,
+                'active': active,
+                'expires_at': record['expires_at'].isoformat(),
+                'tier': record['tier'],
+            })
+        else:
+            result['checks'].append({'check': 'local_db', 'found': False})
+
+        # 2. Stripe key present?
+        if not STRIPE_SECRET_KEY:
+            result['checks'].append({'check': 'stripe_key', 'present': False,
+                                     'error': 'STRIPE_SECRET_KEY not set on server'})
+            return jsonify(result), 200
+        result['checks'].append({'check': 'stripe_key', 'present': True})
+
+        # 3. Stripe customer lookup
+        stripe.api_key = STRIPE_SECRET_KEY
+        app_prices = load_price_map().get(app_id, {})
+        price_to_tier = {
+            (info.get('priceId') if isinstance(info, dict) else info): tier
+            for tier, info in app_prices.items()
+            if (info.get('priceId') if isinstance(info, dict) else info)
+        }
+        expected_price_ids = list(price_to_tier.keys())
+        result['checks'].append({'check': 'expected_price_ids', 'ids': expected_price_ids})
+
+        try:
+            customers = stripe.Customer.list(email=email, limit=10)
+            cust_list = customers.get('data', []) if isinstance(customers, dict) else list(customers.auto_paging_iter())
+            # Only get up to 10 to avoid slow iteration
+            if not isinstance(customers, dict):
+                cust_list = [c for c in customers.data]
+
+            result['checks'].append({'check': 'stripe_customers_found', 'count': len(cust_list)})
+
+            sub_details = []
+            for cust in cust_list:
+                cust_id = cust.get('id') if isinstance(cust, dict) else cust.id
+                subs = stripe.Subscription.list(customer=cust_id, status='all', limit=20)
+                sub_list = subs.get('data', []) if isinstance(subs, dict) else subs.data
+                for sub in sub_list:
+                    sub_status = sub.get('status') if isinstance(sub, dict) else sub.status
+                    items_obj = sub.get('items', {}) if isinstance(sub, dict) else sub.items
+                    item_list = items_obj.get('data', []) if isinstance(items_obj, dict) else items_obj.data
+                    price_ids_on_sub = []
+                    for item in item_list:
+                        price_obj = item.get('price', {}) if isinstance(item, dict) else item.price
+                        pid = price_obj.get('id') if isinstance(price_obj, dict) else price_obj.id
+                        price_ids_on_sub.append(pid)
+                    matches = [p for p in price_ids_on_sub if p in price_to_tier]
+                    sub_details.append({
+                        'status': sub_status,
+                        'price_ids': price_ids_on_sub,
+                        'matches_price_map': matches,
+                        'tier': price_to_tier.get(matches[0]) if matches else None,
+                    })
+            result['checks'].append({'check': 'stripe_subscriptions', 'subscriptions': sub_details})
+        except Exception as exc:
+            result['checks'].append({'check': 'stripe_lookup_error', 'error': str(exc)})
+
+        return jsonify(result), 200
+
+
+def _webhook_provision_license(session):
+    """Provision a license record from a completed Stripe checkout session.
+    Called by the webhook handler — runs silently (errors are logged, not raised)."""
+    try:
+        # Determine customer email
+        email = None
+        if isinstance(session, dict):
+            cd = session.get('customer_details') or {}
+            email = cd.get('email') or session.get('customer_email')
+        else:
+            cd = getattr(session, 'customer_details', None)
+            email = (getattr(cd, 'email', None) if cd else None) or getattr(session, 'customer_email', None)
+
+        if not email:
+            print('[WEBHOOK] No email found on session — cannot provision.')
+            return
+
+        email = email.strip().lower()
+
+        # Determine app_id and tier from metadata first, then line_items
+        if isinstance(session, dict):
+            metadata = session.get('metadata') or {}
+        else:
+            metadata = dict(getattr(session, 'metadata', {}) or {})
+
+        app_id = metadata.get('app_id', 'alien-ai-trader')
+        tier = metadata.get('tier')
+        session_id = (session.get('id') if isinstance(session, dict)
+                      else getattr(session, 'id', 'webhook'))
+
+        if not tier and STRIPE_SECRET_KEY:
+            # Payment Link purchase — no metadata, look up line items
+            stripe.api_key = STRIPE_SECRET_KEY
+            try:
+                items = stripe.checkout.Session.list_line_items(session_id, limit=5)
+                item_list = items.get('data', []) if isinstance(items, dict) else items.data
+                price_map = load_price_map()
+                for item in item_list:
+                    price_obj = item.get('price', {}) if isinstance(item, dict) else item.price
+                    pid = price_obj.get('id') if isinstance(price_obj, dict) else price_obj.id
+                    for t, info in price_map.get(app_id, {}).items():
+                        expected = info.get('priceId') if isinstance(info, dict) else info
+                        if expected == pid:
+                            tier = t
+                            break
+                    if tier:
+                        break
+            except Exception as exc:
+                print(f'[WEBHOOK] Could not retrieve line items: {exc}')
+
+        if not tier:
+            print(f'[WEBHOOK] Could not determine tier for session {session_id} — cannot provision.')
+            return
+
+        price_info = get_price_info(app_id, tier)
+        if not price_info:
+            print(f'[WEBHOOK] No price info for app_id={app_id} tier={tier}')
+            return
+
+        duration_days = price_info.get('durationDays', 30)
+        expires_at = datetime.now(timezone.utc) + timedelta(days=duration_days)
+        license_key = generate_license_key()
+
+        # Check if license already exists (idempotent)
+        existing = get_license(email, app_id)
+        if existing and existing['expires_at'] > datetime.now(timezone.utc):
+            print(f'[WEBHOOK] License already active for {email} — skipping duplicate.')
+            return
+
+        store_license(
+            email=email,
+            app_id=app_id,
+            tier=tier,
+            license_key=license_key,
+            expires_at=expires_at,
+            session_id=session_id,
+            billing_type=price_info.get('billingType', 'monthly'),
+        )
+        print(f'[WEBHOOK] License provisioned for {email} app={app_id} tier={tier} expires={expires_at.date()}')
+
+        # Send activation email
+        try:
+            _send_activation_email(email, app_id, tier, license_key)
+        except Exception as exc:
+            print(f'[WEBHOOK] Activation email failed (non-fatal): {exc}')
+
+    except Exception as exc:
+        print(f'[WEBHOOK] Unexpected error provisioning license: {exc}')
+
+
+def _send_activation_email(email, app_id, tier, license_key):
+    """Email the buyer their activation instructions immediately after purchase."""
+    if not SENDGRID_API_KEY or not SENDGRID_FROM_EMAIL:
+        print('[WEBHOOK] SendGrid not configured — skipping activation email.')
+        return
+    if not SendGridAPIClient or not Mail:
+        print('[WEBHOOK] SendGrid library not installed — skipping activation email.')
+        return
+
+    subject = 'Your Alien AI Trader subscription is active — here\'s how to unlock live trading'
+    body = f"""Hi,
+
+Your payment was received and your {tier} subscription for Alien AI Trader is now active.
+
+HOW TO ACTIVATE IN THE APP
+──────────────────────────
+1. Open Alien AI Trader on your computer (double-click the desktop shortcut).
+2. Go to the Settings tab → "License — Live Trading" card.
+3. Enter THIS email address: {email}
+4. Click Activate. The badge will flip to Licensed.
+
+Your license key (optional — email alone is enough): {license_key}
+
+If you have any trouble, just reply to this email.
+
+— Troy Walker · T-Dub's Apps
+"""
+    message = Mail(
+        from_email=SENDGRID_FROM_EMAIL,
+        to_emails=email,
+        subject=subject,
+        plain_text_content=body,
+    )
+    client = SendGridAPIClient(SENDGRID_API_KEY)
+    client.send(message)
+    print(f'[WEBHOOK] Activation email sent to {email}')
 
 
 def init_db():

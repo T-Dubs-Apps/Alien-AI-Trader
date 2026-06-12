@@ -553,14 +553,39 @@ def license_activate():
                                "Use the exact email you entered at checkout, or buy a license below."}), 200
 
 
+def _local_pricing() -> list:
+    """Read the price list shipped with this copy so Buy buttons always
+    appear, even when the central store server is asleep (Render free tier
+    spins down after inactivity)."""
+    try:
+        with open(os.path.join(base_dir, "price_map.json")) as f:
+            tiers = json.load(f).get(APP_ID, {})
+        out = []
+        for tier, info in tiers.items():
+            if isinstance(info, dict):
+                url = info.get("buyUrl", "")
+                if url and "REPLACE" not in url:
+                    out.append({"tier": tier, "price": info.get("price"),
+                                "billingType": info.get("billingType", "one_time"),
+                                "buyUrl": url})
+        return out
+    except Exception:
+        return []
+
+
 @app.route("/api/license/pricing-proxy", methods=["GET"])
 def license_pricing_proxy():
+    # Authoritative prices come from the central store, but it may be asleep
+    # (cold start) - fall back to the local list so buttons never vanish.
     try:
         r = requests.get(f"{LICENSE_SERVER_URL}/api/license/pricing",
-                         params={"appId": APP_ID}, timeout=15)
-        return jsonify(r.json()), 200
+                         params={"appId": APP_ID}, timeout=8)
+        data = r.json()
+        if data:
+            return jsonify(data), 200
     except Exception:
-        return jsonify([]), 200
+        pass
+    return jsonify(_local_pricing()), 200
 
 
 # -----------------------------------------------
