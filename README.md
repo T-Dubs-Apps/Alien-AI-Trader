@@ -130,10 +130,16 @@ After the installer finishes, you'll see:
 
   How to launch Alien AI Trader:
     • Double-click 'Alien AI Trader' on your Desktop
-    • OR double-click START.bat
 ```
 
-**From now on, just double-click the "Alien AI Trader" shortcut on your Desktop.**
+**You now have two Desktop icons:**
+
+| Icon | What it does |
+|------|--------------|
+| **Alien AI Trader** | Opens the app. One double-click — the dashboard opens in your browser and the engine runs quietly in the background. No console windows, nothing to read. |
+| **Alien AI Trader — Setup** | Re-run the installer or API-key wizard. Only needed when setting up or updating keys. |
+
+**For everyday use, just double-click "Alien AI Trader."**
 
 Your dashboard will open automatically at: **http://localhost:5000**
 
@@ -142,15 +148,15 @@ Your dashboard will open automatically at: **http://localhost:5000**
 ## 📅 Daily Use
 
 ### Starting the app
-Double-click **"Alien AI Trader"** on your Desktop (or double-click `START.bat`).
+Double-click **"Alien AI Trader"** on your Desktop. The app starts silently — no console window — and your browser opens automatically to **http://localhost:5000**. The dashboard and trading engine run quietly in the background.
 
-One console window will open running the dashboard and trading engine together. Your browser will open automatically to **http://localhost:5000**. **Do not close that window** while the app is running.
+Double-clicking the icon again while it's already running just re-opens the dashboard; it won't start a second copy.
 
 ### Stopping the app
-Close the console window labeled **Alien AI Trader**.
+Because it runs in the background, there's no window to close. To stop it completely, open **Task Manager** (Ctrl+Shift+Esc), find **Python** under Processes, and click **End task**. Leaving it running is fine — it's lightweight and only trades during market hours.
 
 ### Re-running setup or updating your API keys
-Double-click `LAUNCH.bat` and choose **[3] Setup Keys**.
+Double-click the **"Alien AI Trader — Setup"** icon (or `LAUNCH.bat`) and choose **[3] Setup Keys**.
 
 ---
 
@@ -380,11 +386,15 @@ nothing else to pay for):
 
 ```
 Alien_AI_Trader/
-├── LAUNCH.bat              ← Start here — installer menu
-├── START.bat               ← Daily launch (after install)
+├── Alien AI Trader.vbs     ← Silent launcher (what the Desktop icon runs)
+├── _server.bat             ← Runs the app hidden (used by the launcher)
+├── _open_browser.bat       ← Opens the dashboard once the server is ready
+├── LAUNCH.bat              ← Setup / installer menu
+├── START.bat               ← Visible launcher (fallback)
 ├── INSTALL.ps1             ← Full automated installer
 ├── dashboard.py            ← Web server + dashboard + API + AI trading engine
 ├── trading_engine.py       ← AI brain: signals, buy/sell, position sizing
+├── license_signing.py      ← Verifies your license is genuine (public key)
 ├── portfolio_ladder.py     ← Ladder scorer: ranks all stocks 0-100
 ├── forecasting.py          ← Predictive forecasting: regression + EMA stacking
 ├── setup_wizard.py         ← API key setup wizard
@@ -451,7 +461,7 @@ Not in Paper Mode (the default). Paper trading uses fake money. You have to manu
 By default it monitors Apple, Google, Tesla, Microsoft, and Amazon. You can add any US stock ticker in the Settings tab. Turn on "Scan Entire Market" to let the AI hunt through all 8,000+ US equities.
 
 **Q: How does the 5h 59m restart work?**
-Alpaca's free API has hourly usage limits. The engine automatically recycles its scan session every 5 hours and 59 minutes to stay within those limits. Your settings, open positions, and trade history are all preserved — only the internal scan session resets.
+Alpaca's free API has hourly usage limits. The engine automatically recycles its scan session every 5 hours and 59 minutes to stay within those limits. When it restarts, it reads your open positions back from your Alpaca account, so the dashboard returns exactly as it was — your holdings and settings carry over. Only the internal scan session resets.
 
 **Q: What if the app crashes?**
 The engine has a built-in crash recovery supervisor. If the trading engine or ladder scanner thread dies unexpectedly, it is automatically restarted and you get an alert.
