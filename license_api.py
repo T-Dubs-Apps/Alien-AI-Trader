@@ -717,7 +717,7 @@ def parse_license_row(row):
 
 
 def _license_response(record):
-    return {
+    resp = {
         'appId': record['app_id'],
         'tier': record['tier'],
         'email': record['email'],
@@ -727,6 +727,18 @@ def _license_response(record):
         'expiresAt': int(record['expires_at'].timestamp() * 1000),
         'billingType': record['billing_type'],
     }
+    # Sign so the installed app accepts it (the app rejects UNSIGNED licenses).
+    # Requires LICENSE_PRIVATE_KEY to be set on the central server.
+    try:
+        from license_signing import sign_license, can_sign
+        if can_sign():
+            resp = sign_license(resp)
+        else:
+            print('[LICENSE] WARNING: LICENSE_PRIVATE_KEY not set — license cannot be '
+                  'signed, so installed apps will reject it.')
+    except Exception as exc:
+        print(f'[LICENSE] WARNING: could not sign license: {exc}')
+    return resp
 
 
 def find_active_stripe_purchase(email, app_id):

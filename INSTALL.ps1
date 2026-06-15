@@ -354,7 +354,14 @@ $ws = New-Object -ComObject WScript.Shell
 # Shortcut 1 — Daily launcher: "Alien AI Trader"
 try {
     $sc = $ws.CreateShortcut("$env:USERPROFILE\Desktop\Alien AI Trader.lnk")
-    $sc.TargetPath       = $startBat
+    $silentVbs = Join-Path $installPath "Alien AI Trader.vbs"
+    if (Test-Path $silentVbs) {
+        # wscript runs the .vbs with NO console window — one icon, just the app.
+        $sc.TargetPath = "$env:SystemRoot\System32\wscript.exe"
+        $sc.Arguments  = "`"$silentVbs`""
+    } else {
+        $sc.TargetPath = $startBat   # fallback to the visible launcher
+    }
     $sc.WorkingDirectory = $installPath
     $sc.Description      = "Alien AI Trader — Launch the app"
     if ($iconFile) { $sc.IconLocation = $iconFile }

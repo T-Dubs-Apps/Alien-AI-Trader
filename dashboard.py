@@ -66,6 +66,8 @@ LICENSE_SERVER_URL = os.environ.get(
 ).rstrip("/")
 LICENSE_FILE = os.path.join(base_dir, "license.json")
 
+from license_signing import verify_license
+
 
 def _load_local_license() -> dict:
     try:
@@ -87,6 +89,10 @@ def _save_local_license(data: dict) -> None:
 def _license_is_active(lic: dict | None = None) -> bool:
     lic = lic if lic is not None else _load_local_license()
     try:
+        # Reject any license not cryptographically signed by the owner key — this is
+        # what stops a hand-written license.json from unlocking live trading.
+        if not verify_license(lic):
+            return False
         return lic.get("status") == "active" and int(lic.get("expiresAt", 0)) > int(time.time() * 1000)
     except Exception:
         return False
@@ -426,14 +432,23 @@ def _fetch_quotes_uncached(symbols: List[str]) -> Dict[str, Any]:
     if _alpaca:
         for sym in symbols:
             try:
-                t = _alpaca.get_latest_trade(sym)
-                price = _safe_float(getattr(t, "price", None))
+                # Snapshot gives the latest trade AND today's daily bar in one call,
+                # so we can show the day's move (▲/▼ vs open) — not just the price.
+                snap = _alpaca.get_snapshot(sym)
+                latest = getattr(snap, "latest_trade", None)
+                price = _safe_float(getattr(latest, "price", None)) if latest else None
+                daily = getattr(snap, "daily_bar", None)
+                open_px = _safe_float(getattr(daily, "o", None)) if daily else None
+                change = change_pct = None
+                if price is not None and open_px:
+                    change = round(price - open_px, 4)
+                    change_pct = round(change / open_px * 100, 4)
                 out[sym] = {
                     "symbol": sym,
                     "name": next((i["name"] for i in SYMBOL_CATALOG if i["symbol"] == sym), sym),
                     "price": price,
-                    "change": None,
-                    "change_percent": None,
+                    "change": change,
+                    "change_percent": change_pct,
                 }
             except Exception:
                 pass
@@ -765,6 +780,26 @@ def on_connect():
 
 # ── Integrated trading engine (replaces separate worker.py process) ─────
 
+def _engine_alert(message: str, level: str = "info", symbol: str = "") -> None:
+    """Bridge engine alerts to the browser in-process — no HTTP, no
+    DASHBOARD_BASE_URL needed. Mirrors the /api/notifications handler so engine
+    buys, sells, shield events and errors appear in the live notifications feed
+    (with their colors, browser push and sound)."""
+    global _notifications
+    note = {
+        "time": int(time.time()),
+        "level": level,
+        "symbol": symbol,
+        "message": message,
+    }
+    _notifications.append(note)
+    _notifications = _notifications[-200:]
+    try:
+        socketio.emit("notification", note)
+    except Exception:
+        pass
+
+
 def _internal_heartbeat(eng: TradingEngine, lad: PortfolioLadderScanner) -> None:
     """Update _worker_status and _ladder_top20 in-process (no HTTP round-trip)."""
     global _worker_status, _ladder_top20
@@ -841,7 +876,7 @@ def _engine_session(session_num: int) -> None:
     ]
     mode = os.environ.get("ENGINE_MODE", "AI")
 
-    _engine = TradingEngine(stock_list=stock_list, mode=mode)
+    _engine = TradingEngine(stock_list=stock_list, mode=mode, alert_callback=_engine_alert)
     ladder_symbols = list(dict.fromkeys(stock_list + DEFAULT_PORTFOLIO))
     _ladder = PortfolioLadderScanner(symbols=ladder_symbols, engine=_engine)
     integrate_ladder_with_engine(_engine, _ladder)

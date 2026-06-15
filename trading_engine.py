@@ -75,6 +75,7 @@ class TradingEngine:
         self.current_holdings: Dict[str, Dict[str, Any]] = {}
         self.trade_log: List[Dict[str, Any]] = []
         self.profit = 0.0
+        self._reconciled = False   # seed holdings from Alpaca once per session
 
         # ROI tracking (inspired by growth_forecaster pattern)
         self._session_start_equity: Optional[float] = None
@@ -305,12 +306,72 @@ class TradingEngine:
 
     def start(self):
         self.running = True
+        # Seed holdings from the broker ONCE so the dashboard reflects the real
+        # account after every restart (runs once per engine instance/session).
+        if not self._reconciled:
+            self._reconcile_from_alpaca()
+            self._reconciled = True
         # Start after-hours background watcher on its own daemon thread
         t = threading.Thread(target=self._afterhours_loop, daemon=True, name="afterhours-watcher")
         t.start()
 
     def stop(self):
         self.running = False
+
+    def _reconcile_from_alpaca(self):
+        """Seed in-memory holdings from the broker's REAL open positions.
+
+        A fresh TradingEngine starts with empty current_holdings/trade_log.
+        Because the supervisor builds a new engine every session (~5h59m),
+        without this the dashboard would show nothing after each restart even
+        though Alpaca still holds the positions. Reading them back makes the
+        app 'return exactly as it was' after a restart.
+
+        Note: Alpaca position objects carry no entry timestamp, so each seeded
+        position's hold-clock restarts at 'now'. That only makes the engine
+        WAIT LONGER before a voluntary profit-sell (never causes a same-day
+        round-trip) — emergency stop-losses and trailing stops are exempt and
+        still fire immediately.
+        """
+        try:
+            positions = self.api.list_positions()
+        except Exception as e:
+            self.send_alert(
+                f"Startup reconcile skipped — could not read Alpaca positions: {e}",
+                level="warn",
+            )
+            return
+
+        seeded = 0
+        with self.lock:
+            for pos in positions:
+                try:
+                    symbol = pos.symbol
+                    qty = float(pos.qty)
+                    if qty <= 0:
+                        continue
+                    if qty.is_integer():
+                        qty = int(qty)
+                    entry = float(pos.avg_entry_price)
+                    try:
+                        current = float(pos.current_price)
+                    except Exception:
+                        current = entry
+                    self.current_holdings[symbol] = {
+                        "price": entry, "qty": qty,
+                        "cost": entry * qty, "time": time.time(),
+                    }
+                    # Trailing peak starts at the higher of entry / current price
+                    self._peak_prices[symbol] = max(entry, current)
+                    seeded += 1
+                except Exception:
+                    continue
+
+        if seeded:
+            self.send_alert(
+                f"Reconciled {seeded} open position(s) from Alpaca on startup.",
+                level="info",
+            )
 
     def run_forever(self):
         """
