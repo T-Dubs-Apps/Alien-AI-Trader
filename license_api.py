@@ -40,6 +40,10 @@ TWILIO_AUTH_TOKEN = os.getenv('TWILIO_AUTH_TOKEN')
 TWILIO_FROM_NUMBER = os.getenv('TWILIO_FROM_NUMBER')
 
 
+def _norm_email(value):
+    return (value or '').strip().lower()
+
+
 def register_license_routes(app):
     init_db()
     if STRIPE_SECRET_KEY and LICENSE_SECRET == 'CHANGE_ME':
@@ -49,7 +53,7 @@ def register_license_routes(app):
     @app.route('/api/license/start', methods=['POST'])
     def start_verification():
         payload = request.json or {}
-        email = (payload.get('email') or '').strip()
+        email = _norm_email(payload.get('email'))
         phone = (payload.get('phone') or '').strip()
         app_id = (payload.get('appId') or '').strip()
         tier = (payload.get('tier') or '').strip()
@@ -106,7 +110,7 @@ def register_license_routes(app):
     def create_checkout():
         payload = request.json or {}
         verification_id = (payload.get('verificationId') or '').strip()
-        email = (payload.get('email') or '').strip()
+        email = _norm_email(payload.get('email'))
         app_id = (payload.get('appId') or '').strip()
         tier = (payload.get('tier') or '').strip()
 
@@ -210,7 +214,7 @@ def register_license_routes(app):
         secret = (payload.get('secret') or '').strip()
         if LICENSE_SECRET == 'CHANGE_ME' or not secret or secret != LICENSE_SECRET:
             return jsonify({'error': 'unauthorized'}), 403
-        email = (payload.get('email') or '').strip()
+        email = _norm_email(payload.get('email'))
         app_id = (payload.get('appId') or 'alien-ai-trader').strip()
         tier = (payload.get('tier') or 'monthly').strip()
         if not email:
@@ -271,7 +275,7 @@ def register_license_routes(app):
         Order of truth: local DB first, then Stripe directly — so licenses
         survive a Render disk wipe and Payment Link purchases are honored."""
         payload = request.json or {}
-        email = (payload.get('email') or '').strip()
+        email = _norm_email(payload.get('email'))
         app_id = (payload.get('appId') or '').strip()
         if not email or not app_id:
             return jsonify({'error': 'email and appId required'}), 400
@@ -299,7 +303,7 @@ def register_license_routes(app):
     @app.route('/api/license/status', methods=['POST'])
     def license_status():
         payload = request.json or {}
-        email = (payload.get('email') or '').strip()
+        email = _norm_email(payload.get('email'))
         app_id = (payload.get('appId') or '').strip()
 
         if not email or not app_id:
@@ -607,6 +611,7 @@ def init_db():
 
 
 def store_verification(verification_id, email, phone, app_id, tier, code, expires_at):
+    email = _norm_email(email)
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute(
             """
@@ -657,6 +662,7 @@ def mark_verification_consumed(verification_id):
 
 
 def store_license(email, app_id, tier, license_key, expires_at, session_id, billing_type):
+    email = _norm_email(email)
     activated_at = datetime.now(timezone.utc)
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute(
@@ -679,10 +685,11 @@ def store_license(email, app_id, tier, license_key, expires_at, session_id, bill
 
 
 def get_license(email, app_id):
+    email = _norm_email(email)
     with sqlite3.connect(DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute(
-            "SELECT * FROM licenses WHERE email = ? AND app_id = ? ORDER BY id DESC LIMIT 1",
+            "SELECT * FROM licenses WHERE LOWER(email) = LOWER(?) AND app_id = ? ORDER BY id DESC LIMIT 1",
             (email, app_id),
         ).fetchone()
         if not row:
@@ -748,6 +755,7 @@ def find_active_stripe_purchase(email, app_id):
     if not STRIPE_SECRET_KEY:
         return None
     stripe.api_key = STRIPE_SECRET_KEY
+    email = _norm_email(email)
 
     app_prices = load_price_map().get(app_id, {})
     price_to_tier = {}
@@ -759,8 +767,13 @@ def find_active_stripe_purchase(email, app_id):
     try:
         customers = stripe.Customer.list(email=email, limit=10)
         for cust in customers.get('data', []):
-            subs = stripe.Subscription.list(customer=cust['id'], status='active', limit=20)
+            # Stripe may report a paid subscription as trialing/past_due depending
+            # on billing timing and retries; treat these as valid for activation.
+            subs = stripe.Subscription.list(customer=cust['id'], status='all', limit=20)
             for sub in subs.get('data', []):
+                sub_status = (sub.get('status') or '').lower()
+                if sub_status not in {'active', 'trialing', 'past_due'}:
+                    continue
                 for item in sub.get('items', {}).get('data', []):
                     pid = item.get('price', {}).get('id')
                     if pid in price_to_tier:
