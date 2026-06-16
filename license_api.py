@@ -9,6 +9,11 @@ import stripe
 from flask import jsonify, request
 
 try:
+    from config_loader import CONFIG as APP_CONFIG
+except Exception:  # pragma: no cover
+    APP_CONFIG = {}
+
+try:
     from sendgrid import SendGridAPIClient
     from sendgrid.helpers.mail import Mail
 except Exception:  # pragma: no cover
@@ -28,9 +33,9 @@ if LICENSE_SECRET == 'CHANGE_ME':
     print("[LICENSE] WARNING: LICENSE_SECRET is using the default value. "
           "Set the LICENSE_SECRET env var in production or license keys can be forged.")
 
-STRIPE_SECRET_KEY = os.getenv('STRIPE_SECRET_KEY')
-STRIPE_WEBHOOK_SECRET = os.getenv('STRIPE_WEBHOOK_SECRET')
-HUB_BASE_URL = os.getenv('HUB_BASE_URL')
+STRIPE_SECRET_KEY = os.getenv('STRIPE_SECRET_KEY') or APP_CONFIG.get('STRIPE_SECRET_KEY')
+STRIPE_WEBHOOK_SECRET = os.getenv('STRIPE_WEBHOOK_SECRET') or APP_CONFIG.get('STRIPE_WEBHOOK_SECRET')
+HUB_BASE_URL = os.getenv('HUB_BASE_URL') or APP_CONFIG.get('HUB_BASE_URL')
 
 SENDGRID_API_KEY = os.getenv('SENDGRID_API_KEY')
 SENDGRID_FROM_EMAIL = os.getenv('SENDGRID_FROM_EMAIL')
