@@ -756,6 +756,7 @@ def find_active_stripe_purchase(email, app_id):
         return None
     stripe.api_key = STRIPE_SECRET_KEY
     email = _norm_email(email)
+    print(f'[LICENSE] Searching Stripe for purchase: email={email} app_id={app_id}')
 
     app_prices = load_price_map().get(app_id, {})
     price_to_tier = {}
@@ -766,6 +767,8 @@ def find_active_stripe_purchase(email, app_id):
 
     try:
         customers = stripe.Customer.list(email=email, limit=10)
+        cust_count = len(customers.get('data', []))
+        print(f'[LICENSE] Fallback 1 (Customer.list): found {cust_count} customers')
         for cust in customers.get('data', []):
             # Stripe may report a paid subscription as trialing/past_due depending
             # on billing timing and retries; treat these as valid for activation.
@@ -789,13 +792,15 @@ def find_active_stripe_purchase(email, app_id):
                             'expires_at': expires_at,
                             'billing_type': info.get('billingType', 'monthly'),
                         }
-    except Exception:
+    except Exception as exc:
+        print(f'[LICENSE] Fallback 1 (Customer.list) error: {exc}')
         pass
 
     # Some Stripe payment-link flows complete successfully but do not make the
     # buyer discoverable via Customer.list(email=...). Fall back to recent
     # completed Checkout Sessions and match by the email typed during checkout.
     try:
+        print(f'[LICENSE] Fallback 2 (Checkout Sessions): scanning recent sessions')
         sessions = stripe.checkout.Session.list(limit=200)
         for session in sessions.get('data', []):
             session_email = _norm_email(
@@ -856,12 +861,14 @@ def find_active_stripe_purchase(email, app_id):
                 }
 
             days = info.get('durationDays', 30)
+            print(f'[LICENSE] Fallback 2 matched: tier={tier}')
             return {
                 'tier': tier,
                 'expires_at': datetime.now(timezone.utc) + timedelta(days=days),
                 'billing_type': info.get('billingType', 'monthly'),
             }
-    except Exception:
+    except Exception as exc:
+        print(f'[LICENSE] Fallback 2 (Checkout Sessions) error: {exc}')
         pass
 
     # Final fallback: scan recent subscriptions directly and compare the email
@@ -869,6 +876,7 @@ def find_active_stripe_purchase(email, app_id):
     # email lookup, which can miss customers created through some checkout/link
     # flows even though the subscription exists and is billable.
     try:
+        print(f'[LICENSE] Fallback 3 (Direct Subscription Scan): scanning recent subscriptions')
         subs = stripe.Subscription.list(status='all', limit=200)
         for sub in subs.get('data', []):
             sub_status = (sub.get('status') or '').lower()
@@ -894,6 +902,7 @@ def find_active_stripe_purchase(email, app_id):
             if customer_email != email:
                 continue
 
+            print(f'[LICENSE] Fallback 3 matched: tier={matched_tier} customer_id={customer_id}')
             period_end = sub.get('current_period_end')
             if period_end:
                 expires_at = datetime.fromtimestamp(period_end, tz=timezone.utc)
@@ -906,8 +915,11 @@ def find_active_stripe_purchase(email, app_id):
                 'expires_at': expires_at,
                 'billing_type': matched_info.get('billingType', 'monthly'),
             }
-    except Exception:
+    except Exception as exc:
+        print(f'[LICENSE] Fallback 3 (Direct Subscription Scan) error: {exc}')
         return None
+    
+    print(f'[LICENSE] No valid purchase found in any fallback for {email}')
     return None
 
 
