@@ -796,7 +796,7 @@ def find_active_stripe_purchase(email, app_id):
     # buyer discoverable via Customer.list(email=...). Fall back to recent
     # completed Checkout Sessions and match by the email typed during checkout.
     try:
-        sessions = stripe.checkout.Session.list(limit=100)
+        sessions = stripe.checkout.Session.list(limit=200)
         for session in sessions.get('data', []):
             session_email = _norm_email(
                 (session.get('customer_details') or {}).get('email') or session.get('customer_email')
@@ -860,6 +860,51 @@ def find_active_stripe_purchase(email, app_id):
                 'tier': tier,
                 'expires_at': datetime.now(timezone.utc) + timedelta(days=days),
                 'billing_type': info.get('billingType', 'monthly'),
+            }
+    except Exception:
+        pass
+
+    # Final fallback: scan recent subscriptions directly and compare the email
+    # on each linked Stripe customer. This avoids relying on Stripe's indexed
+    # email lookup, which can miss customers created through some checkout/link
+    # flows even though the subscription exists and is billable.
+    try:
+        subs = stripe.Subscription.list(status='all', limit=200)
+        for sub in subs.get('data', []):
+            sub_status = (sub.get('status') or '').lower()
+            if sub_status not in {'active', 'trialing', 'past_due'}:
+                continue
+
+            matched_tier = None
+            matched_info = None
+            for item in sub.get('items', {}).get('data', []):
+                pid = item.get('price', {}).get('id')
+                if pid in price_to_tier:
+                    matched_tier, matched_info = price_to_tier[pid]
+                    break
+            if not matched_tier:
+                continue
+
+            customer_id = sub.get('customer')
+            if not customer_id:
+                continue
+
+            customer = stripe.Customer.retrieve(customer_id)
+            customer_email = _norm_email(customer.get('email'))
+            if customer_email != email:
+                continue
+
+            period_end = sub.get('current_period_end')
+            if period_end:
+                expires_at = datetime.fromtimestamp(period_end, tz=timezone.utc)
+            else:
+                days = matched_info.get('durationDays', 30)
+                expires_at = datetime.now(timezone.utc) + timedelta(days=days)
+
+            return {
+                'tier': matched_tier,
+                'expires_at': expires_at,
+                'billing_type': matched_info.get('billingType', 'monthly'),
             }
     except Exception:
         return None
