@@ -807,14 +807,16 @@ def _license_response(record):
 
 
 def find_active_stripe_purchase(email, app_id):
-    """Look the buyer up directly in Stripe by email and return their active
-    subscription tier, or None. Stripe is the permanent record — the local
-    SQLite DB is just a cache that may be wiped on redeploy."""
+    """Resolve an email to an active purchase using multiple Stripe sources.
+
+    This keeps activation fully autonomous: buyer pays in Stripe, then enters
+    the same email in the app to unlock live trading.
+    """
     if not STRIPE_SECRET_KEY:
         return None
+
     stripe.api_key = STRIPE_SECRET_KEY
     email = _norm_email(email)
-    print(f'[LICENSE] Searching Stripe for purchase: email={email} app_id={app_id}')
 
     app_prices = load_price_map().get(app_id, {})
     price_to_tier = {}
@@ -823,55 +825,50 @@ def find_active_stripe_purchase(email, app_id):
         if pid:
             price_to_tier[pid] = (tier, info if isinstance(info, dict) else {})
 
+    valid_sub_status = {'active', 'trialing', 'past_due'}
+
+    def _resolve_period(tier, info, period_end):
+        if period_end:
+            expires_at = datetime.fromtimestamp(period_end, tz=timezone.utc)
+        else:
+            expires_at = datetime.now(timezone.utc) + timedelta(days=info.get('durationDays', 30))
+        return {
+            'tier': tier,
+            'expires_at': expires_at,
+            'billing_type': info.get('billingType', 'monthly'),
+        }
+
+    # 1) Fast path: customer-by-email -> subscriptions
     try:
-        customers = stripe.Customer.list(email=email, limit=10)
-        cust_count = len(customers.get('data', []))
-        print(f'[LICENSE] Fallback 1 (Customer.list): found {cust_count} customers')
+        customers = stripe.Customer.list(email=email, limit=25)
         for cust in customers.get('data', []):
-            # Stripe may report a paid subscription as trialing/past_due depending
-            # on billing timing and retries; treat these as valid for activation.
-            subs = stripe.Subscription.list(customer=cust['id'], status='all', limit=20)
+            subs = stripe.Subscription.list(customer=cust['id'], status='all', limit=50)
             for sub in subs.get('data', []):
-                sub_status = (sub.get('status') or '').lower()
-                if sub_status not in {'active', 'trialing', 'past_due'}:
+                if (sub.get('status') or '').lower() not in valid_sub_status:
                     continue
                 for item in sub.get('items', {}).get('data', []):
-                    pid = item.get('price', {}).get('id')
+                    pid = (item.get('price') or {}).get('id')
                     if pid in price_to_tier:
                         tier, info = price_to_tier[pid]
-                        period_end = sub.get('current_period_end')
-                        if period_end:
-                            expires_at = datetime.fromtimestamp(period_end, tz=timezone.utc)
-                        else:
-                            days = info.get('durationDays', 30)
-                            expires_at = datetime.now(timezone.utc) + timedelta(days=days)
-                        return {
-                            'tier': tier,
-                            'expires_at': expires_at,
-                            'billing_type': info.get('billingType', 'monthly'),
-                        }
+                        return _resolve_period(tier, info, sub.get('current_period_end'))
     except Exception as exc:
-        print(f'[LICENSE] Fallback 1 (Customer.list) error: {exc}')
-        pass
+        print(f'[LICENSE] Stripe lookup path 1 failed: {exc}')
 
-    # Some Stripe payment-link flows complete successfully but do not make the
-    # buyer discoverable via Customer.list(email=...). Fall back to recent
-    # completed Checkout Sessions and match by the email typed during checkout.
+    # 2) Checkout Sessions by typed checkout email (supports payment links)
     try:
-        print(f'[LICENSE] Fallback 2 (Checkout Sessions): scanning recent sessions')
-        sessions = stripe.checkout.Session.list(limit=200)
-        for session in sessions.get('data', []):
-            session_email = _norm_email(
-                (session.get('customer_details') or {}).get('email') or session.get('customer_email')
-            )
+        scanned = 0
+        sessions = stripe.checkout.Session.list(limit=100)
+        for session in sessions.auto_paging_iter():
+            scanned += 1
+            if scanned > 1000:
+                break
+
+            session_email = _norm_email((session.get('customer_details') or {}).get('email') or session.get('customer_email'))
             if session_email != email:
                 continue
-
             if (session.get('status') or '').lower() != 'complete':
                 continue
-
-            payment_status = (session.get('payment_status') or '').lower()
-            if payment_status not in {'paid', 'no_payment_required'}:
+            if (session.get('payment_status') or '').lower() not in {'paid', 'no_payment_required'}:
                 continue
 
             metadata = session.get('metadata') or {}
@@ -881,9 +878,8 @@ def find_active_stripe_purchase(email, app_id):
 
             tier = metadata.get('tier')
             info = None
-
             if not tier:
-                items = stripe.checkout.Session.list_line_items(session['id'], limit=10)
+                items = stripe.checkout.Session.list_line_items(session['id'], limit=20)
                 for item in items.get('data', []):
                     pid = (item.get('price') or {}).get('id')
                     if pid in price_to_tier:
@@ -895,7 +891,6 @@ def find_active_stripe_purchase(email, app_id):
 
             if not tier:
                 continue
-
             if info is None:
                 raw = app_prices.get(tier)
                 info = raw if isinstance(raw, dict) else {}
@@ -903,81 +898,70 @@ def find_active_stripe_purchase(email, app_id):
             sub_id = session.get('subscription')
             if sub_id:
                 sub = stripe.Subscription.retrieve(sub_id)
-                sub_status = (sub.get('status') or '').lower()
-                if sub_status not in {'active', 'trialing', 'past_due'}:
+                if (sub.get('status') or '').lower() not in valid_sub_status:
                     continue
-                period_end = sub.get('current_period_end')
-                if period_end:
-                    expires_at = datetime.fromtimestamp(period_end, tz=timezone.utc)
-                else:
-                    days = info.get('durationDays', 30)
-                    expires_at = datetime.now(timezone.utc) + timedelta(days=days)
-                return {
-                    'tier': tier,
-                    'expires_at': expires_at,
-                    'billing_type': info.get('billingType', 'monthly'),
-                }
+                return _resolve_period(tier, info, sub.get('current_period_end'))
 
-            days = info.get('durationDays', 30)
-            print(f'[LICENSE] Fallback 2 matched: tier={tier}')
-            return {
-                'tier': tier,
-                'expires_at': datetime.now(timezone.utc) + timedelta(days=days),
-                'billing_type': info.get('billingType', 'monthly'),
-            }
+            return _resolve_period(tier, info, None)
     except Exception as exc:
-        print(f'[LICENSE] Fallback 2 (Checkout Sessions) error: {exc}')
-        pass
+        print(f'[LICENSE] Stripe lookup path 2 failed: {exc}')
 
-    # Final fallback: scan recent subscriptions directly and compare the email
-    # on each linked Stripe customer. This avoids relying on Stripe's indexed
-    # email lookup, which can miss customers created through some checkout/link
-    # flows even though the subscription exists and is billable.
+    # 3) Paid invoices (helps when session metadata is sparse)
     try:
-        print(f'[LICENSE] Fallback 3 (Direct Subscription Scan): scanning recent subscriptions')
-        subs = stripe.Subscription.list(status='all', limit=200)
-        for sub in subs.get('data', []):
-            sub_status = (sub.get('status') or '').lower()
-            if sub_status not in {'active', 'trialing', 'past_due'}:
+        scanned = 0
+        invoices = stripe.Invoice.list(status='paid', limit=100)
+        for inv in invoices.auto_paging_iter():
+            scanned += 1
+            if scanned > 1000:
+                break
+
+            customer_email = _norm_email(inv.get('customer_email'))
+            if not customer_email and inv.get('customer'):
+                cust = stripe.Customer.retrieve(inv.get('customer'))
+                customer_email = _norm_email(cust.get('email'))
+            if customer_email != email:
                 continue
 
-            matched_tier = None
-            matched_info = None
-            for item in sub.get('items', {}).get('data', []):
-                pid = item.get('price', {}).get('id')
+            for line in inv.get('lines', {}).get('data', []):
+                pid = (line.get('price') or {}).get('id')
                 if pid in price_to_tier:
-                    matched_tier, matched_info = price_to_tier[pid]
+                    tier, info = price_to_tier[pid]
+                    return _resolve_period(tier, info, inv.get('period_end'))
+    except Exception as exc:
+        print(f'[LICENSE] Stripe lookup path 3 failed: {exc}')
+
+    # 4) Direct subscription sweep (last-resort catch-all)
+    try:
+        scanned = 0
+        subs = stripe.Subscription.list(status='all', limit=100)
+        for sub in subs.auto_paging_iter():
+            scanned += 1
+            if scanned > 1000:
+                break
+            if (sub.get('status') or '').lower() not in valid_sub_status:
+                continue
+
+            tier = None
+            info = None
+            for item in sub.get('items', {}).get('data', []):
+                pid = (item.get('price') or {}).get('id')
+                if pid in price_to_tier:
+                    tier, info = price_to_tier[pid]
                     break
-            if not matched_tier:
+            if not tier:
                 continue
 
             customer_id = sub.get('customer')
             if not customer_id:
                 continue
-
             customer = stripe.Customer.retrieve(customer_id)
-            customer_email = _norm_email(customer.get('email'))
-            if customer_email != email:
+            if _norm_email(customer.get('email')) != email:
                 continue
 
-            print(f'[LICENSE] Fallback 3 matched: tier={matched_tier} customer_id={customer_id}')
-            period_end = sub.get('current_period_end')
-            if period_end:
-                expires_at = datetime.fromtimestamp(period_end, tz=timezone.utc)
-            else:
-                days = matched_info.get('durationDays', 30)
-                expires_at = datetime.now(timezone.utc) + timedelta(days=days)
-
-            return {
-                'tier': matched_tier,
-                'expires_at': expires_at,
-                'billing_type': matched_info.get('billingType', 'monthly'),
-            }
+            return _resolve_period(tier, info, sub.get('current_period_end'))
     except Exception as exc:
-        print(f'[LICENSE] Fallback 3 (Direct Subscription Scan) error: {exc}')
-        return None
-    
-    print(f'[LICENSE] No valid purchase found in any fallback for {email}')
+        print(f'[LICENSE] Stripe lookup path 4 failed: {exc}')
+
     return None
 
 
