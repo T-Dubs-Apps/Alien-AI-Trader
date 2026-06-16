@@ -208,8 +208,7 @@ def register_license_routes(app):
 
     @app.route('/api/license/grant', methods=['POST'])
     def grant_license():
-        """Owner-only: issue a license for an email, guarded by LICENSE_SECRET.
-        Used to grant test/comp licenses without a Stripe purchase."""
+        """Deprecated: use /api/license/admin/grant instead."""
         payload = request.json or {}
         secret = (payload.get('secret') or '').strip()
         if LICENSE_SECRET == 'CHANGE_ME' or not secret or secret != LICENSE_SECRET:
@@ -220,15 +219,65 @@ def register_license_routes(app):
         if not email:
             return jsonify({'error': 'email required'}), 400
         price_info = get_price_info(app_id, tier) or {}
-        duration = price_info.get('durationDays', 365)
+        duration = price_info.get('durationDays', 30)
         expires_at = datetime.now(timezone.utc) + timedelta(days=duration)
         key = generate_license_key()
-        store_license(email=email, app_id=app_id, tier=tier, license_key=key,
-                      expires_at=expires_at, session_id='manual-grant',
-                      billing_type=price_info.get('billingType', 'monthly'))
+        store_license(
+            email=email,
+            app_id=app_id,
+            tier=tier,
+            license_key=key,
+            expires_at=expires_at,
+            session_id='manual-grant',
+            billing_type=price_info.get('billingType', 'monthly'),
+        )
         return jsonify({'status': 'granted', 'email': email, 'tier': tier,
                         'licenseKey': key,
                         'expiresAt': int(expires_at.timestamp() * 1000)}), 200
+
+    @app.route('/api/license/admin/grant', methods=['POST'])
+    def admin_grant_license():
+        """Admin endpoint: issue a license for any email after manual Stripe payment.
+        Authorization: Bearer <LICENSE_SECRET>
+        Body: {"email": "user@example.com", "appId": "alien-ai-trader", "tier": "monthly"}
+        """
+        auth_header = request.headers.get('Authorization', '').strip()
+        secret = auth_header.replace('Bearer ', '') if auth_header.startswith('Bearer ') else ''
+        
+        if LICENSE_SECRET == 'CHANGE_ME' or not secret or secret != LICENSE_SECRET:
+            return jsonify({'error': 'Unauthorized. Use: Authorization: Bearer <LICENSE_SECRET>'}), 403
+        
+        payload = request.json or {}
+        email = _norm_email(payload.get('email'))
+        app_id = (payload.get('appId') or 'alien-ai-trader').strip()
+        tier = (payload.get('tier') or 'monthly').strip()
+        
+        if not email:
+            return jsonify({'error': 'email required'}), 400
+        
+        price_info = get_price_info(app_id, tier) or {}
+        duration = price_info.get('durationDays', 30)
+        expires_at = datetime.now(timezone.utc) + timedelta(days=duration)
+        key = generate_license_key()
+        
+        store_license(
+            email=email,
+            app_id=app_id,
+            tier=tier,
+            license_key=key,
+            expires_at=expires_at,
+            session_id='admin-grant',
+            billing_type=price_info.get('billingType', 'monthly'),
+        )
+        
+        print(f'[LICENSE] Admin granted {tier} license to {email}')
+        return jsonify({
+            'status': 'granted',
+            'email': email,
+            'tier': tier,
+            'licenseKey': key,
+            'expiresAt': int(expires_at.timestamp() * 1000),
+        }), 200
 
     @app.route('/api/license/diag', methods=['GET'])
     def license_diag():
@@ -248,6 +297,15 @@ def register_license_routes(app):
             'license_secret_set': LICENSE_SECRET != 'CHANGE_ME',
             'sendgrid_set': bool(SENDGRID_API_KEY and SENDGRID_FROM_EMAIL),
             'price_map_tiers': tiers,
+        }), 200
+
+    @app.route('/api/license/admin/diag', methods=['GET'])
+    def admin_diag():
+        """Diagnostics for admin license granting."""
+        return jsonify({
+            'license_secret_set': LICENSE_SECRET != 'CHANGE_ME',
+            'stripe_key_present': bool(STRIPE_SECRET_KEY),
+            'message': 'To grant a license: POST /api/license/admin/grant with Authorization: Bearer <LICENSE_SECRET>'
         }), 200
 
     @app.route('/api/license/pricing', methods=['GET'])
