@@ -790,6 +790,78 @@ def find_active_stripe_purchase(email, app_id):
                             'billing_type': info.get('billingType', 'monthly'),
                         }
     except Exception:
+        pass
+
+    # Some Stripe payment-link flows complete successfully but do not make the
+    # buyer discoverable via Customer.list(email=...). Fall back to recent
+    # completed Checkout Sessions and match by the email typed during checkout.
+    try:
+        sessions = stripe.checkout.Session.list(limit=100)
+        for session in sessions.get('data', []):
+            session_email = _norm_email(
+                (session.get('customer_details') or {}).get('email') or session.get('customer_email')
+            )
+            if session_email != email:
+                continue
+
+            if (session.get('status') or '').lower() != 'complete':
+                continue
+
+            payment_status = (session.get('payment_status') or '').lower()
+            if payment_status not in {'paid', 'no_payment_required'}:
+                continue
+
+            metadata = session.get('metadata') or {}
+            session_app_id = (metadata.get('app_id') or app_id).strip()
+            if session_app_id != app_id:
+                continue
+
+            tier = metadata.get('tier')
+            info = None
+
+            if not tier:
+                items = stripe.checkout.Session.list_line_items(session['id'], limit=10)
+                for item in items.get('data', []):
+                    pid = (item.get('price') or {}).get('id')
+                    if pid in price_to_tier:
+                        tier, info = price_to_tier[pid]
+                        break
+            elif tier in app_prices:
+                raw = app_prices[tier]
+                info = raw if isinstance(raw, dict) else {}
+
+            if not tier:
+                continue
+
+            if info is None:
+                raw = app_prices.get(tier)
+                info = raw if isinstance(raw, dict) else {}
+
+            sub_id = session.get('subscription')
+            if sub_id:
+                sub = stripe.Subscription.retrieve(sub_id)
+                sub_status = (sub.get('status') or '').lower()
+                if sub_status not in {'active', 'trialing', 'past_due'}:
+                    continue
+                period_end = sub.get('current_period_end')
+                if period_end:
+                    expires_at = datetime.fromtimestamp(period_end, tz=timezone.utc)
+                else:
+                    days = info.get('durationDays', 30)
+                    expires_at = datetime.now(timezone.utc) + timedelta(days=days)
+                return {
+                    'tier': tier,
+                    'expires_at': expires_at,
+                    'billing_type': info.get('billingType', 'monthly'),
+                }
+
+            days = info.get('durationDays', 30)
+            return {
+                'tier': tier,
+                'expires_at': datetime.now(timezone.utc) + timedelta(days=days),
+                'billing_type': info.get('billingType', 'monthly'),
+            }
+    except Exception:
         return None
     return None
 
