@@ -35,6 +35,13 @@ services:
         sync: false
       - key: TWILIO_TO_NUMBER
         sync: false
+      # -- Email delivery (buyer activation emails) -------------------------
+      # Gmail SMTP — set both in the Render dashboard (App Password, not your
+      # normal Gmail password; requires 2-Step Verification on the account).
+      - key: GMAIL_ADDRESS
+        sync: false
+      - key: GMAIL_APP_PASSWORD
+        sync: false
       # -- Trading mode -----------------------------------------------------
       - key: TRADING_MODE
         value: paper

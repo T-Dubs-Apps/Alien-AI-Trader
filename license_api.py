@@ -3,6 +3,8 @@ import os
 import secrets
 import sqlite3
 import hashlib
+import smtplib
+from email.message import EmailMessage
 from datetime import datetime, timedelta, timezone
 
 import stripe
@@ -39,6 +41,11 @@ HUB_BASE_URL = os.getenv('HUB_BASE_URL') or APP_CONFIG.get('HUB_BASE_URL')
 
 SENDGRID_API_KEY = os.getenv('SENDGRID_API_KEY')
 SENDGRID_FROM_EMAIL = os.getenv('SENDGRID_FROM_EMAIL')
+
+# Gmail SMTP (simplest, free) — preferred email channel. Requires a Google
+# "App Password" (16 chars, needs 2-Step Verification enabled on the account).
+GMAIL_ADDRESS = os.getenv('GMAIL_ADDRESS') or APP_CONFIG.get('GMAIL_ADDRESS')
+GMAIL_APP_PASSWORD = os.getenv('GMAIL_APP_PASSWORD') or APP_CONFIG.get('GMAIL_APP_PASSWORD')
 
 TWILIO_ACCOUNT_SID = os.getenv('TWILIO_ACCOUNT_SID')
 TWILIO_AUTH_TOKEN = os.getenv('TWILIO_AUTH_TOKEN')
@@ -296,11 +303,16 @@ def register_license_routes(app):
             pid = info.get('priceId', '') if isinstance(info, dict) else str(info)
             tiers[tier] = {'priceId_set': bool(pid) and 'REPLACE' not in pid,
                            'priceId_prefix': pid[:9] if pid else ''}
+        gmail_set = bool(GMAIL_ADDRESS and GMAIL_APP_PASSWORD)
+        sendgrid_set = bool(SENDGRID_API_KEY and SENDGRID_FROM_EMAIL)
         return jsonify({
             'stripe_key_present': bool(key),
             'stripe_key_mode': mode,
             'license_secret_set': LICENSE_SECRET != 'CHANGE_ME',
-            'sendgrid_set': bool(SENDGRID_API_KEY and SENDGRID_FROM_EMAIL),
+            'gmail_set': gmail_set,
+            'sendgrid_set': sendgrid_set,
+            'email_ready': _email_configured(),
+            'email_via': 'gmail' if gmail_set else ('sendgrid' if sendgrid_set else 'none'),
             'price_map_tiers': tiers,
         }), 200
 
@@ -599,16 +611,49 @@ def _webhook_provision_license(session):
         print(f'[WEBHOOK] Unexpected error provisioning license: {exc}')
 
 
+def _email_configured():
+    """True if any email channel is usable (Gmail SMTP preferred, SendGrid fallback)."""
+    gmail_ok = bool(GMAIL_ADDRESS and GMAIL_APP_PASSWORD)
+    sendgrid_ok = bool(SENDGRID_API_KEY and SENDGRID_FROM_EMAIL and SendGridAPIClient and Mail)
+    return gmail_ok or sendgrid_ok
+
+
+def _send_email(to_email, subject, body):
+    """Send a plain-text email. Prefers Gmail SMTP (free, no third-party signup);
+    falls back to SendGrid if Gmail isn't configured. Returns True if sent,
+    False if no channel is configured. Raises on a real send failure."""
+    # 1) Gmail SMTP via App Password
+    if GMAIL_ADDRESS and GMAIL_APP_PASSWORD:
+        msg = EmailMessage()
+        msg['Subject'] = subject
+        msg['From'] = GMAIL_ADDRESS
+        msg['To'] = to_email
+        msg.set_content(body)
+        with smtplib.SMTP('smtp.gmail.com', 587, timeout=20) as server:
+            server.starttls()
+            server.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
+            server.send_message(msg)
+        print(f'[EMAIL] Sent via Gmail to {to_email}: {subject}')
+        return True
+
+    # 2) SendGrid fallback
+    if SENDGRID_API_KEY and SENDGRID_FROM_EMAIL and SendGridAPIClient and Mail:
+        message = Mail(
+            from_email=SENDGRID_FROM_EMAIL,
+            to_emails=to_email,
+            subject=subject,
+            plain_text_content=body,
+        )
+        SendGridAPIClient(SENDGRID_API_KEY).send(message)
+        print(f'[EMAIL] Sent via SendGrid to {to_email}: {subject}')
+        return True
+
+    return False
+
+
 def _send_activation_email(email, app_id, tier, license_key):
     """Email the buyer their activation instructions immediately after purchase."""
-    if not SENDGRID_API_KEY or not SENDGRID_FROM_EMAIL:
-        print('[WEBHOOK] SendGrid not configured — skipping activation email.')
-        return
-    if not SendGridAPIClient or not Mail:
-        print('[WEBHOOK] SendGrid library not installed — skipping activation email.')
-        return
-
-    subject = 'Your Alien AI Trader subscription is active — here\'s how to unlock live trading'
+    subject = "Your Alien AI Trader subscription is active — here's how to unlock live trading"
     body = f"""Hi,
 
 Your payment was received and your {tier} subscription for Alien AI Trader is now active.
@@ -626,15 +671,10 @@ If you have any trouble, just reply to this email.
 
 — Troy Walker · T-Dub's Apps
 """
-    message = Mail(
-        from_email=SENDGRID_FROM_EMAIL,
-        to_emails=email,
-        subject=subject,
-        plain_text_content=body,
-    )
-    client = SendGridAPIClient(SENDGRID_API_KEY)
-    client.send(message)
-    print(f'[WEBHOOK] Activation email sent to {email}')
+    if _send_email(email, subject, body):
+        print(f'[WEBHOOK] Activation email sent to {email}')
+    else:
+        print('[WEBHOOK] No email channel configured — skipping activation email.')
 
 
 def init_db():
@@ -1042,24 +1082,13 @@ def build_redirect_urls():
 
 
 def send_email_code(email, code, app_id, tier):
-    if not SENDGRID_API_KEY or not SENDGRID_FROM_EMAIL:
-        raise RuntimeError('email service not configured')
-    if not SendGridAPIClient or not Mail:
-        raise RuntimeError('sendgrid library not installed')
-
-    subject = 'Your PAPI Central verification code'
+    subject = 'Your Alien AI Trader verification code'
     content = (
         f"Your verification code for {app_id} ({tier}) is: {code}\n\n"
         'This code expires in 15 minutes.'
     )
-    message = Mail(
-        from_email=SENDGRID_FROM_EMAIL,
-        to_emails=email,
-        subject=subject,
-        plain_text_content=content,
-    )
-    client = SendGridAPIClient(SENDGRID_API_KEY)
-    client.send(message)
+    if not _send_email(email, subject, content):
+        raise RuntimeError('email service not configured')
 
 
 def send_sms_code(phone, code, app_id, tier):
