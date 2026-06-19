@@ -843,19 +843,42 @@ def find_active_stripe_purchase(email, app_id):
             'billing_type': info.get('billingType', 'monthly'),
         }
 
-    # 1) Fast path: customer-by-email -> subscriptions
+    # 1) Fast path: customer-by-email -> subscriptions.
+    #    Payment Links create a NEW Stripe customer on every checkout, so one
+    #    buyer can have many duplicate customer records with the active sub on
+    #    only one of them. We therefore scan ALL of them and keep the match with
+    #    the furthest-out expiry — never early-returning on the first sub seen.
+    #    Object access is defensive (dict OR StripeObject) to mirror the proven
+    #    /api/license/debug scan.
     try:
-        customers = stripe.Customer.list(email=email, limit=25)
-        for cust in customers.get('data', []):
-            subs = stripe.Subscription.list(customer=cust['id'], status='all', limit=50)
-            for sub in subs.get('data', []):
-                if (sub.get('status') or '').lower() not in valid_sub_status:
+        customers = stripe.Customer.list(email=email, limit=100)
+        cust_list = (customers.get('data', []) if isinstance(customers, dict)
+                     else list(customers.auto_paging_iter()))
+        best = None  # furthest-expiry active match across all duplicate customers
+        for cust in cust_list:
+            cust_id = cust.get('id') if isinstance(cust, dict) else cust.id
+            subs = stripe.Subscription.list(customer=cust_id, status='all', limit=100)
+            sub_list = (subs.get('data', []) if isinstance(subs, dict)
+                        else list(subs.auto_paging_iter()))
+            for sub in sub_list:
+                status = (sub.get('status') if isinstance(sub, dict) else sub.status) or ''
+                if status.lower() not in valid_sub_status:
                     continue
-                for item in sub.get('items', {}).get('data', []):
-                    pid = (item.get('price') or {}).get('id')
+                items_obj = sub.get('items', {}) if isinstance(sub, dict) else sub.items
+                item_list = (items_obj.get('data', []) if isinstance(items_obj, dict)
+                             else items_obj.data)
+                for item in item_list:
+                    price_obj = item.get('price', {}) if isinstance(item, dict) else item.price
+                    pid = price_obj.get('id') if isinstance(price_obj, dict) else price_obj.id
                     if pid in price_to_tier:
                         tier, info = price_to_tier[pid]
-                        return _resolve_period(tier, info, sub.get('current_period_end'))
+                        period_end = (sub.get('current_period_end') if isinstance(sub, dict)
+                                      else getattr(sub, 'current_period_end', None))
+                        candidate = _resolve_period(tier, info, period_end)
+                        if best is None or candidate['expires_at'] > best['expires_at']:
+                            best = candidate
+        if best:
+            return best
     except Exception as exc:
         print(f'[LICENSE] Stripe lookup path 1 failed: {exc}')
 
