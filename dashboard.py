@@ -6,11 +6,22 @@ monkey.patch_all()
 
 import json
 import os
+import sys
 import threading
 import time
 import requests
 from threading import Lock
 from typing import Dict, Any, List
+
+# Force UTF-8 console/log output so emoji or special characters in any log line
+# can never crash a trading session on Windows. Without this, stdout defaults to
+# cp1252 and printing a character like an emoji raises UnicodeEncodeError, which
+# was killing every engine session right after startup (before stops/exits ran).
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 from flask import Flask, render_template, request, jsonify
 from flask_cors import CORS
@@ -96,6 +107,50 @@ def _license_is_active(lic: dict | None = None) -> bool:
         return lic.get("status") == "active" and int(lic.get("expiresAt", 0)) > int(time.time() * 1000)
     except Exception:
         return False
+
+
+def _delete_local_license() -> None:
+    """Remove the cached license so the app drops back to paper."""
+    try:
+        if os.path.exists(LICENSE_FILE):
+            os.remove(LICENSE_FILE)
+    except Exception:
+        pass
+
+
+_last_revalidation = 0.0
+_REVALIDATE_INTERVAL = int(os.environ.get("LICENSE_REVALIDATE_SECONDS", "3600"))  # 1h
+
+
+def _revalidate_local_license(force: bool = False) -> None:
+    """Re-check the stored license against the central server so cancellations
+    and refunds reach this installed copy.
+
+    Fails OPEN on a network error (never punishes a paying user for a Render
+    cold-start); fails CLOSED only when the server is reachable and definitively
+    reports no active license — then the local cache is deleted (live → paper)."""
+    global _last_revalidation
+    lic = _load_local_license()
+    email = lic.get("email")
+    if not email:
+        return  # nothing activated locally — nothing to re-check
+    now = time.time()
+    if not force and (now - _last_revalidation) < _REVALIDATE_INTERVAL:
+        return
+    _last_revalidation = now
+    try:
+        r = requests.post(
+            f"{LICENSE_SERVER_URL}/api/license/validate",
+            json={"email": email, "appId": APP_ID},
+            timeout=15,
+        )
+        data = r.json()
+    except Exception:
+        return  # server unreachable → keep current license (fail open)
+    if data.get("status") == "active":
+        _save_local_license(data)   # refresh expiry/signature
+    else:
+        _delete_local_license()     # cancelled/refunded → revoke locally
 
 # In-memory warehouse for ticker/market data sent to the dashboard
 market_data = []
@@ -530,6 +585,7 @@ def api_quotes():
 # -----------------------------------------------
 @app.route("/api/license/local", methods=["GET"])
 def license_local():
+    _revalidate_local_license()  # throttled re-check so cancel/refund propagate
     lic = _load_local_license()
     return jsonify({
         "licensed":  _license_is_active(lic),
@@ -861,6 +917,10 @@ def _engine_session(session_num: int) -> None:
     global _engine, _ladder
 
     # License gate: live trading requires an active license. Paper is free.
+    # Force a fresh server re-check so a cancelled/refunded license can't start
+    # a new live session on stale local data.
+    if os.environ.get("TRADING_MODE", "paper").strip().lower() == "live":
+        _revalidate_local_license(force=True)
     if os.environ.get("TRADING_MODE", "paper").strip().lower() == "live" and not _license_is_active():
         os.environ["TRADING_MODE"] = "paper"
         os.environ["LIVE_TRADING_ENABLED"] = "false"

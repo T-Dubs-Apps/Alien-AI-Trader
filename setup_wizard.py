@@ -16,6 +16,13 @@ import time
 import webbrowser
 import re
 
+# Force UTF-8 so the wizard's emoji/box characters can never crash on Windows.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 # ── Terminal colors ──────────────────────────────────────────────
 class C:
     RESET   = "\033[0m"
@@ -348,31 +355,37 @@ def main():
 
     banner()
 
-    print(f"""  {C.WHITE}Welcome to the Alien AI Trader Setup Wizard!{C.RESET}
+    print(f"""  {C.WHITE}Welcome! Let's get you trading in about 2 minutes.{C.RESET}
 
-  This wizard will:
-    ✦ Open each registration page in your browser
-    ✦ Walk you through finding your keys step by step
-    ✦ Write your {C.YELLOW}keys.bat{C.RESET} and {C.YELLOW}.env{C.RESET} files automatically
-    ✦ Show you exactly what to paste into Render
+  You only need {C.YELLOW}ONE free account: Alpaca{C.RESET} (your brokerage).
+  We'll also grab a {C.YELLOW}free market-data key{C.RESET} — it takes about
+  60 seconds and the page opens for you automatically.
 
-  {C.DIM}You'll need accounts on 5 services. Most are instant.
-  Alpaca live trading may take up to a week for approval
-  — use Paper Trading to get started immediately.{C.RESET}
+    {C.GREEN}Step 1{C.RESET}  Your Alpaca keys  (Paper = practice money, or Live)
+    {C.GREEN}Step 2{C.RESET}  A free Alpha Vantage data key  (one click)
 
-  {C.YELLOW}Have a notepad ready to copy keys as you go!{C.RESET}
+  {C.DIM}That's it — everything else is optional and can be skipped.
+  Tip: choose Paper Trading to start instantly with practice money.{C.RESET}
 """)
-    pause("  Press ENTER to begin the setup wizard...")
+    pause("  Press ENTER to begin...")
 
     keys = {}
 
     try:
         collect_alpaca(keys)
         collect_alpha_vantage(keys)
-        collect_pushover(keys)
-        collect_twilio(keys)
-        collect_render(keys)
-        collect_pushbullet(keys)
+
+        # Everything below is OPTIONAL — text/push alerts and cloud deploy.
+        # Regular users should just press ENTER to skip it.
+        ans = input(
+            f"\n  {C.BOLD}{C.WHITE}➜ Set up optional text/push alerts? "
+            f"(most users press ENTER to skip) [y/N]: {C.RESET}"
+        ).strip().lower()
+        if ans == "y":
+            collect_pushover(keys)
+            collect_twilio(keys)
+            collect_render(keys)
+            collect_pushbullet(keys)
     except KeyboardInterrupt:
         print(f"\n\n{C.YELLOW}  Setup interrupted. Saving what we have so far...{C.RESET}\n")
 
@@ -387,26 +400,25 @@ def main():
 
     write_keys_bat(keys)
     write_env_file(keys)
-    print_render_instructions(keys)
+    # Render deploy block is only relevant if the user set up a Render key (advanced).
+    if keys.get("RENDER_API_KEY"):
+        print_render_instructions(keys)
     print_gitignore_reminder()
 
-    # ── Final summary ───────────────────────────────────────────
+    # ── Final summary (end-user friendly) ───────────────────────
+    base = keys.get("ALPACA_BASE_URL", "")
+    mode = "PAPER (practice money)" if ("paper" in base or not base) else "LIVE (real money)"
     print(f"""{C.BOLD}{C.GREEN}
-  ✦ Setup Complete! Here's what to do next:
+  ✦ All set! You're ready to trade in {C.YELLOW}{mode}{C.GREEN}.
 {C.RESET}
-  {C.WHITE}Local:{C.RESET}
-    1. Double-click {C.YELLOW}START.bat{C.RESET}  (or the Desktop shortcut)
-    2. Open {C.CYAN}http://localhost:5000{C.RESET}
+  {C.WHITE}To start the app:{C.RESET}
+    1. Double-click {C.YELLOW}START.bat{C.RESET}
+    2. Your dashboard opens at {C.CYAN}http://localhost:5000{C.RESET}
 
-  {C.WHITE}Render:{C.RESET}
-    1. Add the environment variables shown above
-       to your web service (the AI engine runs inside it)
-    2. Trigger a manual deploy
+  {C.DIM}You can switch between Paper and Live anytime in Settings.
+  Reminder: trading carries real risk — only trade what you can afford to lose.{C.RESET}
 
-  {C.WHITE}Your dashboard:{C.RESET}
-    {C.CYAN}https://alien-ai-trader-dashboard.onrender.com{C.RESET}
-
-{C.YELLOW}  Good luck trading, Commander! 🛸{C.RESET}
+{C.YELLOW}  Good luck, Commander! 🛸{C.RESET}
 """)
 
 

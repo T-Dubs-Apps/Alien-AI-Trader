@@ -308,6 +308,7 @@ def register_license_routes(app):
         return jsonify({
             'stripe_key_present': bool(key),
             'stripe_key_mode': mode,
+            'webhook_secret_set': bool(STRIPE_WEBHOOK_SECRET),
             'license_secret_set': LICENSE_SECRET != 'CHANGE_ME',
             'gmail_set': gmail_set,
             'sendgrid_set': sendgrid_set,
@@ -356,12 +357,13 @@ def register_license_routes(app):
             return jsonify({'error': 'email and appId required'}), 400
 
         record = get_license(email, app_id)
-        if record and record['expires_at'] > datetime.now(timezone.utc):
-            return jsonify(_license_response(record)), 200
 
+        # Stripe is the source of truth. Check it FIRST so cancellations and
+        # refunds are honored instead of being masked by a stale cached record.
         found = find_active_stripe_purchase(email, app_id)
         if found:
             license_key = record['license_key'] if record else generate_license_key()
+            delete_license(email, app_id)  # keep exactly one current row
             store_license(
                 email=email,
                 app_id=app_id,
@@ -372,6 +374,16 @@ def register_license_routes(app):
                 billing_type=found['billing_type'],
             )
             return jsonify(_license_response(get_license(email, app_id))), 200
+
+        # Stripe shows no active purchase. If a cached license still looks valid,
+        # only honor it when Stripe is UNREACHABLE (so a Stripe/Render outage
+        # never locks out a paying user). If Stripe is reachable and says no,
+        # the subscription was cancelled/refunded — revoke the cache.
+        if record and record['expires_at'] > datetime.now(timezone.utc):
+            if _stripe_reachable():
+                delete_license(email, app_id)
+                return jsonify({'status': 'none'}), 200
+            return jsonify(_license_response(record)), 200
 
         return jsonify({'status': 'none'}), 200
 
@@ -436,6 +448,21 @@ def register_license_routes(app):
 
         if event_type == 'checkout.session.completed':
             _webhook_provision_license(obj)
+        elif event_type in ('invoice.paid', 'invoice.payment_succeeded'):
+            # Recurring renewal cleared — extend the license so paying
+            # subscribers never lapse at the end of a billing cycle.
+            _webhook_renew_license(obj)
+        elif event_type == 'customer.subscription.deleted':
+            # Cancel-at-period-end has fully ended (or an immediate cancel).
+            _webhook_revoke_subscription(obj)
+        elif event_type == 'customer.subscription.updated':
+            sub_status = ((obj.get('status') if isinstance(obj, dict)
+                           else getattr(obj, 'status', '')) or '').lower()
+            if sub_status in ('canceled', 'unpaid', 'incomplete_expired'):
+                _webhook_revoke_subscription(obj)
+        elif event_type in ('charge.refunded', 'refund.created', 'charge.refund.updated'):
+            # Refund = revoke immediately (cancels the sub + clears the cache).
+            _webhook_handle_refund(obj)
 
         return jsonify({'status': 'ok'}), 200
 
@@ -611,6 +638,180 @@ def _webhook_provision_license(session):
         print(f'[WEBHOOK] Unexpected error provisioning license: {exc}')
 
 
+def _webhook_renew_license(invoice):
+    """Extend a license when a recurring subscription invoice is paid.
+    The FIRST invoice (billing_reason='subscription_create') is already handled
+    by checkout.session.completed, so we skip it here and only stack time onto
+    renewals — guaranteeing a paying subscriber never lapses at cycle end."""
+    try:
+        if isinstance(invoice, dict):
+            billing_reason = invoice.get('billing_reason') or ''
+            email = invoice.get('customer_email')
+            customer_id = invoice.get('customer')
+            invoice_id = invoice.get('id', 'renewal')
+            lines = (invoice.get('lines') or {}).get('data', []) or []
+        else:
+            billing_reason = getattr(invoice, 'billing_reason', '') or ''
+            email = getattr(invoice, 'customer_email', None)
+            customer_id = getattr(invoice, 'customer', None)
+            invoice_id = getattr(invoice, 'id', 'renewal')
+            lines = list(getattr(getattr(invoice, 'lines', None), 'data', []) or [])
+
+        # First payment is provisioned by checkout.session.completed — don't double up.
+        if billing_reason == 'subscription_create':
+            return
+
+        if not email:
+            email = _customer_email(customer_id)
+        if not email:
+            print('[WEBHOOK] Renewal: no customer email — cannot extend.')
+            return
+        email = _norm_email(email)
+
+        # Identify app_id + tier from the invoice's line-item price IDs.
+        app_id, tier = 'alien-ai-trader', None
+        price_map = load_price_map()
+        for line in lines:
+            price_obj = (line.get('price') if isinstance(line, dict)
+                         else getattr(line, 'price', None)) or {}
+            pid = (price_obj.get('id') if isinstance(price_obj, dict)
+                   else getattr(price_obj, 'id', None))
+            for a_id, tiers in price_map.items():
+                if not isinstance(tiers, dict):
+                    continue
+                for t, info in tiers.items():
+                    expected = info.get('priceId') if isinstance(info, dict) else info
+                    if expected and expected == pid:
+                        app_id, tier = a_id, t
+                        break
+                if tier:
+                    break
+            if tier:
+                break
+
+        existing = get_license(email, app_id)
+        if not tier and existing:
+            tier = existing.get('tier')
+        if not tier:
+            print(f'[WEBHOOK] Renewal: could not determine tier for {email} — skipping.')
+            return
+
+        price_info = get_price_info(app_id, tier) or {}
+        duration_days = price_info.get('durationDays', 30)
+
+        now = datetime.now(timezone.utc)
+        # Stack onto remaining time if the license is still active.
+        base = existing['expires_at'] if (existing and existing['expires_at'] > now) else now
+        new_expires = base + timedelta(days=duration_days)
+        license_key = existing['license_key'] if existing else generate_license_key()
+
+        store_license(
+            email=email,
+            app_id=app_id,
+            tier=tier,
+            license_key=license_key,
+            expires_at=new_expires,
+            session_id=invoice_id,
+            billing_type=price_info.get('billingType', 'monthly'),
+        )
+        print(f'[WEBHOOK] Renewal extended license for {email} '
+              f'app={app_id} tier={tier} -> {new_expires.date()}')
+
+        # If the license had fully lapsed, re-send the key so they can re-activate.
+        if not existing:
+            try:
+                _send_activation_email(email, app_id, tier, license_key)
+            except Exception as exc:
+                print(f'[WEBHOOK] Renewal email failed (non-fatal): {exc}')
+
+    except Exception as exc:
+        print(f'[WEBHOOK] Unexpected error renewing license: {exc}')
+
+
+def _stripe_reachable():
+    """Light check: is Stripe's API responding right now? Used to tell the
+    difference between 'no active purchase' (revoke) and 'Stripe/Render outage'
+    (keep the cached license so a paying user is never wrongly locked out)."""
+    if not STRIPE_SECRET_KEY:
+        return False
+    try:
+        stripe.api_key = STRIPE_SECRET_KEY
+        stripe.Customer.list(limit=1)
+        return True
+    except Exception:
+        return False
+
+
+def _customer_email(customer_id):
+    """Resolve a Stripe customer id to its email (normalized)."""
+    if not customer_id or not STRIPE_SECRET_KEY:
+        return None
+    try:
+        stripe.api_key = STRIPE_SECRET_KEY
+        cust = stripe.Customer.retrieve(customer_id)
+        return _norm_email(cust.get('email') if isinstance(cust, dict)
+                           else getattr(cust, 'email', None))
+    except Exception as exc:
+        print(f'[WEBHOOK] Could not retrieve customer {customer_id}: {exc}')
+        return None
+
+
+def _webhook_revoke_subscription(sub, app_id='alien-ai-trader'):
+    """A subscription was deleted/expired in Stripe — drop the cached license
+    so the installed app downgrades to paper on its next re-check."""
+    try:
+        if isinstance(sub, dict):
+            customer_id = sub.get('customer')
+            metadata = sub.get('metadata') or {}
+        else:
+            customer_id = getattr(sub, 'customer', None)
+            metadata = dict(getattr(sub, 'metadata', {}) or {})
+        app_id = metadata.get('app_id', app_id)
+        email = _customer_email(customer_id)
+        if not email:
+            print('[WEBHOOK] Subscription revoke: no customer email, skipping.')
+            return
+        delete_license(email, app_id)
+        print(f'[WEBHOOK] Revoked license for {email} (subscription ended).')
+    except Exception as exc:
+        print(f'[WEBHOOK] Error revoking subscription: {exc}')
+
+
+def _webhook_handle_refund(charge, app_id='alien-ai-trader'):
+    """Refund policy = revoke immediately. Cancel the customer's active
+    subscription(s) in Stripe (durable source of truth, survives DB wipes) and
+    clear the cached license now."""
+    try:
+        customer_id = (charge.get('customer') if isinstance(charge, dict)
+                       else getattr(charge, 'customer', None))
+        email = _customer_email(customer_id)
+        if not email:
+            print('[WEBHOOK] Refund: no customer email, skipping.')
+            return
+        if STRIPE_SECRET_KEY and customer_id:
+            stripe.api_key = STRIPE_SECRET_KEY
+            try:
+                subs = stripe.Subscription.list(customer=customer_id, status='all', limit=100)
+                sub_list = (subs.get('data', []) if isinstance(subs, dict)
+                            else list(subs.auto_paging_iter()))
+                for s in sub_list:
+                    s_status = ((s.get('status') if isinstance(s, dict)
+                                 else getattr(s, 'status', '')) or '').lower()
+                    if s_status in ('active', 'trialing', 'past_due'):
+                        s_id = s.get('id') if isinstance(s, dict) else s.id
+                        try:
+                            stripe.Subscription.cancel(s_id)
+                        except Exception:
+                            stripe.Subscription.delete(s_id)  # older stripe-python
+                        print(f'[WEBHOOK] Refund: cancelled subscription {s_id} for {email}.')
+            except Exception as exc:
+                print(f'[WEBHOOK] Refund: could not cancel subscriptions: {exc}')
+        delete_license(email, app_id)
+        print(f'[WEBHOOK] Revoked license for {email} (refund).')
+    except Exception as exc:
+        print(f'[WEBHOOK] Error handling refund: {exc}')
+
+
 def _email_configured():
     """True if any email channel is usable (Gmail SMTP preferred, SendGrid fallback)."""
     gmail_ok = bool(GMAIL_ADDRESS and GMAIL_APP_PASSWORD)
@@ -783,6 +984,18 @@ def store_license(email, app_id, tier, license_key, expires_at, session_id, bill
                 session_id,
                 billing_type,
             ),
+        )
+        conn.commit()
+
+
+def delete_license(email, app_id):
+    """Revoke: remove every license row for this email+app so the next
+    validate returns 'none'. Used on subscription end and on refunds."""
+    email = _norm_email(email)
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            "DELETE FROM licenses WHERE LOWER(email) = LOWER(?) AND app_id = ?",
+            (email, app_id),
         )
         conn.commit()
 
