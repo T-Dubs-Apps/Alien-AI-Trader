@@ -189,9 +189,42 @@ When the app opens in your browser, you'll see several tabs:
 - Leave at `0` to use fixed 1-share orders instead
 
 **Paper vs Live Trading**
-- The app starts in **Paper Mode** — all trades use fake money, so you cannot lose anything
-- To switch to live trading, you must explicitly set `TRADING_MODE=live` in your settings AND enable `LIVE_TRADING_ENABLED=true`
-- **We strongly recommend staying in Paper Mode until you have watched the AI trade for at least a week**
+- The app **always starts in Paper Mode** — all trades use fake money, so you cannot lose anything.
+- Switching to **Live (real money)** happens **right inside the app** — no config files to edit. Go to **Settings → Trading Mode** and flip **Paper → Live** (you'll be asked to type `LIVE` to confirm).
+- Live requires **two things**: an **active license** and your **live Alpaca keys**. Missing either? The toggle safely stays on Paper.
+- **We strongly recommend staying in Paper Mode until you have watched the AI trade for at least a week.**
+- 👉 Full walkthrough: **[Turning On Live Trading](#-turning-on-live-trading)** below.
+
+---
+
+## 💳 Plans & Pricing
+
+Paper trading is **free forever**. A subscription unlocks **live (real-money) trading**, and **Pro** adds power features.
+
+| Plan | Price | What you get |
+|------|-------|--------------|
+| **Free** | $0 | Full AI on **paper** (practice money), watchlist, backtesting |
+| **Trader** | **$19.99/mo** or **$199/yr** | Everything in Free **+ live real-money trading**, up to **5** open positions |
+| **Pro** | **$59/mo** or **$590/yr** | Everything in Trader **+ Scan Entire Market (~8,000 stocks), up to 15 positions, and Forecast Exit** |
+
+> 🛡️ The **Portfolio Safety Shield** (loss protection) is included on **every** plan, including Free — safety is never behind a paywall.
+
+**To subscribe:** in the app go to **Settings → License**, pick a plan, and check out (or use the store page at **`/get`** on your cloud dashboard). After payment you'll get an email — enter that email in **Settings → License → Activate** to unlock.
+
+---
+
+## 🟢 Turning On Live Trading
+
+The app ships **safe**: it always boots in paper and will not touch real money until you deliberately turn it on. The full path:
+
+1. **Get your live Alpaca keys.** Create/upgrade an Alpaca **live trading** account, then generate a **live** API key + secret. (Live accounts require identity verification — that's Alpaca's process, not ours.)
+2. **Add your live keys:**
+   - **Cloud (Render):** your service → **Environment** → add `ALPACA_LIVE_KEY` and `ALPACA_LIVE_SECRET`. Render restarts automatically.
+   - **Local PC:** re-run **LAUNCH.bat → [3] Setup Keys** — the wizard now collects both paper and live keys in one pass.
+3. **Activate your license.** In **Settings → License**, enter the email you used at checkout → **Activate**. The badge flips to 🟢 **Licensed**.
+4. **Flip the switch.** In **Settings → Trading Mode**, change **Paper → Live** and type **`LIVE`** to confirm. A red banner confirms you're on real money.
+
+If the license **or** the live keys are missing, the toggle refuses Live and stays on Paper — by design. To return to practice money, switch **Live → Paper** anytime (no confirmation needed).
 
 ---
 
@@ -313,14 +346,17 @@ The app can notify your phone when trades happen, when a stock crashes after hou
 
 ---
 
-## ☁️ Runs in the Cloud Too
+## ☁️ Runs in the Cloud Too (Easiest for Most People)
 
-If you want the AI trading 24/7 without your PC being on, you can deploy it to **Render.com** for free.
+Most people run Alien AI Trader **in the cloud on Render** — nothing to install, no PC left on, and the AI trades 24/7.
 
-The cloud dashboard is already live at:
-**https://alien-ai-trader-dashboard.onrender.com**
+**Store / download page:** **https://alien-ai-trader-dashboard.onrender.com/get**
 
-To deploy your own instance, see the **Render Deployment** section below.
+From there you can:
+- **⬇️ Download Your Personal Trader** — grab the installer for a home-PC setup, or
+- **☁️ Deploy Your Own on Render** — one click spins up **your own** private cloud copy. Render prompts you for your keys (Alpaca paper + optional live, Alpha Vantage); paste them in and deploy.
+
+Your instance is **entirely yours** — your keys, your account, your trades. Nothing is shared. See the **Render Deployment** section below for the manual route.
 
 ---
 
@@ -353,8 +389,10 @@ nothing else to pay for):
 ### Required API Keys
 | Variable | Where to get it |
 |----------|----------------|
-| `ALPACA_KEY` | alpaca.markets → API Keys |
-| `ALPACA_SECRET` | alpaca.markets → API Keys |
+| `ALPACA_KEY` | alpaca.markets → **Paper** API Keys |
+| `ALPACA_SECRET` | alpaca.markets → **Paper** API Keys |
+| `ALPACA_LIVE_KEY` | alpaca.markets → **Live** API Keys — *optional; enables the in-app Live toggle* |
+| `ALPACA_LIVE_SECRET` | alpaca.markets → **Live** API Keys — *optional* |
 | `ALPHA_VANTAGE_KEY` | alphavantage.co → Free API Key |
 | `PUSHOVER_TOKEN` | pushover.net → Create App |
 | `PUSHOVER_USER` | pushover.net → Your User Key |
@@ -367,8 +405,8 @@ nothing else to pay for):
 ### Trading Settings
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `TRADING_MODE` | `paper` | `paper` or `live` |
-| `LIVE_TRADING_ENABLED` | `false` | Second safety switch — must be `true` for live |
+| `TRADING_MODE` | `paper` | **Boot mode only.** The real control is the in-app **Paper↔Live toggle** (license-gated). Leave as `paper`. |
+| `LIVE_TRADING_ENABLED` | `false` | Legacy safety flag. Live is now gated by your **license + live keys**, not this. |
 | `POLL_SECONDS` | `15` | Scan interval in seconds |
 | `MAX_POSITIONS` | `5` | Max simultaneous open positions |
 | `INITIAL_CAPITAL` | `0` | Starting capital $ (0 = fixed 1-share mode) |
@@ -523,7 +561,7 @@ All six of the above must agree before the AI buys anything — it's an "all con
 No. The installer handles everything automatically. You just follow the on-screen prompts.
 
 **Q: Is this free?**
-The app is free. The services it connects to (Alpaca, Alpha Vantage) have free tiers that are sufficient for paper trading. Twilio and Pushover have small one-time costs for phone alerts — these are optional.
+**Paper trading is free forever** — full AI, no cost, no risk. **Live (real-money) trading** requires a subscription: **Trader** ($19.99/mo or $199/yr) or **Pro** ($59/mo or $590/yr) — see [Plans & Pricing](#-plans--pricing). The data services it uses (Alpaca, Alpha Vantage) have free tiers; Twilio/Pushover phone alerts are optional with small costs.
 
 **Q: Can I lose real money?**
 Not in Paper Mode (the default). Paper trading uses fake money. You have to manually switch to Live Mode, which requires an approved Alpaca live trading account.
