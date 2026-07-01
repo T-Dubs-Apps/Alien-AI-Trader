@@ -542,6 +542,141 @@ footer a{color:#60a5fa;text-decoration:none}
     return response
 
 
+@app.route("/admin", methods=["GET"])
+def admin_panel():
+    """Mobile-friendly owner console. Open from any device, enter your admin
+    secret (LICENSE_SECRET), and grant / look up / revoke licenses. All actions
+    require the secret in the Authorization header, so the page itself is safe to
+    load — it can do nothing without the secret you type in."""
+    html = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Alien AI Trader — Admin</title>
+<style>
+:root{--bg:#060c18;--card:#0d1626;--border:#1e3058;--text:#e2e8f0;--muted:#94a3b8;
+--green:#22c55e;--green2:#4ade80;--blue:#2563eb;--red:#ef4444;--gold:#fbbf24}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;
+padding:18px 14px;line-height:1.5}
+.wrap{max-width:460px;margin:0 auto;display:flex;flex-direction:column;gap:16px}
+h1{font-size:1.3rem;text-align:center;background:linear-gradient(135deg,#4ade80,#60a5fa);
+-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.sub{text-align:center;color:var(--muted);font-size:.8rem;margin-top:-8px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px}
+.card h2{font-size:.95rem;color:var(--green2);margin-bottom:10px}
+label{display:block;font-size:.78rem;color:var(--muted);margin:8px 0 4px}
+input,select{width:100%;padding:11px;border-radius:9px;border:1px solid var(--border);
+background:#0a1220;color:var(--text);font-size:1rem}
+.row{display:flex;gap:8px;align-items:center}
+.row input[type=checkbox]{width:auto}
+button{width:100%;padding:12px;border-radius:9px;border:0;font-weight:700;font-size:.95rem;
+cursor:pointer;margin-top:12px;color:#04120a}
+.b-green{background:var(--green2)} .b-blue{background:#60a5fa} .b-red{background:var(--red);color:#fff}
+.small{font-size:.72rem;color:var(--muted);margin-top:8px}
+#result{white-space:pre-wrap;word-break:break-word;font-family:ui-monospace,Menlo,monospace;
+font-size:.8rem;background:#0a1220;border:1px solid var(--border);border-radius:9px;
+padding:12px;min-height:44px;color:var(--text)}
+.ok{color:var(--green2)} .err{color:#fca5a5}
+</style></head><body><div class="wrap">
+  <div><h1>&#128123; Admin Console</h1><div class="sub">Grant &amp; manage licenses from any device</div></div>
+
+  <div class="card">
+    <h2>&#128273; Admin Secret</h2>
+    <input id="secret" type="password" placeholder="Your LICENSE_SECRET" autocomplete="off">
+    <div class="row" style="margin-top:8px"><input id="remember" type="checkbox"><label style="margin:0">Remember on this device</label></div>
+    <div class="small">Required for grant/revoke. Stored only in this browser if you check the box. <a href="#" onclick="forget();return false;" style="color:#60a5fa">Forget</a></div>
+  </div>
+
+  <div class="card">
+    <h2>&#127873; Grant / Comp a License</h2>
+    <label>Customer email</label>
+    <input id="g_email" type="email" placeholder="person@example.com" autocomplete="off">
+    <label>Plan</label>
+    <select id="g_tier">
+      <option value="monthly">Trader &middot; Monthly (30 days)</option>
+      <option value="annual">Trader &middot; Annual (365 days)</option>
+      <option value="pro_monthly">Pro &middot; Monthly (30 days)</option>
+      <option value="pro_annual">Pro &middot; Annual (365 days)</option>
+    </select>
+    <button class="b-green" onclick="grant()">Grant License</button>
+    <div class="small">They activate in the app by entering this exact email.</div>
+  </div>
+
+  <div class="card">
+    <h2>&#128269; Look Up</h2>
+    <label>Email</label>
+    <input id="l_email" type="email" placeholder="person@example.com" autocomplete="off">
+    <button class="b-blue" onclick="lookup()">Check Status</button>
+  </div>
+
+  <div class="card">
+    <h2>&#9940; Revoke</h2>
+    <label>Email</label>
+    <input id="r_email" type="email" placeholder="person@example.com" autocomplete="off">
+    <button class="b-red" onclick="revoke()">Revoke License</button>
+  </div>
+
+  <div class="card"><h2>Result</h2><div id="result">Ready.</div></div>
+  <div class="small" style="text-align:center">&#128123; Alien AI Trader &middot; T-Dub's Apps</div>
+</div>
+<script>
+var APP_ID='alien-ai-trader';
+var R=document.getElementById('result');
+function show(msg,cls){R.className=cls||'';R.textContent=msg;}
+(function(){var s=localStorage.getItem('aat_admin_secret');if(s){document.getElementById('secret').value=s;document.getElementById('remember').checked=true;}})();
+function forget(){localStorage.removeItem('aat_admin_secret');document.getElementById('secret').value='';document.getElementById('remember').checked=false;show('Secret forgotten on this device.');}
+function secret(){var s=document.getElementById('secret').value.trim();
+  if(document.getElementById('remember').checked&&s)localStorage.setItem('aat_admin_secret',s);
+  else localStorage.removeItem('aat_admin_secret');
+  return s;}
+function fmt(ms){try{return new Date(+ms).toLocaleString();}catch(e){return ms;}}
+function pretty(d){
+  if(d.status==='granted')return 'GRANTED\\n'+d.tier+' to '+d.email+'\\nkey '+d.licenseKey+'\\nexpires '+fmt(d.expiresAt);
+  if(d.status==='revoked')return 'REVOKED\\n'+d.email;
+  if(d.status==='active'||d.status==='expired')return d.status.toUpperCase()+'\\n'+(d.tier||'')+' · '+d.email+'\\nexpires '+fmt(d.expiresAt);
+  if(d.status==='none')return 'No license found for that email.';
+  return JSON.stringify(d,null,2);
+}
+async function call(url,opts){
+  try{var r=await fetch(url,opts);var d=await r.json();
+    if(!r.ok){show((d.error||('HTTP '+r.status)),'err');return null;}
+    return d;
+  }catch(e){show('Network error — is the server awake? '+e,'err');return null;}
+}
+async function grant(){
+  var s=secret();if(!s)return show('Enter your admin secret first.','err');
+  var email=document.getElementById('g_email').value.trim();if(!email)return show('Enter an email.','err');
+  var tier=document.getElementById('g_tier').value;
+  show('Granting…');
+  var d=await call('/api/license/admin/grant',{method:'POST',
+    headers:{'Content-Type':'application/json','Authorization':'Bearer '+s},
+    body:JSON.stringify({email:email,appId:APP_ID,tier:tier})});
+  if(d)show(pretty(d),'ok');
+}
+async function revoke(){
+  var s=secret();if(!s)return show('Enter your admin secret first.','err');
+  var email=document.getElementById('r_email').value.trim();if(!email)return show('Enter an email.','err');
+  if(!confirm('Revoke the license for '+email+'? They drop to free paper mode.'))return;
+  show('Revoking…');
+  var d=await call('/api/license/admin/revoke',{method:'POST',
+    headers:{'Content-Type':'application/json','Authorization':'Bearer '+s},
+    body:JSON.stringify({email:email,appId:APP_ID})});
+  if(d)show(pretty(d),'ok');
+}
+async function lookup(){
+  var email=document.getElementById('l_email').value.trim();if(!email)return show('Enter an email.','err');
+  show('Checking…');
+  var d=await call('/api/license/status',{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({email:email,appId:APP_ID})});
+  if(d)show(pretty(d), d.status==='active'?'ok':'');
+}
+</script></body></html>"""
+    response = app.make_response(html)
+    response.headers["Content-Type"] = "text/html; charset=utf-8"
+    response.headers["X-Robots-Tag"] = "noindex, nofollow"
+    return response
+
+
 @app.route("/")
 def index():
     mode = "VIP" if request.args.get("access") == "SOVEREIGN_TESTER" else "GUEST"

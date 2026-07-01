@@ -291,6 +291,27 @@ def register_license_routes(app):
             'expiresAt': int(expires_at.timestamp() * 1000),
         }), 200
 
+    @app.route('/api/license/admin/revoke', methods=['POST'])
+    def admin_revoke_license():
+        """Admin endpoint: revoke (delete) a license for an email.
+        Authorization: Bearer <LICENSE_SECRET>
+        Body: {"email": "user@example.com", "appId": "alien-ai-trader"}
+        """
+        auth_header = request.headers.get('Authorization', '').strip()
+        secret = auth_header.replace('Bearer ', '') if auth_header.startswith('Bearer ') else ''
+        if LICENSE_SECRET == 'CHANGE_ME' or not secret or secret != LICENSE_SECRET:
+            return jsonify({'error': 'Unauthorized. Use: Authorization: Bearer <LICENSE_SECRET>'}), 403
+
+        payload = request.json or {}
+        email = _norm_email(payload.get('email'))
+        app_id = (payload.get('appId') or 'alien-ai-trader').strip()
+        if not email:
+            return jsonify({'error': 'email required'}), 400
+
+        delete_license(email, app_id)
+        print(f'[LICENSE] Admin revoked license for {email} ({app_id})')
+        return jsonify({'status': 'revoked', 'email': email, 'appId': app_id}), 200
+
     @app.route('/api/license/diag', methods=['GET'])
     def license_diag():
         """Support diagnostic - reports which pieces are configured.
