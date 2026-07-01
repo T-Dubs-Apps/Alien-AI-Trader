@@ -4,6 +4,7 @@ import secrets
 import sqlite3
 import hashlib
 import smtplib
+import time
 from email.message import EmailMessage
 from datetime import datetime, timedelta, timezone
 
@@ -54,6 +55,34 @@ TWILIO_FROM_NUMBER = os.getenv('TWILIO_FROM_NUMBER')
 
 def _norm_email(value):
     return (value or '').strip().lower()
+
+
+# ── Admin brute-force lockout ─────────────────────────────────────────────────
+# Granting/revoking licenses is owner-only. These endpoints require the exact
+# LICENSE_SECRET, and this locks out an IP after repeated bad guesses so the
+# secret can't be brute-forced.
+_ADMIN_FAILS = {}            # ip -> (fail_count, locked_until_epoch)
+_ADMIN_MAX_FAILS = 5
+_ADMIN_LOCK_SECONDS = 900    # 15-minute lockout after too many bad secrets
+
+
+def _admin_check(req):
+    """Verify the admin bearer secret with per-IP lockout.
+    Returns (ok: bool, error_response_or_None)."""
+    ip = (req.headers.get('X-Forwarded-For', '') or req.remote_addr or 'unknown').split(',')[0].strip()
+    now = time.time()
+    rec = _ADMIN_FAILS.get(ip)
+    if rec and rec[1] > now:
+        return False, (jsonify({'error': 'Too many attempts — temporarily locked out.'}), 429)
+    auth = req.headers.get('Authorization', '').strip()
+    secret = auth[len('Bearer '):] if auth.startswith('Bearer ') else ''
+    if LICENSE_SECRET == 'CHANGE_ME' or not secret or secret != LICENSE_SECRET:
+        count = (rec[0] if rec else 0) + 1
+        until = now + _ADMIN_LOCK_SECONDS if count >= _ADMIN_MAX_FAILS else 0
+        _ADMIN_FAILS[ip] = (count, until)
+        return False, (jsonify({'error': 'Unauthorized. Use: Authorization: Bearer <LICENSE_SECRET>'}), 403)
+    _ADMIN_FAILS.pop(ip, None)   # success clears the counter
+    return True, None
 
 
 def register_license_routes(app):
@@ -253,17 +282,15 @@ def register_license_routes(app):
         Authorization: Bearer <LICENSE_SECRET>
         Body: {"email": "user@example.com", "appId": "alien-ai-trader", "tier": "monthly"}
         """
-        auth_header = request.headers.get('Authorization', '').strip()
-        secret = auth_header.replace('Bearer ', '') if auth_header.startswith('Bearer ') else ''
-        
-        if LICENSE_SECRET == 'CHANGE_ME' or not secret or secret != LICENSE_SECRET:
-            return jsonify({'error': 'Unauthorized. Use: Authorization: Bearer <LICENSE_SECRET>'}), 403
-        
+        ok, err = _admin_check(request)
+        if err:
+            return err
+
         payload = request.json or {}
         email = _norm_email(payload.get('email'))
         app_id = (payload.get('appId') or 'alien-ai-trader').strip()
         tier = (payload.get('tier') or 'monthly').strip()
-        
+
         if not email:
             return jsonify({'error': 'email required'}), 400
         
@@ -297,10 +324,9 @@ def register_license_routes(app):
         Authorization: Bearer <LICENSE_SECRET>
         Body: {"email": "user@example.com", "appId": "alien-ai-trader"}
         """
-        auth_header = request.headers.get('Authorization', '').strip()
-        secret = auth_header.replace('Bearer ', '') if auth_header.startswith('Bearer ') else ''
-        if LICENSE_SECRET == 'CHANGE_ME' or not secret or secret != LICENSE_SECRET:
-            return jsonify({'error': 'Unauthorized. Use: Authorization: Bearer <LICENSE_SECRET>'}), 403
+        ok, err = _admin_check(request)
+        if err:
+            return err
 
         payload = request.json or {}
         email = _norm_email(payload.get('email'))

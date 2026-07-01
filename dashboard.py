@@ -542,12 +542,17 @@ footer a{color:#60a5fa;text-decoration:none}
     return response
 
 
-@app.route("/admin", methods=["GET"])
-def admin_panel():
-    """Mobile-friendly owner console. Open from any device, enter your admin
-    secret (LICENSE_SECRET), and grant / look up / revoke licenses. All actions
-    require the secret in the Authorization header, so the page itself is safe to
-    load — it can do nothing without the secret you type in."""
+ADMIN_PATH = os.environ.get("ADMIN_PATH", "").strip()
+
+
+@app.route("/admin/<token>", methods=["GET"])
+def admin_panel(token):
+    """Owner console, reachable ONLY at /admin/<ADMIN_PATH>, where ADMIN_PATH is a
+    secret slug you set as a Render env var. Every other path returns 404, so the
+    console is not publicly discoverable. Actions still require LICENSE_SECRET
+    (which is brute-force locked in license_api). Unset ADMIN_PATH = page disabled."""
+    if not ADMIN_PATH or token != ADMIN_PATH:
+        return "Not Found", 404
     html = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Alien AI Trader — Admin</title>
