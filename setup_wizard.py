@@ -102,35 +102,47 @@ def offer_skip(service: str, why: str) -> bool:
 def collect_alpaca(keys: dict):
     step_header(1, 6, "Alpaca Markets — Stock Trading API", "📈")
     print(f"""  {C.WHITE}Alpaca provides commission-free stock trading and market data.
-  You will need to:{C.RESET}
+  Alpaca gives you TWO separate key pairs — you can set up both here once:{C.RESET}
 
+    {C.GREEN}• PAPER keys{C.RESET}  practice money — instant, free, zero risk.  {C.BOLD}Required.{C.RESET}
+    {C.YELLOW}• LIVE keys{C.RESET}   real money — optional now. Needed only when you flip
+                    the app to Live trading (after your license activates).
+
+  {C.WHITE}How to get them:{C.RESET}
     1. Create a free account at alpaca.markets
-    2. Go to your Dashboard → Paper Trading (for testing) or Live Trading
-    3. Navigate to: API Keys → Generate New Key
-    4. {C.YELLOW}⚠  IMPORTANT: Copy your Secret Key immediately — it won't show again!{C.RESET}
+    2. PAPER: Dashboard → switch to "Paper Trading" → API Keys → Generate
+    3. LIVE:  Dashboard → switch to "Live Trading"  → API Keys → Generate
+    4. {C.YELLOW}⚠  Copy each Secret Key immediately — it is shown only once!{C.RESET}
 
-  {C.DIM}Note: Live trading accounts may require identity verification
-  which can take up to a week. Paper trading is instant.{C.RESET}
+  {C.DIM}Live accounts may require identity verification (up to a week). You can
+  add live keys now or anytime later via LAUNCH.bat → [3] Setup Keys.{C.RESET}
 """)
     open_url("https://app.alpaca.markets/signup")
-    pause("  Press ENTER once you have your Alpaca API Key and Secret...")
+    pause("  Press ENTER once you have your Alpaca PAPER API Key and Secret...")
 
-    keys["ALPACA_KEY"]    = prompt("Alpaca API Key ID")
-    keys["ALPACA_SECRET"] = prompt("Alpaca Secret Key")
+    # Paper keys are always required — the app always BOOTS in safe paper mode.
+    keys["ALPACA_KEY"]    = prompt("Alpaca PAPER API Key ID")
+    keys["ALPACA_SECRET"] = prompt("Alpaca PAPER Secret Key")
+    # The in-app Paper↔Live toggle controls the account at runtime, so we always
+    # start on the paper endpoint regardless of whether live keys are present.
+    keys["ALPACA_BASE_URL"] = "https://paper-api.alpaca.markets"
+    success("Paper keys saved — the app starts in safe PAPER mode.")
 
-    # Detect paper vs live
-    print(f"\n  {C.WHITE}Are you using Paper Trading (test) or Live Trading?{C.RESET}")
-    print(f"    {C.DIM}1{C.RESET} = Paper Trading (recommended to start)")
-    print(f"    {C.DIM}2{C.RESET} = Live Trading")
-    choice = input(f"  {C.BOLD}{C.WHITE}➜ Enter 1 or 2: {C.RESET}").strip()
-    if choice == "2":
-        keys["ALPACA_BASE_URL"] = "https://api.alpaca.markets"
-        warn("Live trading selected — real money will be used!")
+    # Live keys are optional and collected once so the buyer never returns to Alpaca.
+    print(f"\n  {C.WHITE}Add your LIVE (real-money) keys now?{C.RESET}")
+    print(f"    {C.DIM}You switch to real money later with the in-app Paper→Live toggle")
+    print(f"    (only works once your license is active). Add the keys now so it's a")
+    print(f"    single click later, or skip and add them anytime.{C.RESET}")
+    ans = input(f"  {C.BOLD}{C.WHITE}➜ Enter live keys now? [y/N] (ENTER = skip): {C.RESET}").strip().lower()
+    if ans in ("y", "yes"):
+        keys["ALPACA_LIVE_KEY"]    = prompt("Alpaca LIVE API Key ID")
+        keys["ALPACA_LIVE_SECRET"] = prompt("Alpaca LIVE Secret Key")
+        warn("Live keys saved. The app STILL starts in paper — you flip to live")
+        warn("inside the app (Settings), and only with an active license.")
     else:
-        keys["ALPACA_BASE_URL"] = "https://paper-api.alpaca.markets"
-        success("Paper trading selected — safe for testing.")
+        info("Skipped live keys — add them anytime via LAUNCH.bat → [3] Setup Keys.")
 
-    success("Alpaca keys saved!")
+    success("Alpaca setup complete!")
 
 
 def collect_alpha_vantage(keys: dict):

@@ -13,11 +13,18 @@ services:
       - key: FLASK_SECRET
         generateValue: true
       # -- API Keys (set manually in Render dashboard) ----------------------
+      # PAPER account keys (practice money). Required.
       - key: ALPACA_KEY
         sync: false
       - key: ALPACA_SECRET
         sync: false
       - key: ALPACA_BASE_URL
+        sync: false
+      # LIVE account keys (real money). Optional — set these to enable the
+      # in-app Paper→Live toggle. Live still only activates with a valid license.
+      - key: ALPACA_LIVE_KEY
+        sync: false
+      - key: ALPACA_LIVE_SECRET
         sync: false
       - key: ALPHA_VANTAGE_KEY
         sync: false
@@ -43,6 +50,9 @@ services:
       - key: GMAIL_APP_PASSWORD
         sync: false
       # -- Trading mode -----------------------------------------------------
+      # Boot mode only. The real control is the in-app Paper↔Live toggle, which
+      # is license-gated. Keep this 'paper' so every deployment starts safe;
+      # buyers flip to live inside the app after activating their license.
       - key: TRADING_MODE
         value: paper
       - key: LIVE_TRADING_ENABLED

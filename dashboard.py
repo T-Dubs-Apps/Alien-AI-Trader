@@ -77,6 +77,15 @@ LICENSE_SERVER_URL = os.environ.get(
 ).rstrip("/")
 LICENSE_FILE = os.path.join(base_dir, "license.json")
 
+# -- Distribution URLs (used by the shareable Render landing page /get) --------
+# The public repo IS the installation package. The GitHub archive link always
+# serves the latest build, so buyers always download an up-to-date copy.
+GITHUB_REPO_URL   = os.environ.get("GITHUB_REPO_URL", "https://github.com/T-Dubs-Apps/Alien-AI-Trader")
+DOWNLOAD_ZIP_URL  = os.environ.get("DOWNLOAD_ZIP_URL", GITHUB_REPO_URL + "/archive/refs/heads/main.zip")
+# One-click "Deploy to Render" — Render reads render.yaml from the repo and
+# stands up the buyer's OWN private cloud instance (their keys, their trades).
+RENDER_DEPLOY_URL = os.environ.get("RENDER_DEPLOY_URL", "https://render.com/deploy?repo=" + GITHUB_REPO_URL)
+
 from license_signing import verify_license
 
 
@@ -208,6 +217,11 @@ _trading_settings: dict = {
     "shield_enabled":        True,
     # ── 5hr 59min minimum hold rule ───────────────────────────────────────────
     "min_hold_seconds":      int(os.environ.get("MIN_HOLD_SECONDS", "21540")),  # 5h 59m
+    # ── Paper / Live account (buyer-toggled; live is license-gated) ───────────
+    # Stored value is the REQUESTED mode. The engine is handed the EFFECTIVE mode
+    # via GET /api/settings/trading, which downgrades to paper unless live is
+    # currently allowed. Always defaults to paper — real money is opt-in.
+    "trading_mode":          os.environ.get("TRADING_MODE", "paper").lower(),
 }
 
 
@@ -246,15 +260,107 @@ ALPACA_KEY = os.environ.get("ALPACA_KEY")
 ALPACA_SECRET = os.environ.get("ALPACA_SECRET")
 ALPACA_BASE_URL = os.environ.get("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
 ALPHA_VANTAGE_KEY = os.environ.get("ALPHA_VANTAGE_KEY")
+# Separate LIVE credentials so the licensed Paper↔Live toggle can switch accounts
+# without the buyer ever regenerating keys. Paper keys above stay paper; these
+# stay live. Absent live keys = live simply cannot be enabled (fail safe).
+ALPACA_LIVE_KEY    = os.environ.get("ALPACA_LIVE_KEY")
+ALPACA_LIVE_SECRET = os.environ.get("ALPACA_LIVE_SECRET")
 
-_alpaca = None
+_alpaca = None        # paper client (always paper endpoint)
+_alpaca_live = None   # live client, built lazily only when live is used
 _alpha = None
 
 if ALPACA_KEY and ALPACA_SECRET:
-    _alpaca = REST(ALPACA_KEY, ALPACA_SECRET, base_url=ALPACA_BASE_URL)
+    _alpaca = REST(ALPACA_KEY, ALPACA_SECRET, base_url="https://paper-api.alpaca.markets")
 
 if ALPHA_VANTAGE_KEY:
     _alpha = TimeSeries(key=ALPHA_VANTAGE_KEY, output_format="json")
+
+
+def _live_keys_present() -> bool:
+    return bool(ALPACA_LIVE_KEY and ALPACA_LIVE_SECRET)
+
+
+def _live_allowed():
+    """(allowed, reason) — LIVE requires a valid signed license AND live keys.
+    This is the single gate that enforces 'no real-money trading without paying'."""
+    if not _license_is_active():
+        return False, "No active license — subscribe to unlock live trading."
+    if not _live_keys_present():
+        return False, "Live Alpaca keys are not configured — add them in the Setup Wizard."
+    return True, ""
+
+
+def _requested_mode() -> str:
+    m = str(_trading_settings.get("trading_mode", "paper")).lower()
+    return "live" if m == "live" else "paper"
+
+
+def _effective_mode() -> str:
+    """What the engine/orders should ACTUALLY use. 'live' only when requested
+    AND currently allowed; otherwise always 'paper'."""
+    return "live" if (_requested_mode() == "live" and _live_allowed()[0]) else "paper"
+
+
+def _get_live_client():
+    global _alpaca_live
+    if _alpaca_live is None and _live_keys_present():
+        _alpaca_live = REST(ALPACA_LIVE_KEY, ALPACA_LIVE_SECRET,
+                            base_url="https://api.alpaca.markets")
+    return _alpaca_live
+
+
+def _active_alpaca():
+    """The Alpaca client matching the current effective mode."""
+    if _effective_mode() == "live":
+        return _get_live_client()
+    return _alpaca
+
+
+# ── Tier / plan gating (Trader vs Pro) ────────────────────────────────────────
+# The license carries a 'tier' (the price_map key it was bought under). Any tier
+# starting with 'pro' is the Pro plan. Pro unlocks power features; the Safety
+# Shield is intentionally NOT gated — loss protection is free for everyone.
+TRADER_MAX_POSITIONS = 5
+PRO_MAX_POSITIONS    = 15
+PRO_ONLY_FEATURES    = ("scan_all_market", "forecast_exit_enabled")
+
+
+def _license_tier() -> str:
+    lic = _load_local_license()
+    return str(lic.get("tier", "")) if _license_is_active(lic) else ""
+
+
+def _is_pro() -> bool:
+    return _license_tier().startswith("pro")
+
+
+def _license_plan() -> str:
+    tier = _license_tier()
+    if not tier:
+        return "Free"
+    return "Pro" if tier.startswith("pro") else "Trader"
+
+
+def _apply_pro_gating(resp: dict) -> None:
+    """Force Pro-only features off (and cap positions) unless a Pro license is
+    active. Applied to the settings the ENGINE reads, so gating holds no matter
+    what the UI shows."""
+    pro = _is_pro()
+    resp["is_pro"] = pro
+    resp["plan"]   = _license_plan()
+    try:
+        cur_pos = int(resp.get("max_positions", TRADER_MAX_POSITIONS) or TRADER_MAX_POSITIONS)
+    except (TypeError, ValueError):
+        cur_pos = TRADER_MAX_POSITIONS
+    if pro:
+        resp["max_positions"] = min(cur_pos, PRO_MAX_POSITIONS)
+        resp["pro_locked"] = []
+    else:
+        for feat in PRO_ONLY_FEATURES:
+            resp[feat] = False
+        resp["max_positions"] = min(cur_pos, TRADER_MAX_POSITIONS)
+        resp["pro_locked"] = list(PRO_ONLY_FEATURES) + ["max_positions"]
 
 # ---- Quote cache (prevents hammering APIs) ----
 _quote_cache: Dict[str, Dict[str, Any]] = {}   # sym -> {data, fetched_at}
@@ -300,6 +406,140 @@ and click <span class="hl">Activate</span>. The badge flips to &#128994; License
 <p style="margin-top:18px;font-size:.8rem">Need help? Reply to your receipt email.
 — Troy Walker · T-Dub's Apps</p>
 </div></body></html>""", 200
+
+
+@app.route("/get", methods=["GET"])
+@app.route("/store", methods=["GET"])
+def get_your_trader():
+    """Shareable landing page. THIS is the URL Troy hands out. A visitor lands
+    here, downloads the installer (free), and can subscribe to unlock live
+    trading or deploy their own private cloud copy. No trading dashboard is
+    exposed here — that lives at '/'. Prices load live from the price map so a
+    price change (e.g. annual $199) shows here with no redeploy."""
+    html = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Get Alien AI Trader</title>
+<style>
+:root{--green:#22c55e;--green2:#4ade80;--blue:#2563eb;--bg:#060c18;--card:#0d1626;
+--border:#1e3058;--text:#e2e8f0;--muted:#94a3b8;--gold:#fbbf24}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;
+line-height:1.6;padding:24px 16px}
+.wrap{max-width:640px;margin:0 auto;display:flex;flex-direction:column;gap:22px}
+.hero{text-align:center}
+.hero h1{font-size:clamp(1.8rem,5vw,2.6rem);font-weight:900;letter-spacing:.03em;
+background:linear-gradient(135deg,#4ade80,#60a5fa);-webkit-background-clip:text;
+-webkit-text-fill-color:transparent;background-clip:text}
+.hero .sub{color:var(--muted);font-size:.95rem}
+.dl-btn{display:block;text-align:center;text-decoration:none;font-weight:900;
+font-size:clamp(1.15rem,3.5vw,1.6rem);letter-spacing:.02em;color:#04120a;
+background:linear-gradient(135deg,#4ade80,#22c55e);border-radius:14px;
+padding:20px 24px;box-shadow:0 8px 30px rgba(34,197,94,.35);
+border:1px solid #16a34a;transition:transform .12s,box-shadow .2s}
+.dl-btn:hover{transform:translateY(-2px);box-shadow:0 12px 40px rgba(34,197,94,.5)}
+.dl-sub{text-align:center;color:var(--muted);font-size:.82rem;margin-top:-10px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:18px 20px}
+.card h2{font-size:1.05rem;margin-bottom:10px;color:var(--green2)}
+.steps{list-style:none;counter-reset:s;display:flex;flex-direction:column;gap:10px}
+.steps li{counter-increment:s;padding-left:38px;position:relative;color:var(--muted);font-size:.92rem}
+.steps li::before{content:counter(s);position:absolute;left:0;top:0;width:26px;height:26px;
+background:var(--green);color:#04120a;border-radius:50%;font-weight:700;font-size:.85rem;
+display:flex;align-items:center;justify-content:center}
+.steps li b{color:var(--text)}
+.price-grid{display:flex;flex-wrap:wrap;gap:12px}
+.price{flex:1 1 200px;background:#0a1220;border:1px solid var(--border);border-radius:10px;
+padding:16px;text-align:center}
+.price .amt{font-size:1.6rem;font-weight:900;color:var(--text)}
+.price .per{color:var(--muted);font-size:.8rem}
+.price a{display:block;margin-top:10px;text-decoration:none;background:rgba(37,99,235,.25);
+border:1px solid var(--blue);color:#93c5fd;border-radius:8px;padding:10px;font-weight:700}
+.price a:hover{background:rgba(37,99,235,.45)}
+.secondary{display:flex;flex-wrap:wrap;gap:12px}
+.secondary a{flex:1 1 200px;text-align:center;text-decoration:none;color:var(--text);
+background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px;font-weight:600}
+.secondary a:hover{border-color:#2e4a7a;background:#162039}
+.note{background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.3);border-radius:8px;
+padding:10px 14px;font-size:.85rem;color:var(--gold)}
+footer{text-align:center;color:var(--muted);font-size:.78rem;padding-top:8px}
+footer a{color:#60a5fa;text-decoration:none}
+</style></head><body><div class="wrap">
+  <div class="hero">
+    <h1>&#128123; Alien AI Trader</h1>
+    <div class="sub">AI-powered stock trading on autopilot &mdash; scans, buys the climb, sells the peak.</div>
+  </div>
+
+  <a class="dl-btn" href="__ZIP__">&#11015;&#65039; Download Your Personal Trader</a>
+  <div class="dl-sub">Free download &middot; Windows one-click installer &middot; starts in safe <b>paper mode</b> (practice money)</div>
+
+  <div class="card">
+    <h2>How it works &mdash; 4 easy steps</h2>
+    <ol class="steps">
+      <li><b>Download &amp; run the installer.</b> Double-click <b>LAUNCH.bat</b> &rarr; press 1. It installs everything automatically.</li>
+      <li><b>The Setup Wizard opens your free accounts.</b> It walks you through <b>Alpaca</b> (your broker) and <b>Alpha Vantage</b> (market data) and saves the keys for you &mdash; one time, no coding.</li>
+      <li><b>Practice free in paper mode.</b> Watch the AI trade fake money with zero risk for as long as you like.</li>
+      <li><b>Subscribe to unlock live trading</b>, then flip the in-app <b>Paper &harr; Live</b> switch when you're ready for real money.</li>
+    </ol>
+  </div>
+
+  <div class="card">
+    <h2>Unlock Live (Real-Money) Trading</h2>
+    <p style="color:var(--muted);font-size:.9rem;margin-bottom:12px">Paper trading is free forever. A subscription unlocks the licensed live-trading switch inside the app.</p>
+    <div class="price-grid" id="priceGrid">Loading prices&hellip;</div>
+  </div>
+
+  <div class="card">
+    <h2>Run It 24/7 in Your Own Cloud (Optional)</h2>
+    <p style="color:var(--muted);font-size:.9rem;margin-bottom:12px">Deploy your <b>own private copy</b> to Render so the AI trades even when your PC is off. Your keys, your account, your trades &mdash; nothing shared.</p>
+    <div class="secondary">
+      <a href="__DEPLOY__" target="_blank" rel="noopener">&#9729;&#65039; Deploy Your Own on Render</a>
+      <a href="__REPO__#-render-cloud-deployment-advanced" target="_blank" rel="noopener">&#128214; Cloud setup guide</a>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Just Want It on Your Home PC?</h2>
+    <p style="color:var(--muted);font-size:.9rem;margin-bottom:12px">The same download runs 100% locally &mdash; no cloud, no account with us. Paper trading is free; a subscription unlocks live.</p>
+    <div class="secondary">
+      <a href="__ZIP__">&#128190; Download for Home Use</a>
+      <a href="__REPO__#readme" target="_blank" rel="noopener">&#128214; Full README</a>
+    </div>
+  </div>
+
+  <div class="note">&#9888;&#65039; Live trading needs your own Alpaca account (the wizard sets it up in minutes) and a subscription. The app always starts in paper mode &mdash; you choose when to go live.</div>
+
+  <footer>&#128123; Alien AI Trader &middot; Built by Troy Walker &middot; T-Dub's Apps &middot; 2026<br>
+    <a href="/">Open the live dashboard</a> &nbsp;|&nbsp; <a href="__REPO__" target="_blank" rel="noopener">GitHub</a></footer>
+</div>
+<script>
+(function(){
+  var repo="__REPO__";
+  fetch('/api/license/pricing-proxy').then(function(r){return r.json();}).then(function(tiers){
+    var grid=document.getElementById('priceGrid');
+    if(!tiers||!tiers.length){grid.innerHTML='<p style="color:var(--muted)">Subscription options are loading &mdash; refresh in a moment.</p>';return;}
+    grid.innerHTML='';
+    tiers.forEach(function(t){
+      if(!t.buyUrl||t.buyUrl.indexOf('REPLACE')!==-1)return;
+      var plan=t.plan||((''+t.tier).indexOf('pro')===0?'Pro':'Trader');
+      var per=(t.billingType==='annual')?'per year':(t.billingType==='monthly')?'per month':'one-time';
+      var el=document.createElement('div');el.className='price';
+      el.innerHTML='<div class="per" style="font-weight:700;color:var(--text)">'+plan+'</div>'+
+        '<div class="amt">$'+t.price+'</div><div class="per">'+per+'</div>'+
+        '<a href="'+t.buyUrl+'" target="_blank" rel="noopener">Subscribe</a>';
+      grid.appendChild(el);
+    });
+    if(!grid.children.length){grid.innerHTML='<p style="color:var(--muted)">Live checkout links are being finalized.</p>';}
+  }).catch(function(){
+    document.getElementById('priceGrid').innerHTML='<p style="color:var(--muted)">Could not load prices &mdash; please refresh.</p>';
+  });
+})();
+</script>
+</body></html>"""
+    html = (html.replace("__ZIP__", DOWNLOAD_ZIP_URL)
+                .replace("__DEPLOY__", RENDER_DEPLOY_URL)
+                .replace("__REPO__", GITHUB_REPO_URL))
+    response = app.make_response(html)
+    response.headers["Content-Type"] = "text/html; charset=utf-8"
+    return response
 
 
 @app.route("/")
@@ -638,6 +878,7 @@ def _local_pricing() -> list:
                 if url and "REPLACE" not in url:
                     out.append({"tier": tier, "price": info.get("price"),
                                 "billingType": info.get("billingType", "one_time"),
+                                "plan": info.get("plan") or ("Pro" if str(tier).startswith("pro") else "Trader"),
                                 "buyUrl": url})
         return out
     except Exception:
@@ -664,8 +905,10 @@ def license_pricing_proxy():
 # -----------------------------------------------
 @app.route("/api/order", methods=["POST"])
 def submit_order():
-    """Submit a real order through Alpaca. Paper or live depends on ALPACA_BASE_URL."""
-    if not _alpaca:
+    """Submit a real order through Alpaca. Paper or live follows the current
+    license-gated effective mode (same account the AI engine is trading)."""
+    client = _active_alpaca()
+    if not client:
         return jsonify({
             "status": "error",
             "message": "Alpaca keys are not configured. Run the Setup Wizard (LAUNCH.bat → option 3) first.",
@@ -703,9 +946,9 @@ def submit_order():
             return jsonify({"status": "error", "message": "A positive limit price is required for limit orders."}), 400
         order_kwargs["limit_price"] = limit_price
 
-    is_paper = "paper" in ALPACA_BASE_URL.lower()
+    is_paper = _effective_mode() != "live"
     try:
-        order = _alpaca.submit_order(**order_kwargs)
+        order = client.submit_order(**order_kwargs)
         note = {
             "time": int(time.time()),
             "level": "trade",
@@ -786,15 +1029,53 @@ def clear_notifications():
 # -----------------------------------------------
 # Live Trading Settings  (engine polls this)
 # -----------------------------------------------
+def _settings_response() -> dict:
+    """Settings plus the authoritative mode picture. 'trading_mode' is the
+    EFFECTIVE mode the engine must use; 'requested_mode' is what the user asked."""
+    allowed, reason = _live_allowed()
+    resp = dict(_trading_settings)
+    resp["requested_mode"]    = _requested_mode()
+    resp["trading_mode"]      = _effective_mode()
+    resp["live_allowed"]      = allowed
+    resp["live_keys_present"] = _live_keys_present()
+    resp["licensed"]          = _license_is_active()
+    resp["live_block_reason"] = "" if allowed else reason
+    # Pro-tier feature gating (Safety Shield is deliberately NOT gated).
+    _apply_pro_gating(resp)
+    return resp
+
+
 @app.route("/api/settings/trading", methods=["GET"])
 def get_trading_settings():
-    return jsonify(_trading_settings), 200
+    return jsonify(_settings_response()), 200
 
 
 @app.route("/api/settings/trading", methods=["POST"])
 def update_trading_settings():
     global _trading_settings
     payload = request.json or {}
+
+    # ── Paper ↔ Live switch — license-gated, fails safe to paper ──────────────
+    if "trading_mode" in payload:
+        want = str(payload.get("trading_mode", "")).lower()
+        if want not in ("paper", "live"):
+            return jsonify({"status": "error",
+                            "message": "trading_mode must be 'paper' or 'live'."}), 400
+        if want == "live":
+            ok, reason = _live_allowed()
+            if not ok:
+                # Refuse to go live; leave the stored mode untouched (paper).
+                return jsonify({"status": "error", "message": reason,
+                                "trading_mode": _effective_mode(),
+                                "requested_mode": _requested_mode()}), 403
+        _trading_settings["trading_mode"] = want
+        note = {"time": int(time.time()),
+                "level": "trade" if want == "live" else "info", "symbol": "",
+                "message": ("⚠ LIVE trading enabled — REAL MONEY is now active."
+                            if want == "live" else "Switched to PAPER trading (practice money).")}
+        _notifications.append(note)
+        socketio.emit("notification", note)
+
     allowed = {
         # Core execution
         "poll_seconds", "trailing_stop_pct", "loss_threshold",
@@ -818,8 +1099,9 @@ def update_trading_settings():
     # Persist to disk so settings survive restarts
     _save_settings()
     # Push updated settings to all browser clients so UI stays in sync
-    socketio.emit("trading_settings", _trading_settings)
-    return jsonify(_trading_settings), 200
+    resp = _settings_response()
+    socketio.emit("trading_settings", resp)
+    return jsonify(resp), 200
 
 
 # -----------------------------------------------
@@ -1079,11 +1361,16 @@ def _engine_supervisor() -> None:
 
 # Engine always starts inside the dashboard process.
 # The separate worker service has been removed to reduce Render costs.
-_supervisor_thread = threading.Thread(
-    target=_engine_supervisor, daemon=True, name="EngineSupervisor"
-)
-_supervisor_thread.start()
-print("[DASHBOARD] Trading engine supervisor started.")
+# Set DISABLE_ENGINE_AUTOSTART=1 to import this module without launching the
+# engine (used by tests / tooling). Production leaves it unset.
+if os.environ.get("DISABLE_ENGINE_AUTOSTART") != "1":
+    _supervisor_thread = threading.Thread(
+        target=_engine_supervisor, daemon=True, name="EngineSupervisor"
+    )
+    _supervisor_thread.start()
+    print("[DASHBOARD] Trading engine supervisor started.")
+else:
+    print("[DASHBOARD] Engine autostart disabled (DISABLE_ENGINE_AUTOSTART=1).")
 
 
 if __name__ == "__main__":

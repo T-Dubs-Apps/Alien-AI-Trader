@@ -148,27 +148,36 @@ class TradingEngine:
         # Trailing-stop high-water marks: {symbol: highest_price_since_buy}
         self._peak_prices: Dict[str, float] = {}
 
-        # Hard safety gate for live trading
-        self.trading_mode = os.environ.get("TRADING_MODE", "paper").lower()
-        self.live_enabled = os.environ.get("LIVE_TRADING_ENABLED", "false").lower() == "true"
+        # ── Trading mode & Alpaca credentials ─────────────────────────────────
+        # The engine holds BOTH key pairs so the dashboard's licensed Paper↔Live
+        # toggle can switch accounts instantly — the buyer never returns to Alpaca.
+        #   paper keys → ALPACA_KEY / ALPACA_SECRET
+        #   live  keys → ALPACA_LIVE_KEY / ALPACA_LIVE_SECRET
+        # Live is ONLY ever activated by the dashboard after it confirms a valid
+        # signed license (see dashboard _live_allowed()). The engine trusts the
+        # effective mode it is handed on /api/settings/trading and always fails
+        # SAFE to paper when live keys are absent.
+        self._paper_key    = os.environ.get("ALPACA_KEY")
+        self._paper_secret = os.environ.get("ALPACA_SECRET")
+        self._live_key     = os.environ.get("ALPACA_LIVE_KEY")
+        self._live_secret  = os.environ.get("ALPACA_LIVE_SECRET")
+        alpha_vantage_key  = os.environ.get("ALPHA_VANTAGE_KEY")
+        pushbullet_token   = os.environ.get("PUSHBULLET_TOKEN", "")
 
-        alpaca_key = os.environ.get("ALPACA_KEY")
-        alpaca_secret = os.environ.get("ALPACA_SECRET")
-        alpha_vantage_key = os.environ.get("ALPHA_VANTAGE_KEY")
-        pushbullet_token = os.environ.get("PUSHBULLET_TOKEN", "")
-
-        if not alpaca_key or not alpaca_secret:
+        if not self._paper_key or not self._paper_secret:
             raise RuntimeError("Missing ALPACA_KEY / ALPACA_SECRET env vars.")
         if not alpha_vantage_key:
             raise RuntimeError("Missing ALPHA_VANTAGE_KEY env var.")
 
-        base_url = "https://paper-api.alpaca.markets"
-        if self.trading_mode == "live":
-            if not self.live_enabled:
-                raise RuntimeError("Live trading requested but LIVE_TRADING_ENABLED is not true.")
-            base_url = "https://api.alpaca.markets"
+        # Always boot in PAPER. Honor an explicit live boot only when live keys
+        # actually exist (no send_alert here — pushbullet/pushover aren't set up yet).
+        self.live_enabled = os.environ.get("LIVE_TRADING_ENABLED", "false").lower() == "true"
+        self.trading_mode = "paper"
+        self.api = self._make_alpaca("paper")
+        if os.environ.get("TRADING_MODE", "paper").lower() == "live" and self._live_key and self._live_secret:
+            self.api = self._make_alpaca("live")
+            self.trading_mode = "live"
 
-        self.api = REST(alpaca_key, alpaca_secret, base_url=base_url)
         self.ts = TimeSeries(key=alpha_vantage_key, output_format="json")
 
         self.pb = Pushbullet(pushbullet_token) if pushbullet_token else None
@@ -194,11 +203,15 @@ class TradingEngine:
         # ── Capital ratchet (high-water mark — the ladder never comes down) ──
         self._capital_hwm = self.initial_capital   # highest total portfolio value ever seen
 
-        # Dashboard heartbeat (optional)
-        # Accept either DASHBOARD_BASE_URL or DASHBOARD_URL for flexibility
+        # Dashboard heartbeat + live-settings poll.
+        # Accept either DASHBOARD_BASE_URL or DASHBOARD_URL; otherwise fall back to
+        # the local loopback. The engine runs IN-PROCESS with the dashboard, so
+        # 127.0.0.1:$PORT always reaches it — this guarantees the Paper↔Live toggle
+        # (and all live settings) work with no extra env var to configure.
         self.dashboard_base_url = (
             os.environ.get("DASHBOARD_BASE_URL") or
-            os.environ.get("DASHBOARD_URL") or ""
+            os.environ.get("DASHBOARD_URL") or
+            f"http://127.0.0.1:{os.environ.get('PORT', '5000')}"
         ).rstrip("/")
         self.heartbeat_path = os.environ.get("HEARTBEAT_PATH", "/api/worker/heartbeat")
         self.heartbeat_every = int(os.environ.get("HEARTBEAT_EVERY_SECONDS", "10"))
@@ -417,6 +430,38 @@ class TradingEngine:
     # Live settings poll
     # -------------------------------
 
+    def _make_alpaca(self, mode: str):
+        """Build an Alpaca REST client for the given mode. Falls back to paper
+        when live keys are unavailable, so the engine can NEVER accidentally
+        trade real money without live credentials present."""
+        if mode == "live" and self._live_key and self._live_secret:
+            return REST(self._live_key, self._live_secret,
+                        base_url="https://api.alpaca.markets")
+        return REST(self._paper_key, self._paper_secret,
+                    base_url="https://paper-api.alpaca.markets")
+
+    def _apply_trading_mode(self, mode: str) -> None:
+        """Switch which Alpaca account the engine trades against. Only ever
+        called with a mode the dashboard already authorized (license-gated).
+        Fails safe to PAPER when live keys are missing."""
+        mode = "live" if str(mode).lower() == "live" else "paper"
+        if mode == self.trading_mode:
+            return
+        if mode == "live" and not (self._live_key and self._live_secret):
+            self.send_alert(
+                "Live trading was requested but no live Alpaca keys are configured — "
+                "staying in PAPER mode. Add live keys via the Setup Wizard.",
+                level="warn")
+            return
+        self.api = self._make_alpaca(mode)
+        self.trading_mode = mode
+        # Peak prices belong to the previous account's positions — reset them.
+        self._peak_prices.clear()
+        self.send_alert(
+            f"Trading mode switched to {mode.upper()} "
+            f"({'REAL MONEY' if mode == 'live' else 'practice money'}).",
+            level="trade" if mode == "live" else "info")
+
     def _poll_live_settings(self):
         """
         Fetch live trading settings from the dashboard's /api/settings/trading.
@@ -429,6 +474,9 @@ class TradingEngine:
             if r.status_code != 200:
                 return
             s = r.json()
+            # Paper↔Live account switch first — the dashboard only ever reports an
+            # effective mode of "live" after it has confirmed a valid license.
+            if "trading_mode" in s: self._apply_trading_mode(s.get("trading_mode"))
             if "auto_trade"         in s: self.auto_trade          = bool(s["auto_trade"])
             if "poll_seconds"        in s: self.poll_seconds        = max(5, int(s["poll_seconds"]))
             if "trailing_stop_pct"   in s: self.trailing_stop_pct   = max(0.001, float(s["trailing_stop_pct"]) / 100.0)

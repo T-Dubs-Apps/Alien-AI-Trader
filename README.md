@@ -446,6 +446,77 @@ This software is for educational and paper trading purposes only. Troy Walker an
 
 ---
 
+## 🔤 Glossary — Trading Terms & Features Explained
+
+A plain-English reference for every trading concept and feature used in the app — useful for explaining to someone else (like a family member) what the AI is actually doing.
+
+### Technical Indicators (Layer 1)
+
+| Term | What it means | How this app uses it |
+|---|---|---|
+| **RSI (Relative Strength Index)** | A 0–100 score measuring how fast a stock has been rising or falling recently. Low = oversold/dip, high = overbought/peaked. | Calculated as RSI-14 (14-bar lookback). Must be below 50 to BUY (catching dips, not chasing highs). Selling kicks in above the RSI Sell Min setting (default 70). |
+| **SMA (Simple Moving Average)** | The average price over the last X bars — smooths out noise to show the underlying trend. | Uses SMA-20 (short-term) and SMA-50 (medium-term). SMA-20 above SMA-50 = uptrend confirmation. |
+| **Golden Cross** | When a short-term average (SMA-20) crosses above a longer-term average (SMA-50) — a classic bullish trend signal. | Required for a BUY. A "SMA Spread Min %" setting filters out weak, razor-thin crossovers so the app doesn't act on noise. |
+| **Death Cross** | The opposite of a golden cross — SMA-20 drops below SMA-50, signaling the trend has turned down. | Triggers a SELL signal. |
+| **MACD (Moving Average Convergence Divergence)** | Compares two moving averages to show whether momentum is building or fading. | Must be "bullish" (MACD line above its signal line) before the AI will BUY. |
+| **Bollinger Bands** | A price channel built around a moving average that widens and narrows with volatility. | Price must stay inside the bands to BUY — keeps the AI from chasing a sudden breakout spike that might reverse. |
+| **VWAP (Volume-Weighted Average Price)** | The average price a stock has traded at today, weighted by how much volume traded at each price. | Price must stay near VWAP to BUY — avoids buying into off-market or low-volume price spikes. |
+
+All six of the above must agree before the AI buys anything — it's an "all conditions must be true" filter, not a majority vote.
+
+### Forecasting (Layer 2)
+
+| Term | What it means | How this app uses it |
+|---|---|---|
+| **Linear Regression Forecast** | A statistical best-fit line drawn through recent prices, used to project where the price is headed next. | Predicts the price 5 bars ahead. If it points up with high confidence, the forecast approves the trade. |
+| **EMA (Exponential Moving Average)** | Like an SMA, but weights recent prices more heavily — reacts faster to new price action. | Uses EMA5, EMA10, EMA20. |
+| **EMA Stacking** | When EMA5 > EMA10 > EMA20 > current trend is genuinely climbing in an orderly way, not just spiking. | Confirms sustained momentum rather than a random one-bar pop, before the AI will buy. |
+
+### Portfolio Ladder Scoring (Layer 3)
+
+| Term | What it means |
+|---|---|
+| **The Ladder** | Every stock on the watchlist gets scored 0–100 each scan cycle, then ranked top to bottom. Only the top 20% of the ranking are eligible to BUY — even if a stock passes every other check, it's skipped if it's not near the top of the ladder. |
+| **Volume Score** | Rewards a stock when its trading volume surges above its 20-day average — a sign the move is backed by real buying interest, not a fluke. |
+| **Trend Score** | Rewards stocks trading in the middle of their 52-week price range, rather than ones already near their yearly high. |
+| **Profit Score** | A bonus if the AI is already holding the stock and it's currently profitable. |
+
+### News Sentiment (Layer 4)
+
+| Term | What it means |
+|---|---|
+| **Sentiment Score** | A score derived from recent news headlines about a stock. A negative score blocks a BUY outright, regardless of how good the charts look. |
+
+### Exit Strategy ("The Ladder Effect")
+
+| Term | What it means |
+|---|---|
+| **Trailing Stop** | The AI tracks the highest price reached since you bought ("the peak") and automatically sells once price falls a set % below that peak (default 3%). This locks in gains as a stock climbs, without capping the upside. |
+| **Forecast Exit** | Sells immediately when the forecast and EMA stacking flip from "rising" to "falling" — gets you out near the actual top, before the trailing stop would have triggered. Toggleable in the Trade tab. |
+| **Stop-Loss** | A hard safety net: if price falls a set % below your original purchase price (default 5%) without ever rising, the AI exits immediately. Caps the damage from a trade that simply never worked out. |
+
+### Order & Account Terms
+
+| Term | What it means |
+|---|---|
+| **GTC (Good-Til-Cancelled)** | An order type that stays open until it's filled or manually cancelled (rather than expiring at end of day). Used for protective stop orders placed when the market is closed. |
+| **Paper Trading** | Simulated trading with fake money — free, used for testing strategies with zero financial risk. |
+| **Live Trading** | Real trades placed with real money through your actual Alpaca brokerage account. Requires a license to unlock. |
+| **ROI (Return on Investment)** | Your session's profit or loss, shown as a percentage of your starting capital. |
+| **Position Sizing** | How much money the AI puts into each trade — governed by Risk Per Trade %, Max Position %, and Min/Max Positions settings, so no single stock can blow up the whole portfolio. |
+| **Drawdown** | The drop from a portfolio's peak value to a subsequent low — a measure of "how bad did it get" during a losing stretch. Reported in backtests. |
+| **Watchlist** | The list of stocks you've chosen for the AI to actively monitor and trade (as opposed to "Scan Entire Market," which checks all ~8,000 US stocks). |
+
+### Alerts & Connectivity
+
+| Term | What it means |
+|---|---|
+| **DND (Do Not Disturb)** | Your phone's silent-mode setting. Pushover alerts are configured to break through DND so you don't miss a crash alert even with your phone silenced. |
+| **Heartbeat** | A periodic "I'm still alive" signal the background worker sends to the dashboard, so the UI can tell whether the trading engine is actually running or has silently died. |
+| **Crash Alert** | A phone call/text triggered when a held stock is dropping sharply after hours, when the AI itself can't place a protective trade because the market is closed. |
+
+---
+
 ## ❓ Frequently Asked Questions
 
 **Q: Do I need to know how to code?**

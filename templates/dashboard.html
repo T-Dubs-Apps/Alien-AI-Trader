@@ -918,8 +918,8 @@
               <div class="section-title"><i class="fa-solid fa-toggle-on me-1"></i>Trading Mode</div>
               <div class="row g-3 align-items-end">
                 <div class="col-md-4">
-                  <label class="form-label">Mode</label>
-                  <select class="form-select" id="tradingModeSelect">
+                  <label class="form-label">Mode <span class="small-muted">(Paper ↔ Live)</span></label>
+                  <select class="form-select" id="tradingModeSelect" onchange="onTradingModeChange()">
                     <option value="paper" selected>Paper Trading (Safe — no real money)</option>
                     <option value="live">Live Trading (Real money — use with care)</option>
                   </select>
@@ -942,9 +942,14 @@
                   </select>
                 </div>
               </div>
-              <div class="alert mt-3 mb-0 py-2" style="background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.3);color:var(--warn);font-size:.8rem;border-radius:8px;">
-                <i class="fa-solid fa-triangle-exclamation me-1"></i>
-                <strong>Mode changes apply on next engine restart.</strong> Paper mode is always safe. Live mode uses real funds.
+              <div id="tradingModeBanner" class="alert mt-3 mb-0 py-2" style="background:rgba(37,99,235,.1);border:1px solid rgba(37,99,235,.3);color:var(--muted);font-size:.8rem;border-radius:8px;">
+                <i class="fa-solid fa-circle-info me-1"></i>
+                Checking trading mode…
+              </div>
+              <div class="small-muted mt-2" style="font-size:.75rem;">
+                Switching takes effect within a few seconds — no restart needed. Live trading
+                requires an <strong>active license</strong> and your <strong>live Alpaca keys</strong>;
+                until then the app stays safely in paper. This is where you toggle Paper ↔ Live anytime.
               </div>
             </div>
 
@@ -1638,13 +1643,14 @@
         wrap.innerHTML = '';
         tiers.forEach(t => {
           if (!t.buyUrl || t.buyUrl.indexOf('REPLACE') !== -1) return;
-          const label = t.billingType === 'annual'
-            ? `Buy Annual — $${t.price}/yr`
-            : `Buy Monthly — $${t.price}/mo`;
+          const plan = t.plan || (String(t.tier).startsWith('pro') ? 'Pro' : 'Trader');
+          const per  = t.billingType === 'annual' ? '/yr' : '/mo';
           const a = document.createElement('a');
           a.href = t.buyUrl; a.target = '_blank'; a.rel = 'noopener';
-          a.className = 'btn btn-sm btn-success';
-          a.innerHTML = '<i class="fa-solid fa-cart-shopping me-1"></i>' + label;
+          a.className = 'btn btn-sm ' + (plan === 'Pro' ? 'btn-warning' : 'btn-success');
+          if (plan === 'Pro') a.style.color = '#000';
+          a.innerHTML = '<i class="fa-solid fa-cart-shopping me-1"></i>' +
+            `${plan} — $${t.price}${per}`;
           wrap.appendChild(a);
         });
         if (!wrap.children.length) {
@@ -1670,8 +1676,93 @@
           ? `<span class="text-success">✔ ${d.message}</span>`
           : `<span class="text-warning">⚠ ${d.message}</span>`;
         fetchLicenseStatus();
+        initTradingMode();   // license may now allow Live — refresh the toggle gating
       } catch {
         result.innerHTML = '<span class="text-warning">⚠ Could not reach the server. Is the app running?</span>';
+      }
+    }
+
+    // ═══════════════════════════════════════════
+    //  PAPER ↔ LIVE TRADING MODE (license-gated)
+    // ═══════════════════════════════════════════
+    function _setModeBanner(mode, allowed, reason) {
+      const b = document.getElementById('tradingModeBanner');
+      if (!b) return;
+      if (mode === 'live') {
+        b.style.background = 'rgba(239,68,68,.12)';
+        b.style.borderColor = 'rgba(239,68,68,.45)';
+        b.style.color = 'var(--down)';
+        b.innerHTML = '<i class="fa-solid fa-circle-dot me-1"></i>' +
+          '<strong>LIVE — real money.</strong> The AI is trading your live Alpaca account. ' +
+          'Switch to Paper anytime above.';
+      } else {
+        b.style.background = 'rgba(34,197,94,.1)';
+        b.style.borderColor = 'rgba(34,197,94,.35)';
+        b.style.color = 'var(--up)';
+        b.innerHTML = '<i class="fa-solid fa-shield-halved me-1"></i>' +
+          '<strong>PAPER — practice money.</strong> Zero risk. ' +
+          (allowed
+            ? 'You can switch to Live above whenever you’re ready.'
+            : '<span style="color:var(--muted)">To enable Live: ' + (reason || 'activate a license and add live keys') + '</span>');
+      }
+    }
+
+    // Reflect the true server state (effective mode + whether live is allowed).
+    async function initTradingMode() {
+      const sel = document.getElementById('tradingModeSelect');
+      try {
+        const r = await fetch('/api/settings/trading');
+        const s = await r.json();
+        const effective = s.trading_mode || 'paper';
+        if (sel) sel.value = effective;
+        _setModeBanner(effective, !!s.live_allowed, s.live_block_reason || '');
+        // Annotate the Live option so the user sees why it may be unavailable.
+        if (sel) {
+          const liveOpt = sel.querySelector('option[value="live"]');
+          if (liveOpt) liveOpt.textContent = s.live_allowed
+            ? 'Live Trading (Real money — use with care)'
+            : 'Live Trading (locked — needs license + live keys)';
+        }
+      } catch { /* leave defaults */ }
+    }
+
+    async function onTradingModeChange() {
+      const sel  = document.getElementById('tradingModeSelect');
+      const want = sel ? sel.value : 'paper';
+
+      if (want === 'live') {
+        // Hard confirmation guard: require the user to type LIVE.
+        const typed = window.prompt(
+          '⚠ REAL MONEY.\n\nThis switches the AI to your LIVE Alpaca account — actual ' +
+          'buy/sell orders with real funds. Only continue if your license is active and ' +
+          'your live keys are set.\n\nType  LIVE  (all caps) to confirm:');
+        if (typed !== 'LIVE') {
+          sel.value = 'paper';
+          _setModeBanner('paper', true, '');
+          return;
+        }
+      }
+
+      try {
+        const r = await fetch('/api/settings/trading', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ trading_mode: want })
+        });
+        const d = await r.json();
+        if (!r.ok) {
+          // Rejected (e.g. 403 not licensed / no live keys) — revert to paper.
+          sel.value = 'paper';
+          _setModeBanner('paper', false, d.message || '');
+          alert('Live trading not enabled:\n\n' + (d.message || 'Not allowed yet.'));
+          return;
+        }
+        const effective = d.trading_mode || want;
+        sel.value = effective;
+        _setModeBanner(effective, effective === 'live' || !!d.live_allowed, d.live_block_reason || '');
+      } catch {
+        sel.value = 'paper';
+        _setModeBanner('paper', false, 'Could not reach the app.');
       }
     }
 
@@ -2196,6 +2287,7 @@
     fetchAndRenderNotifs();
     fetchLicenseStatus();
     loadLicensePricing();
+    initTradingMode();
 
     // Fallback REST pollers (WebSocket is primary; these catch up if WS stalls)
     setInterval(fetchWorkerStatus, 20000);

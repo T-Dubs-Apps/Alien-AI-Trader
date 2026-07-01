@@ -1,20 +1,40 @@
 {
   "alien-ai-trader": {
     "monthly": {
-      "priceId": "price_1TiiMsFZpNdjWKvvMulniCk9",
+      "priceId": "price_1ToSmLFZpNdjWKvvGn8qvIN3",
       "mode": "subscription",
       "billingType": "monthly",
       "durationDays": 30,
       "price": 19.99,
-      "buyUrl": "https://buy.stripe.com/3cI14n5TKcXagN10akes007"
+      "plan": "Trader",
+      "buyUrl": "https://buy.stripe.com/3cIeVd6XO5uI0O3bT2es00b"
     },
     "annual": {
-      "priceId": "price_1Th32JFZpNdjWKvv5QjUlYKy",
+      "priceId": "price_1ToTLSFZpNdjWKvvav7SzTRt",
       "mode": "subscription",
       "billingType": "annual",
       "durationDays": 365,
-      "price": 99.0,
-      "buyUrl": "https://buy.stripe.com/14AbJ195W5uIeET6yIes008"
+      "price": 199.0,
+      "plan": "Trader",
+      "buyUrl": "https://buy.stripe.com/6oUaEX6XO7CQ7cr5uEes00c"
+    },
+    "pro_monthly": {
+      "priceId": "price_1ToTNrFZpNdjWKvvGYgsrJnj",
+      "mode": "subscription",
+      "billingType": "monthly",
+      "durationDays": 30,
+      "price": 59.0,
+      "plan": "Pro",
+      "buyUrl": "https://buy.stripe.com/00w4gzfuk4qEdAP8GQes00d"
+    },
+    "pro_annual": {
+      "priceId": "price_1ToTNrFZpNdjWKvvA3H3IFgh",
+      "mode": "subscription",
+      "billingType": "annual",
+      "durationDays": 365,
+      "price": 590.0,
+      "plan": "Pro",
+      "buyUrl": "https://buy.stripe.com/8x200jaa01eseET7CMes00e"
     }
   },
   "ai-assistant-pro": {
