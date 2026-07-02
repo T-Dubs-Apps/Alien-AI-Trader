@@ -12,6 +12,7 @@ import os
 import time
 import threading
 import requests
+import key_store
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, Any, List, Optional, Tuple
 
@@ -174,7 +175,7 @@ class TradingEngine:
         self.live_enabled = os.environ.get("LIVE_TRADING_ENABLED", "false").lower() == "true"
         self.trading_mode = "paper"
         self.api = self._make_alpaca("paper")
-        if os.environ.get("TRADING_MODE", "paper").lower() == "live" and self._live_key and self._live_secret:
+        if os.environ.get("TRADING_MODE", "paper").lower() == "live" and key_store.has_live_keys():
             self.api = self._make_alpaca("live")
             self.trading_mode = "live"
 
@@ -431,12 +432,14 @@ class TradingEngine:
     # -------------------------------
 
     def _make_alpaca(self, mode: str):
-        """Build an Alpaca REST client for the given mode. Falls back to paper
-        when live keys are unavailable, so the engine can NEVER accidentally
-        trade real money without live credentials present."""
-        if mode == "live" and self._live_key and self._live_secret:
-            return REST(self._live_key, self._live_secret,
-                        base_url="https://api.alpaca.markets")
+        """Build an Alpaca REST client for the given mode. Live keys are read
+        from key_store (env var OR keys the user entered in-app), so a live
+        switch works without a restart. Falls back to paper when live keys are
+        unavailable, so the engine can NEVER accidentally trade real money."""
+        if mode == "live":
+            lk, ls = key_store.get_live_keys()
+            if lk and ls:
+                return REST(lk, ls, base_url="https://api.alpaca.markets")
         return REST(self._paper_key, self._paper_secret,
                     base_url="https://paper-api.alpaca.markets")
 
@@ -447,7 +450,7 @@ class TradingEngine:
         mode = "live" if str(mode).lower() == "live" else "paper"
         if mode == self.trading_mode:
             return
-        if mode == "live" and not (self._live_key and self._live_secret):
+        if mode == "live" and not key_store.has_live_keys():
             self.send_alert(
                 "Live trading was requested but no live Alpaca keys are configured — "
                 "staying in PAPER mode. Add live keys via the Setup Wizard.",

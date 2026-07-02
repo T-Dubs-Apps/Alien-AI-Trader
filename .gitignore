@@ -29,6 +29,9 @@ install_config.json
 # Per-machine license activation (issued after purchase — never commit)
 license.json
 
+# Live Alpaca keys entered in-app (real trading secrets — never commit)
+live_keys.json
+
 # Virtual environment
 .venv/
 venv/

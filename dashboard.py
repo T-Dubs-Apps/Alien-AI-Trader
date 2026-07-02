@@ -86,6 +86,57 @@ DOWNLOAD_ZIP_URL  = os.environ.get("DOWNLOAD_ZIP_URL", GITHUB_REPO_URL + "/archi
 # stands up the buyer's OWN private cloud instance (their keys, their trades).
 RENDER_DEPLOY_URL = os.environ.get("RENDER_DEPLOY_URL", "https://render.com/deploy?repo=" + GITHUB_REPO_URL)
 
+# App icon — an alien clutching a wad of cash. Served at /favicon.svg and linked
+# from every page, so it shows in the browser tab on any device (works on the
+# cloud deploy too, where no local .ico is generated). The desktop-shortcut .ico
+# is drawn separately by make_icon.py to match.
+FAVICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+<defs>
+<radialGradient id="bg" cx="50%" cy="34%" r="78%"><stop offset="0%" stop-color="#132340"/><stop offset="100%" stop-color="#060c18"/></radialGradient>
+<linearGradient id="bill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#8cf0b4"/><stop offset="100%" stop-color="#5fd68f"/></linearGradient>
+</defs>
+<rect x="8" y="8" width="240" height="240" rx="54" fill="url(#bg)"/>
+<circle cx="128" cy="108" r="94" fill="none" stroke="#22c55e" stroke-opacity=".16" stroke-width="6"/>
+<!-- flying banknotes -->
+<g stroke="#14532d" stroke-width="1" font-family="Arial,Helvetica,sans-serif" font-weight="bold">
+<g transform="translate(202,50) rotate(18)"><rect x="-17" y="-11" width="34" height="22" rx="3" fill="url(#bill)"/><ellipse cx="0" cy="0" rx="6" ry="5" fill="#ecfdf5"/><text x="-13" y="-3" font-size="7" fill="#14532d" stroke="none">$</text></g>
+<g transform="translate(52,56) rotate(-20)"><rect x="-15" y="-10" width="30" height="20" rx="3" fill="url(#bill)"/><ellipse cx="0" cy="0" rx="5" ry="4" fill="#ecfdf5"/><text x="-11" y="-2" font-size="6" fill="#14532d" stroke="none">$</text></g>
+</g>
+<!-- antenna -->
+<line x1="128" y1="34" x2="128" y2="12" stroke="#22c55e" stroke-width="4.5" stroke-linecap="round"/>
+<circle cx="128" cy="9" r="14" fill="#4ade80" opacity=".22"/><circle cx="128" cy="9" r="8" fill="#4ade80"/>
+<!-- arms (behind head; hands hold the wad) -->
+<path d="M96 152 Q82 192 118 204" fill="none" stroke="#22c55e" stroke-width="13" stroke-linecap="round"/>
+<path d="M160 152 Q194 192 138 204" fill="none" stroke="#22c55e" stroke-width="13" stroke-linecap="round"/>
+<!-- head (matches landing-page alien face) -->
+<ellipse cx="128" cy="108" rx="60" ry="78" fill="#22c55e" stroke="#16a34a" stroke-width="3"/>
+<!-- eyes: black, tilted, with shine -->
+<g fill="#000000"><ellipse cx="99" cy="97" rx="22" ry="15" transform="rotate(-18 99 97)"/><ellipse cx="157" cy="97" rx="22" ry="15" transform="rotate(18 157 97)"/></g>
+<ellipse cx="90" cy="90" rx="6.5" ry="4.5" fill="#fff" opacity=".8"/><ellipse cx="148" cy="90" rx="6.5" ry="4.5" fill="#fff" opacity=".8"/>
+<!-- nostrils + wide smile -->
+<circle cx="115" cy="140" r="5" fill="#16a34a"/><circle cx="141" cy="140" r="5" fill="#16a34a"/>
+<path d="M101 150 Q128 176 155 150" fill="none" stroke="#16a34a" stroke-width="4" stroke-linecap="round"/>
+<!-- realistic banded wad of cash -->
+<g font-family="Arial,Helvetica,sans-serif">
+<rect x="76" y="188" width="104" height="48" rx="4" fill="#38bd78"/>
+<rect x="76" y="184" width="104" height="48" rx="4" fill="#4fd18a"/>
+<rect x="76" y="180" width="104" height="48" rx="4" fill="url(#bill)" stroke="#14532d" stroke-width="1.5"/>
+<rect x="82" y="186" width="92" height="36" rx="3" fill="none" stroke="#22c55e" stroke-opacity=".5" stroke-width="1.3"/>
+<ellipse cx="128" cy="202" rx="16" ry="13" fill="#ecfdf5" stroke="#14532d" stroke-width="1"/>
+<circle cx="128" cy="199" r="5.5" fill="#5fd68f"/><path d="M120 210 Q128 202 136 210 Z" fill="#5fd68f"/>
+<text x="90" y="195" font-size="9" font-weight="bold" fill="#14532d">$</text>
+<text x="166" y="219" font-size="9" font-weight="bold" fill="#14532d" text-anchor="end">$</text>
+<text x="163" y="195" font-size="7" fill="#14532d" text-anchor="end">100</text>
+<text x="93" y="219" font-size="7" fill="#14532d">100</text>
+<rect x="114" y="176" width="28" height="56" fill="#ffffff" stroke="#cbd5e1" stroke-width="1"/>
+<rect x="114" y="182" width="28" height="2" fill="#000000"/>
+<rect x="114" y="224" width="28" height="2" fill="#000000"/>
+<text x="128" y="197" font-size="8" font-weight="bold" fill="#000000" text-anchor="middle">$100</text>
+<text x="128" y="217" font-size="15" font-weight="bold" fill="#000000" text-anchor="middle">$</text>
+</g>
+</svg>"""
+
+import key_store
 from license_signing import verify_license
 
 
@@ -278,7 +329,7 @@ if ALPHA_VANTAGE_KEY:
 
 
 def _live_keys_present() -> bool:
-    return bool(ALPACA_LIVE_KEY and ALPACA_LIVE_SECRET)
+    return key_store.has_live_keys()
 
 
 def _live_allowed():
@@ -305,8 +356,8 @@ def _effective_mode() -> str:
 def _get_live_client():
     global _alpaca_live
     if _alpaca_live is None and _live_keys_present():
-        _alpaca_live = REST(ALPACA_LIVE_KEY, ALPACA_LIVE_SECRET,
-                            base_url="https://api.alpaca.markets")
+        lk, ls = key_store.get_live_keys()
+        _alpaca_live = REST(lk, ls, base_url="https://api.alpaca.markets")
     return _alpaca_live
 
 
@@ -373,6 +424,14 @@ def health():
     return jsonify({"status": "ok"}), 200
 
 
+@app.route("/favicon.svg", methods=["GET"])
+def favicon_svg():
+    resp = app.make_response(FAVICON_SVG)
+    resp.headers["Content-Type"] = "image/svg+xml"
+    resp.headers["Cache-Control"] = "public, max-age=86400"
+    return resp
+
+
 @app.route("/thankyou", methods=["GET"])
 def thankyou():
     """Post-purchase landing page — Stripe payment links redirect here so
@@ -419,6 +478,7 @@ def get_your_trader():
     html = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Get Alien AI Trader</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <style>
 :root{--green:#22c55e;--green2:#4ade80;--blue:#2563eb;--bg:#060c18;--card:#0d1626;
 --border:#1e3058;--text:#e2e8f0;--muted:#94a3b8;--gold:#fbbf24}
@@ -552,6 +612,7 @@ def admin_panel(token):
     html = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Alien AI Trader — Admin</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <style>
 :root{--bg:#060c18;--card:#0d1626;--border:#1e3058;--text:#e2e8f0;--muted:#94a3b8;
 --green:#22c55e;--green2:#4ade80;--blue:#2563eb;--red:#ef4444;--gold:#fbbf24}
@@ -1203,7 +1264,9 @@ def update_trading_settings():
                 # Refuse to go live; leave the stored mode untouched (paper).
                 return jsonify({"status": "error", "message": reason,
                                 "trading_mode": _effective_mode(),
-                                "requested_mode": _requested_mode()}), 403
+                                "requested_mode": _requested_mode(),
+                                "licensed": _license_is_active(),
+                                "live_keys_present": _live_keys_present()}), 403
         _trading_settings["trading_mode"] = want
         note = {"time": int(time.time()),
                 "level": "trade" if want == "live" else "info", "symbol": "",
@@ -1238,6 +1301,37 @@ def update_trading_settings():
     resp = _settings_response()
     socketio.emit("trading_settings", resp)
     return jsonify(resp), 200
+
+
+@app.route("/api/keys/live", methods=["POST"])
+def save_live_keys():
+    """Save the user's LIVE Alpaca keys entered in-app (no Render dashboard trip).
+    Verifies them against Alpaca before storing so we never enable live with bad
+    keys. An optional Alpha Vantage key can be added/updated at the same time."""
+    payload = request.json or {}
+    k = (payload.get("alpaca_live_key") or "").strip()
+    s = (payload.get("alpaca_live_secret") or "").strip()
+    av = (payload.get("alpha_vantage_key") or "").strip()
+    if not k or not s:
+        return jsonify({"status": "error",
+                        "message": "Enter both your Alpaca LIVE key and secret."}), 400
+    # Verify the keys actually work on the live endpoint before saving.
+    try:
+        acct = REST(k, s, base_url="https://api.alpaca.markets").get_account()
+        status = getattr(acct, "status", "")
+    except Exception as e:
+        return jsonify({"status": "error",
+                        "message": f"Alpaca rejected those live keys — double-check them. ({e})"}), 400
+
+    key_store.set_keys(alpaca_key=k, alpaca_secret=s, alpha=(av or None))
+    global _alpaca_live
+    _alpaca_live = None  # force rebuild with the new keys
+    note = {"time": int(time.time()), "level": "info", "symbol": "",
+            "message": "Live Alpaca keys saved and verified. You can switch to Live now."}
+    _notifications.append(note)
+    socketio.emit("notification", note)
+    return jsonify({"status": "ok", "account_status": status,
+                    "message": "Live keys saved and verified."}), 200
 
 
 # -----------------------------------------------
