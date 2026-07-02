@@ -468,17 +468,22 @@ footer a{color:#60a5fa;text-decoration:none}
     <div class="sub">AI-powered stock trading on autopilot &mdash; scans, buys the climb, sells the peak.</div>
   </div>
 
-  <a class="dl-btn" href="__ZIP__">&#11015;&#65039; Download Your Personal Trader</a>
-  <div class="dl-sub">Free download &middot; Windows one-click installer &middot; starts in safe <b>paper mode</b> (practice money)</div>
+  <a class="dl-btn" href="__DEPLOY__" target="_blank" rel="noopener">&#9729;&#65039; Deploy Your Personal Trader on Render</a>
+  <div class="dl-sub">Free &middot; runs in the cloud 24/7 (no PC needed) &middot; starts in safe <b>paper mode</b> (practice money)</div>
 
   <div class="card">
     <h2>How it works &mdash; 4 easy steps</h2>
     <ol class="steps">
-      <li><b>Download &amp; run the installer.</b> Double-click <b>LAUNCH.bat</b> &rarr; press 1. It installs everything automatically.</li>
-      <li><b>The Setup Wizard opens your free accounts.</b> It walks you through <b>Alpaca</b> (your broker) and <b>Alpha Vantage</b> (market data) and saves the keys for you &mdash; one time, no coding.</li>
-      <li><b>Practice free in paper mode.</b> Watch the AI trade fake money with zero risk for as long as you like.</li>
-      <li><b>Subscribe to unlock live trading</b>, then flip the in-app <b>Paper &harr; Live</b> switch when you're ready for real money.</li>
+      <li><b>Click "Deploy on Render" above</b> and sign in to a free Render account. You get your <b>own private copy</b> &mdash; nothing shared.</li>
+      <li><b>Paste 2 free keys when Render asks:</b> your <b>Alpaca</b> keys (your broker) and an <b>Alpha Vantage</b> key (market data). Both free &mdash; links below. Leave the other boxes blank.</li>
+      <li><b>Click Deploy and wait a few minutes.</b> Your app opens at its own web address, already trading on <b>paper (practice money) &mdash; free, zero risk</b>.</li>
+      <li><b>Subscribe to unlock live trading</b>, add your live Alpaca keys, then flip the in-app <b>Paper &harr; Live</b> switch for real money.</li>
     </ol>
+    <div class="secondary" style="margin-top:12px">
+      <a href="https://app.alpaca.markets/signup" target="_blank" rel="noopener">Get free Alpaca keys</a>
+      <a href="https://www.alphavantage.co/support/#api-key" target="_blank" rel="noopener">Get free Alpha Vantage key</a>
+      <a href="__REPO__#-render-cloud-deployment-advanced" target="_blank" rel="noopener">Cloud setup guide</a>
+    </div>
   </div>
 
   <div class="card">
@@ -488,16 +493,7 @@ footer a{color:#60a5fa;text-decoration:none}
   </div>
 
   <div class="card">
-    <h2>Run It 24/7 in Your Own Cloud (Optional)</h2>
-    <p style="color:var(--muted);font-size:.9rem;margin-bottom:12px">Deploy your <b>own private copy</b> to Render so the AI trades even when your PC is off. Your keys, your account, your trades &mdash; nothing shared.</p>
-    <div class="secondary">
-      <a href="__DEPLOY__" target="_blank" rel="noopener">&#9729;&#65039; Deploy Your Own on Render</a>
-      <a href="__REPO__#-render-cloud-deployment-advanced" target="_blank" rel="noopener">&#128214; Cloud setup guide</a>
-    </div>
-  </div>
-
-  <div class="card">
-    <h2>Just Want It on Your Home PC?</h2>
+    <h2>Prefer to Run It on Your Home PC?</h2>
     <p style="color:var(--muted);font-size:.9rem;margin-bottom:12px">The same download runs 100% locally &mdash; no cloud, no account with us. Paper trading is free; a subscription unlocks live.</p>
     <div class="secondary">
       <a href="__ZIP__">&#128190; Download for Home Use</a>
