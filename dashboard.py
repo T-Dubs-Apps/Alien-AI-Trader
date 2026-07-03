@@ -424,6 +424,66 @@ def health():
     return jsonify({"status": "ok"}), 200
 
 
+def _alpaca_auth_probe(key, secret, base_url):
+    """Lightweight credential check — returns (ok, detail). Makes one read-only
+    get_account() call. NEVER returns secret values, only the pass/fail and the
+    broker's error text (e.g. 'request is not authorized')."""
+    if not key or not secret:
+        return False, "keys not set"
+    try:
+        acct = REST(key, secret, base_url=base_url).get_account()
+        return True, f"authorized (account status: {getattr(acct, 'status', 'unknown')})"
+    except Exception as e:
+        return False, str(e)
+
+
+@app.route("/api/engine/diag", methods=["GET"])
+def engine_diag():
+    """Config self-check (no secrets exposed). Confirms the data key is present
+    and whether each Alpaca key pair actually authorizes against its endpoint —
+    so a deployment can be verified from a browser instead of digging through
+    logs. Mirrors the two failures the engine hits at startup: a missing
+    ALPHA_VANTAGE_KEY and an unauthorized Alpaca login."""
+    alpha_present = bool(key_store.get_alpha_key())
+
+    paper_ok, paper_detail = _alpaca_auth_probe(
+        ALPACA_KEY, ALPACA_SECRET, "https://paper-api.alpaca.markets")
+
+    live_key, live_secret = key_store.get_live_keys()
+    if live_key and live_secret:
+        live_ok, live_detail = _alpaca_auth_probe(
+            live_key, live_secret, "https://api.alpaca.markets")
+    else:
+        live_ok, live_detail = False, "live keys not set (optional)"
+
+    return jsonify({
+        # True only when the engine could actually boot and trade paper.
+        "engine_can_start": alpha_present and paper_ok,
+        "alpha_vantage_key": {
+            "present": alpha_present,
+            "from_env": bool(os.environ.get("ALPHA_VANTAGE_KEY")),
+            "hint": None if alpha_present else
+                    "Set ALPHA_VANTAGE_KEY in Render env vars (exact name), then redeploy.",
+        },
+        "alpaca_paper": {
+            "keys_present": bool(ALPACA_KEY and ALPACA_SECRET),
+            "authorized": paper_ok,
+            "detail": paper_detail,
+            "hint": None if paper_ok else
+                    "Paper keys must be generated in Alpaca's PAPER dashboard and go in "
+                    "ALPACA_KEY / ALPACA_SECRET. LIVE keys do NOT authorize on the paper "
+                    "endpoint. Re-copy both key and secret together; check for stray spaces.",
+        },
+        "alpaca_live": {
+            "keys_present": bool(live_key and live_secret),
+            "authorized": live_ok,
+            "detail": live_detail,
+        },
+        "requested_mode": _requested_mode(),
+        "effective_mode": _effective_mode(),
+    }), 200
+
+
 @app.route("/favicon.svg", methods=["GET"])
 def favicon_svg():
     resp = app.make_response(FAVICON_SVG)
