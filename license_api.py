@@ -405,6 +405,13 @@ def register_license_routes(app):
 
         record = get_license(email, app_id)
 
+        # Owner-issued comp licenses (admin/manual grants) have no Stripe payment
+        # behind them, so the Stripe cross-check below would always see "no
+        # purchase" and wrongly revoke them. Honor them directly while unexpired.
+        if (record and record.get('session_id') in MANUAL_GRANT_SESSIONS
+                and record['expires_at'] > datetime.now(timezone.utc)):
+            return jsonify(_license_response(record)), 200
+
         # Stripe is the source of truth. Check it FIRST so cancellations and
         # refunds are honored instead of being masked by a stale cached record.
         found = find_active_stripe_purchase(email, app_id)
@@ -1082,8 +1089,14 @@ def parse_license_row(row):
         'license_key': row['license_key'],
         'activated_at': datetime.fromisoformat(row['activated_at']),
         'expires_at': datetime.fromisoformat(row['expires_at']),
+        'session_id': row['session_id'],
         'billing_type': row['billing_type'],
     }
+
+
+# Comp licenses issued by the owner (admin/manual grant) have NO Stripe purchase
+# behind them, so the Stripe cross-check in /validate must never revoke them.
+MANUAL_GRANT_SESSIONS = {'admin-grant', 'manual-grant'}
 
 
 def _license_response(record):
