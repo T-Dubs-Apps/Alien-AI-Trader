@@ -19,7 +19,15 @@ import threading
 
 _LOCK = threading.Lock()
 _BASE = os.path.dirname(os.path.abspath(__file__))
-_STORE = os.path.join(_BASE, "live_keys.json")
+# Durable state dir (see dashboard.py DATA_DIR). Defaults to the app folder so
+# local behavior is unchanged; on Render, point DATA_DIR at a persistent disk so
+# in-app live keys survive deploys/restarts/crashes.
+_DATA_DIR = os.environ.get("DATA_DIR", _BASE)
+try:
+    os.makedirs(_DATA_DIR, exist_ok=True)
+except Exception:
+    _DATA_DIR = _BASE
+_STORE = os.path.join(_DATA_DIR, "live_keys.json")
 
 
 def _read() -> dict:

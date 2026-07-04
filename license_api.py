@@ -29,7 +29,15 @@ except Exception:  # pragma: no cover
     TwilioClient = None
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, 'license_store.db')
+# Durable state dir (see dashboard.py DATA_DIR). The grants/licenses DB lives
+# here so admin/comp grants survive a Render redeploy when DATA_DIR points at a
+# persistent disk. Defaults to the app folder (unchanged local behavior).
+DATA_DIR = os.environ.get('DATA_DIR', BASE_DIR)
+try:
+    os.makedirs(DATA_DIR, exist_ok=True)
+except Exception:
+    DATA_DIR = BASE_DIR
+DB_PATH = os.path.join(DATA_DIR, 'license_store.db')
 PRICE_MAP_PATH = os.getenv('PRICE_MAP_PATH', os.path.join(BASE_DIR, 'price_map.json'))
 LICENSE_SECRET = os.getenv('LICENSE_SECRET', 'CHANGE_ME')
 if LICENSE_SECRET == 'CHANGE_ME':

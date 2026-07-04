@@ -39,8 +39,21 @@ from alpha_vantage.timeseries import TimeSeries
 base_dir = os.path.dirname(os.path.abspath(__file__))
 template_dir = os.path.join(base_dir, "templates")
 
+# ── Durable state directory ───────────────────────────────────────────────────
+# All runtime state (license cache, settings, live keys, grants DB) is written
+# here. On Render the container filesystem is EPHEMERAL — wiped on every deploy,
+# restart, and crash — so pointing DATA_DIR at a mounted persistent disk (e.g.
+# /var/data) makes state survive verbatim: the app returns to the exact place it
+# was before the incident. Unset → falls back to base_dir (unchanged local
+# behavior). key_store.py and license_api.py read the same DATA_DIR.
+DATA_DIR = os.environ.get("DATA_DIR", base_dir)
+try:
+    os.makedirs(DATA_DIR, exist_ok=True)
+except Exception:
+    DATA_DIR = base_dir  # unwritable mount → fail safe to the app folder
+
 # Settings are persisted here so they survive restarts
-SETTINGS_FILE = os.path.join(base_dir, "trading_settings.json")
+SETTINGS_FILE = os.path.join(DATA_DIR, "trading_settings.json")
 
 app = Flask(__name__, template_folder=template_dir)
 app.config["SECRET_KEY"] = os.environ.get("FLASK_SECRET", os.urandom(24).hex())
@@ -75,7 +88,7 @@ APP_ID = "alien-ai-trader"
 LICENSE_SERVER_URL = os.environ.get(
     "LICENSE_SERVER_URL", "https://alien-ai-trader-dashboard.onrender.com"
 ).rstrip("/")
-LICENSE_FILE = os.path.join(base_dir, "license.json")
+LICENSE_FILE = os.path.join(DATA_DIR, "license.json")
 
 # -- Distribution URLs (used by the shareable Render landing page /get) --------
 # The public repo IS the installation package. The GitHub archive link always
@@ -191,7 +204,9 @@ def _revalidate_local_license(force: bool = False) -> None:
     reports no active license — then the local cache is deleted (live → paper)."""
     global _last_revalidation
     lic = _load_local_license()
-    email = lic.get("email")
+    # Fall back to the purchase email from the environment so re-checks keep
+    # working even if the local cache was wiped between boots.
+    email = lic.get("email") or (os.environ.get("LICENSE_EMAIL") or "").strip()
     if not email:
         return  # nothing activated locally — nothing to re-check
     now = time.time()
@@ -211,6 +226,66 @@ def _revalidate_local_license(force: bool = False) -> None:
         _save_local_license(data)   # refresh expiry/signature
     else:
         _delete_local_license()     # cancelled/refunded → revoke locally
+
+
+# ── Autonomous license recovery ───────────────────────────────────────────────
+# Render's filesystem is ephemeral: a deploy/restart/crash wipes license.json.
+# These env vars let the app re-activate ITSELF on boot with no manual step, so a
+# customer's subscription (free or paid) is never interrupted by an update.
+#   LICENSE_EMAIL — the email used at purchase. On boot we re-validate it against
+#     the central server, which re-derives an active paid sub straight from Stripe
+#     (survives any wipe until cancel / expiry / refund / declined renewal).
+#   LICENSE_GRANT — an optional signed license JSON blob (as minted by the owner
+#     grant tool). Verified by the owner signature and honored directly, so
+#     comp/admin grants survive with zero dependency on the server or Stripe.
+LICENSE_EMAIL = (os.environ.get("LICENSE_EMAIL") or "").strip()
+LICENSE_GRANT = (os.environ.get("LICENSE_GRANT") or "").strip()
+
+
+def _recover_license_on_boot() -> None:
+    """Restore license.json after an ephemeral-disk wipe so the user is
+    recognized automatically on every startup. Idempotent and safe to call every
+    boot: it only acts when there is no already-active local license, never
+    downgrades a good license, and never raises."""
+    try:
+        if _license_is_active():
+            return  # already valid (e.g. restored from a persistent disk)
+
+        # 1) Signed grant blob in env — trust it directly if it verifies + is live.
+        if LICENSE_GRANT:
+            try:
+                grant = json.loads(LICENSE_GRANT)
+                if _license_is_active(grant):
+                    _save_local_license(grant)
+                    print("[LICENSE] Recovered signed grant from LICENSE_GRANT env.")
+                    return
+                print("[LICENSE] LICENSE_GRANT present but invalid/expired — ignoring.")
+            except Exception as e:
+                print(f"[LICENSE] Could not parse LICENSE_GRANT: {e}")
+
+        # 2) Re-validate the purchase email against the central server (Stripe is
+        #    the source of truth, so an active paid sub is re-derived after a wipe).
+        if LICENSE_EMAIL:
+            try:
+                r = requests.post(
+                    f"{LICENSE_SERVER_URL}/api/license/validate",
+                    json={"email": LICENSE_EMAIL, "appId": APP_ID},
+                    timeout=20,
+                )
+                data = r.json()
+            except Exception as e:
+                print(f"[LICENSE] Boot recovery: server unreachable ({e}) — "
+                      "staying on free tier until the next re-check.")
+                return
+            if data.get("status") == "active":
+                _save_local_license(data)
+                print(f"[LICENSE] Auto-reactivated {LICENSE_EMAIL} on boot "
+                      f"(tier={data.get('tier')}).")
+            else:
+                print(f"[LICENSE] Boot recovery: no active subscription for "
+                      f"{LICENSE_EMAIL} — running free tier.")
+    except Exception as e:
+        print(f"[LICENSE] Boot recovery unexpected error (non-fatal): {e}")
 
 # In-memory warehouse for ticker/market data sent to the dashboard
 market_data = []
@@ -1653,6 +1728,11 @@ def _engine_supervisor() -> None:
 # The separate worker service has been removed to reduce Render costs.
 # Set DISABLE_ENGINE_AUTOSTART=1 to import this module without launching the
 # engine (used by tests / tooling). Production leaves it unset.
+# Re-activate the license from the environment before the engine starts, so a
+# wiped license.json is restored automatically and live trading resumes without
+# any manual re-entry after an update/restart/crash.
+_recover_license_on_boot()
+
 if os.environ.get("DISABLE_ENGINE_AUTOSTART") != "1":
     _supervisor_thread = threading.Thread(
         target=_engine_supervisor, daemon=True, name="EngineSupervisor"

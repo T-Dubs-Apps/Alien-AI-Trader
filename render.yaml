@@ -12,6 +12,23 @@ services:
     envVars:
       - key: FLASK_SECRET
         generateValue: true
+      # -- Subscription persistence (survive updates / restarts / crashes) --
+      # LICENSE_EMAIL: the email you purchased with. On every boot the app
+      #   re-validates it and auto-restores your license from Stripe — so an
+      #   update never makes you re-activate. Set this and paid stays paid.
+      - key: LICENSE_EMAIL
+        sync: false
+      # LICENSE_GRANT: optional signed comp/owner grant blob (owner_grant.py).
+      #   Honored directly by signature — comp licenses survive with no server.
+      - key: LICENSE_GRANT
+        sync: false
+      # DATA_DIR: where state lives (license, settings, live keys, grants DB).
+      #   Leave UNSET for free tier (works fine; the app self-recovers on boot).
+      #   Set to /var/data AND attach the persistent disk below to preserve
+      #   settings + in-app keys verbatim ("return to the exact state"). See the
+      #   commented `disk:` block near the bottom of this file.
+      - key: DATA_DIR
+        sync: false
       # -- API Keys (set manually in Render dashboard) ----------------------
       # PAPER account keys (practice money). Required.
       - key: ALPACA_KEY
@@ -127,6 +144,22 @@ services:
       # -- Market hours only: engine pauses outside 9:30-16:00 ET Mon-Fri ------
       - key: MARKET_HOURS_ONLY
         value: "true"
+
+    # ── OPTIONAL: full-state persistence (the "Both" / recommended setup) ─────
+    # Uncomment this disk AND set DATA_DIR=/var/data above to make EVERYTHING
+    # (license cache, settings, in-app live keys, grants DB) survive verbatim so
+    # the app returns to the exact state it was in before any update/restart/
+    # crash. Requires a PAID Render instance (free web services can't mount a
+    # disk). All Render charges are the account owner's responsibility.
+    #
+    # Without the disk the app STILL self-recovers your subscription on boot via
+    # LICENSE_EMAIL (free tier, nothing to pay) — only runtime-changed settings
+    # revert to their env-var defaults.
+    #
+    # disk:
+    #   name: aat-data
+    #   mountPath: /var/data
+    #   sizeGB: 1
 
 # Built by Troy Walker of T-Dub's Apps -- 2026-04-28
 # 2026-06: Collapsed to single-service architecture. Worker service suspended on Render.

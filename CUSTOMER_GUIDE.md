@@ -49,6 +49,37 @@ any device, anytime. Nothing is shared with us.
 - The other services it uses — **Alpaca** (your brokerage) and **Alpha Vantage**
   (market data) — have **free** plans that are enough to get started.
 
+### Will my subscription and settings survive app updates and restarts?
+**Yes — automatically.** Every time the app updates, restarts, or recovers from a
+hiccup, it **re-confirms your subscription by itself** and picks up right where it
+left off. You never have to re-enter your license. Here’s how it stays that way,
+and the one choice you get at setup:
+
+- **Recognizing you (automatic, free on every plan).** During setup you save your
+  **purchase email** as `LICENSE_EMAIL`. On every startup the app checks it and
+  restores your plan straight from the payment record — so **paid stays paid** and
+  **free stays free**, with no interruption, until *you* cancel, it expires, or a
+  renewal payment is declined. Your open trades also come back on their own,
+  because they’re read directly from your Alpaca brokerage account.
+
+- **Remembering everything else — the recommended “Both” setup.** If you also want
+  your **exact settings and any keys you typed into the app** to come back *exactly*
+  as they were after any restart, turn on a small **persistent disk** in Render
+  (set `DATA_DIR=/var/data` and attach the 1 GB disk — instructions in the deploy
+  guide). We recommend this. It needs Render’s **paid (always-on) tier (~$7/mo)**.
+
+  Without the disk, nothing breaks — your subscription and live keys still come back
+  automatically; only settings you changed by hand revert to their defaults.
+
+> 💡 **Why we recommend “Both.”** The email recovery keeps your subscription alive
+> for free; the disk makes the app return to the *exact* state it was in before any
+> update or crash. Together, there’s zero babysitting.
+
+> 💳 **A note on costs.** Your Render account (including the optional always-on tier
+> and disk) is **billed to you by Render** and is your responsibility — it’s your own
+> private cloud deployment. The app subscription (below) is separate and is what you
+> pay us for.
+
 ### How much does the app itself cost?
 - **Paper trading (practice money): FREE forever.**
 - **Live (real-money) trading** needs a subscription:
