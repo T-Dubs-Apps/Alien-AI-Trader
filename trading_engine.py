@@ -102,10 +102,17 @@ class TradingEngine:
         self.max_workers = int(os.environ.get("SCAN_WORKERS", "8"))
 
         # ── Capital pool (compound reinvestment mode) ──
-        # Set INITIAL_CAPITAL=100 to start with $100 and auto-reinvest every sell.
-        # 0 = legacy fixed ORDER_QTY per trade.
+        # INITIAL_CAPITAL=0 (default) → AUTO: size every trade to the broker
+        #   account's REAL balance, detected once per session (see
+        #   _autodetect_capital). This is what makes buy/sell amounts scale to
+        #   however much money the user actually funded.
+        # INITIAL_CAPITAL=100 (or any >0) → MANUAL override: pin the pool to that
+        #   dollar amount (useful for sandboxing a small slice of a big account).
         self.initial_capital    = float(os.environ.get("INITIAL_CAPITAL", "0"))
         self._available_capital = self.initial_capital
+        # True until the user pins an explicit INITIAL_CAPITAL; controls whether
+        # we auto-size to the live account balance each session.
+        self._capital_is_auto   = self.initial_capital <= 0
 
         # Max simultaneous open positions
         self.max_positions = int(os.environ.get("MAX_POSITIONS", "5"))
@@ -332,6 +339,55 @@ class TradingEngine:
     def stop(self):
         self.running = False
 
+    def _autodetect_capital(self):
+        """Size the capital pool to the broker account's REAL balance so buy/sell
+        amounts scale to whatever the user actually funded — no manual
+        INITIAL_CAPITAL needed. Runs once per session (auto mode only).
+
+        Uses total EQUITY as the sizing base (so every % cap is measured against
+        real money) and free CASH as the spendable pool. Deliberately ignores
+        margin buying power — the engine sizes on cash it truly has. Fails SAFE:
+        on any error, or a $0 account, it leaves the engine in its prior mode
+        (legacy fixed ORDER_QTY sizing when capital was 0), never oversizing."""
+        if not self._capital_is_auto:
+            return  # user pinned an explicit INITIAL_CAPITAL — respect it
+
+        def _f(v):
+            try:
+                return float(v)
+            except Exception:
+                return 0.0
+
+        try:
+            acct = self.api.get_account()
+        except Exception as e:
+            self.send_alert(
+                f"Capital auto-detect skipped — could not read account balance: {e}. "
+                f"Using fixed {os.environ.get('ORDER_QTY', '1')}-share sizing until next session.",
+                level="warn")
+            return
+
+        equity = _f(getattr(acct, "equity", None)) or _f(getattr(acct, "portfolio_value", None))
+        cash   = _f(getattr(acct, "cash", None))
+        if equity <= 0:
+            self.send_alert(
+                "Capital auto-detect: account equity is $0 — staying in fixed-qty mode.",
+                level="warn")
+            return
+
+        with self.lock:
+            self.initial_capital    = equity
+            self._available_capital = max(0.0, cash)   # only spend real free cash
+            self._capital_hwm       = max(self._capital_hwm, equity)
+
+        self.send_alert(
+            f"Capital auto-detected from {self.trading_mode.upper()} account: "
+            f"equity ${equity:,.2f}, free cash ${cash:,.2f}. Sizing every trade to your "
+            f"real balance — {self.risk_per_trade_pct:.1f}% risk/trade, max "
+            f"{self.max_position_pct:.0f}% per position, spread across ≥{self.min_positions} "
+            f"positions.",
+            level="info")
+
     def _reconcile_from_alpaca(self):
         """Seed in-memory holdings from the broker's REAL open positions.
 
@@ -347,6 +403,10 @@ class TradingEngine:
         round-trip) — emergency stop-losses and trailing stops are exempt and
         still fire immediately.
         """
+        # First, size the capital pool to the account's real balance (auto mode).
+        # Runs before seeding holdings so total_capital = free cash + positions.
+        self._autodetect_capital()
+
         try:
             positions = self.api.list_positions()
         except Exception as e:
@@ -490,10 +550,17 @@ class TradingEngine:
             # Live-updatable position sizing / risk knobs from dashboard settings box
             if "initial_capital"     in s:
                 new_cap = max(0.0, float(s["initial_capital"]))
-                if new_cap != self.initial_capital:
-                    self.initial_capital = new_cap
-                    if not self.current_holdings:   # only reset if no open positions
-                        self._available_capital = new_cap
+                if new_cap > 0:
+                    # Explicit manual override — pin the pool to this dollar amount.
+                    if self._capital_is_auto or new_cap != self.initial_capital:
+                        self._capital_is_auto = False
+                        self.initial_capital = new_cap
+                        if not self.current_holdings:   # only reset if no open positions
+                            self._available_capital = new_cap
+                # new_cap == 0 means AUTO. The dashboard sends 0 by default on
+                # every poll, so we must NOT reset here — that would wipe the
+                # auto-detected balance and mid-session spend tracking. Auto
+                # detection happens once per session in _autodetect_capital().
             if "risk_per_trade_pct"  in s: self.risk_per_trade_pct  = max(0.1,  float(s["risk_per_trade_pct"]))
             if "max_position_pct"    in s: self.max_position_pct     = max(1.0,  float(s["max_position_pct"]))
             if "min_positions"       in s: self.min_positions        = max(1,    int(s["min_positions"]))

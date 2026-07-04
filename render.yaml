@@ -82,6 +82,8 @@ services:
       - key: ORDER_QTY
         value: "1"
       # -- Capital & position sizing ----------------------------------------
+      # 0 = AUTO: size every trade to the account's real balance (recommended).
+      # Any >0 value pins the pool to that many dollars instead.
       - key: INITIAL_CAPITAL
         value: "0"
       - key: RISK_PER_TRADE_PCT
