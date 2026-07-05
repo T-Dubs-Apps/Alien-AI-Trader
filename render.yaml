@@ -12,6 +12,14 @@ services:
     envVars:
       - key: FLASK_SECRET
         generateValue: true
+      # -- Dashboard security -----------------------------------------------
+      # Set your OWN password here to lock your trading dashboard. When set, the
+      # dashboard and all control endpoints (orders, settings, live keys, on/off)
+      # require logging in — a stranger with your URL can't touch it. Leave unset
+      # and the dashboard is OPEN to anyone with the link (a boot warning fires).
+      # Strongly recommended: pick a strong password unique to your deployment.
+      - key: DASHBOARD_PASSWORD
+        sync: false
       # -- Subscription persistence (survive updates / restarts / crashes) --
       # LICENSE_EMAIL: the email you purchased with. On every boot the app
       #   re-validates it and auto-restores your license from Stripe — so an

@@ -23,7 +23,7 @@ for _stream in (sys.stdout, sys.stderr):
     except Exception:
         pass
 
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, session, redirect
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 from license_api import register_license_routes
@@ -89,6 +89,35 @@ LICENSE_SERVER_URL = os.environ.get(
     "LICENSE_SERVER_URL", "https://alien-ai-trader-dashboard.onrender.com"
 ).rstrip("/")
 LICENSE_FILE = os.path.join(DATA_DIR, "license.json")
+
+# ── Dashboard access gate (per-deployment password) ───────────────────────────
+# Each owner sets their OWN password on their OWN Render service via the
+# DASHBOARD_PASSWORD env var. When set, the trading dashboard and every control
+# endpoint (place order, change settings, save live keys, toggle trading) require
+# logging in first, so a public .onrender.com URL can't be driven by a stranger.
+# When UNSET the gate is off (nothing to lock), and we print a loud boot warning
+# urging the owner to set one. The public store/landing pages and the central
+# license/Stripe endpoints always stay open so buyers and Stripe can reach them.
+import hmac
+DASHBOARD_PASSWORD = (os.environ.get("DASHBOARD_PASSWORD") or "").strip()
+
+# Path prefixes that must stay reachable WITHOUT logging in.
+_PUBLIC_PATH_PREFIXES = (
+    "/login", "/logout", "/health", "/favicon", "/static",
+    "/get", "/store", "/thankyou",
+    "/api/license/",   # license server + in-app activation (validate/pricing/checkout/admin)
+    "/api/stripe/",    # Stripe webhook
+)
+
+
+def _path_is_public(path: str) -> bool:
+    return any(path == p or path.startswith(p) for p in _PUBLIC_PATH_PREFIXES)
+
+
+def _dashboard_authed() -> bool:
+    """True when access is allowed: either no password is configured (gate off)
+    or the visitor has logged in this session."""
+    return (not DASHBOARD_PASSWORD) or bool(session.get("dash_authed"))
 
 # -- Distribution URLs (used by the shareable Render landing page /get) --------
 # The public repo IS the installation package. The GitHub archive link always
@@ -494,6 +523,68 @@ _quote_cache_lock = Lock()
 QUOTE_CACHE_TTL = int(os.environ.get("QUOTE_CACHE_TTL", "8"))  # seconds
 
 
+@app.before_request
+def _require_dashboard_login():
+    """Gate the trading dashboard + control endpoints behind DASHBOARD_PASSWORD.
+    No-op when no password is set (gate off) or the path is public."""
+    if not DASHBOARD_PASSWORD:
+        return None
+    if _path_is_public(request.path):
+        return None
+    if session.get("dash_authed"):
+        return None
+    # Not logged in: API callers get 401 JSON; browsers get the login page.
+    if request.path.startswith("/api/"):
+        return jsonify({"status": "error", "message": "Authentication required. Log in first."}), 401
+    return redirect("/login")
+
+
+def _login_page(error: str = "") -> str:
+    note = (f'<p class="err">&#9888;&#65039; {error}</p>' if error else "")
+    return f"""<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sign in — Alien AI Trader</title><link rel="icon" href="/favicon.svg">
+<style>body{{background:#060c18;color:#e2e8f0;font-family:'Segoe UI',system-ui,sans-serif;
+display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:16px}}
+.card{{background:#0d1626;border:1px solid #1e3058;border-radius:14px;max-width:380px;width:100%;padding:32px;text-align:center}}
+h1{{font-size:1.35rem;margin:.2rem 0 1rem;background:linear-gradient(135deg,#4ade80,#60a5fa);
+-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}}
+input{{width:100%;box-sizing:border-box;padding:12px;margin:8px 0;border-radius:8px;
+border:1px solid #1e3058;background:#0a1220;color:#e2e8f0;font-size:1rem}}
+button{{width:100%;padding:12px;margin-top:10px;border:0;border-radius:8px;cursor:pointer;
+background:linear-gradient(135deg,#22c55e,#16a34a);color:#fff;font-weight:700;font-size:1rem}}
+.err{{color:#fbbf24;font-size:.9rem}} .sub{{color:#94a3b8;font-size:.85rem;margin-top:0}}</style>
+</head><body><div class="card">
+<h1>&#128123; Alien AI Trader</h1>
+<p class="sub">Enter your dashboard password to continue.</p>
+{note}
+<form method="POST" action="/login">
+<input type="password" name="password" placeholder="Dashboard password" autofocus required>
+<button type="submit">Sign in</button>
+</form></div></body></html>"""
+
+
+@app.route("/login", methods=["GET", "POST"])
+def dashboard_login():
+    if not DASHBOARD_PASSWORD:
+        return redirect("/")   # nothing to log into
+    if request.method == "POST":
+        supplied = (request.form.get("password") or "").strip()
+        # Constant-time compare so the password can't be timing-guessed.
+        if hmac.compare_digest(supplied, DASHBOARD_PASSWORD):
+            session["dash_authed"] = True
+            session.permanent = True
+            return redirect("/")
+        return _login_page("Incorrect password."), 401
+    return _login_page(), 200
+
+
+@app.route("/logout", methods=["GET", "POST"])
+def dashboard_logout():
+    session.pop("dash_authed", None)
+    return redirect("/login")
+
+
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"status": "ok"}), 200
@@ -598,7 +689,7 @@ and click <span class="hl">Activate</span>. The badge flips to &#128994; License
 <div class="note">&#9888; Use the exact checkout email. If Stripe auto-filled your saved details
 (“Link”), that saved email is the one to use. Find it on your receipt from Stripe.</div>
 <p style="margin-top:18px;font-size:.8rem">Need help? Reply to your receipt email.
-— Troy Walker · T-Dub's Apps</p>
+— T-Dub's Apps</p>
 </div></body></html>""", 200
 
 
@@ -698,7 +789,7 @@ footer a{color:#60a5fa;text-decoration:none}
 
   <div class="note">&#9888;&#65039; Live trading needs your own Alpaca account (the wizard sets it up in minutes) and a subscription. The app always starts in paper mode &mdash; you choose when to go live.</div>
 
-  <footer>&#128123; Alien AI Trader &middot; Built by Troy Walker &middot; T-Dub's Apps &middot; 2026<br>
+  <footer>&#128123; Alien AI Trader &middot; T-Dub's Apps &middot; 2026<br>
     <a href="/">Open the live dashboard</a> &nbsp;|&nbsp; <a href="__REPO__" target="_blank" rel="noopener">GitHub</a></footer>
 </div>
 <script>
@@ -1474,6 +1565,9 @@ def save_live_keys():
 # -----------------------------------------------
 @socketio.on("connect")
 def on_connect():
+    # Reject the live data stream unless logged in (when a password is set).
+    if DASHBOARD_PASSWORD and not session.get("dash_authed"):
+        return False
     emit("worker_status", _worker_status)
     emit("ai_trader_state", {"ai_trader_enabled": _ai_trader_enabled})
     emit("notifications_init", {"notifications": _notifications[-50:]})
@@ -1732,6 +1826,13 @@ def _engine_supervisor() -> None:
 # wiped license.json is restored automatically and live trading resumes without
 # any manual re-entry after an update/restart/crash.
 _recover_license_on_boot()
+
+if DASHBOARD_PASSWORD:
+    print("[DASHBOARD] Password gate ENABLED — dashboard requires login.")
+else:
+    print("[DASHBOARD] WARNING: DASHBOARD_PASSWORD is not set — the dashboard and "
+          "its control endpoints are OPEN to anyone with the URL. Set DASHBOARD_PASSWORD "
+          "in your Render env vars to lock it down.")
 
 if os.environ.get("DISABLE_ENGINE_AUTOSTART") != "1":
     _supervisor_thread = threading.Thread(

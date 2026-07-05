@@ -80,6 +80,19 @@ and the one choice you get at setup:
 > private cloud deployment. The app subscription (below) is separate and is what you
 > pay us for.
 
+### Is my dashboard private? Can I password-protect it?
+**Yes — and you should.** Your trader runs at its own web address, so set a
+password that only you know:
+
+1. In **Render → your service → Environment**, add a variable named
+   **`DASHBOARD_PASSWORD`** and set it to any strong password you choose.
+2. Save and let it redeploy.
+
+Now anyone opening your dashboard must sign in first, and no one can change your
+settings, place orders, or touch your keys without that password. **You pick and
+own the password** — it’s never shared with us or anyone else. Leave it unset and
+your dashboard is open to anyone who has the link (the app warns you at startup).
+
 ### How much does the app itself cost?
 - **Paper trading (practice money): FREE forever.**
 - **Live (real-money) trading** needs a subscription:
