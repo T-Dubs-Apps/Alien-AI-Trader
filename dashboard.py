@@ -285,9 +285,12 @@ def _parse_grant_blob(raw: str):
 
     # A) Paste-proof form: base64-encoded JSON. Preferred, because base64 has no
     #    quotes/braces to drop or "smart-quote", so it survives any copy/paste.
+    #    Strip ANY internal whitespace first — a wrapped paste can inject spaces
+    #    or newlines that would otherwise fail the strict decoder.
     try:
-        import base64
-        decoded = base64.b64decode(s, validate=True).decode("utf-8").strip()
+        import base64, re
+        b64s = re.sub(r"\s+", "", s)
+        decoded = base64.b64decode(b64s, validate=True).decode("utf-8").strip()
         if decoded.startswith("{"):
             obj = json.loads(decoded)
             if isinstance(obj, dict):
