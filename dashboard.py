@@ -591,7 +591,7 @@ def _require_dashboard_login():
     # gate never blocks the engine ↔ dashboard link. Public visitors don't have
     # this token; it's never exposed to the browser.
     tok = request.headers.get("X-Internal-Token", "")
-    if tok and hmac.compare_digest(tok, app.config["SECRET_KEY"]):
+    if tok and hmac.compare_digest(tok.encode("utf-8"), str(app.config["SECRET_KEY"]).encode("utf-8")):
         return None
     # Not logged in: API callers get 401 JSON; browsers get the login page.
     if request.path.startswith("/api/"):
@@ -630,8 +630,8 @@ def dashboard_login():
         return redirect("/")   # nothing to log into
     if request.method == "POST":
         supplied = (request.form.get("password") or "").strip()
-        # Constant-time compare so the password can't be timing-guessed.
-        if hmac.compare_digest(supplied, DASHBOARD_PASSWORD):
+        # Constant-time compare (on bytes, so a non-ASCII password never errors).
+        if hmac.compare_digest(supplied.encode("utf-8"), DASHBOARD_PASSWORD.encode("utf-8")):
             session["dash_authed"] = True
             session.permanent = True
             return redirect("/")
