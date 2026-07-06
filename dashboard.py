@@ -271,6 +271,37 @@ LICENSE_EMAIL = (os.environ.get("LICENSE_EMAIL") or "").strip()
 LICENSE_GRANT = (os.environ.get("LICENSE_GRANT") or "").strip()
 
 
+def _parse_grant_blob(raw: str):
+    """Parse a LICENSE_GRANT value, tolerating common copy/paste slips. Returns
+    the license dict or None. Auto-repair is SAFE: the signature is verified
+    afterwards, so a wrongly-repaired blob simply fails that check and is
+    ignored — it can never forge a license."""
+    if not raw:
+        return None
+    candidates = []
+    s = raw.strip()
+    candidates.append(s)
+    # Strip surrounding quotes some UIs add around env values.
+    if len(s) >= 2 and s[0] in "\"'" and s[-1] == s[0]:
+        s = s[1:-1].strip()
+        candidates.append(s)
+    # Heal a dropped leading '{' and/or trailing '}' (the classic paste slip).
+    if s and not s.startswith("{"):
+        candidates.append("{" + s)
+    if s and not s.endswith("}"):
+        candidates.append(s + "}")
+    if s and not s.startswith("{") and not s.endswith("}"):
+        candidates.append("{" + s + "}")
+    for cand in candidates:
+        try:
+            obj = json.loads(cand)
+            if isinstance(obj, dict):
+                return obj
+        except Exception:
+            continue
+    return None
+
+
 def _recover_license_on_boot() -> None:
     """Restore license.json after an ephemeral-disk wipe so the user is
     recognized automatically on every startup. Idempotent and safe to call every
@@ -282,15 +313,16 @@ def _recover_license_on_boot() -> None:
 
         # 1) Signed grant blob in env — trust it directly if it verifies + is live.
         if LICENSE_GRANT:
-            try:
-                grant = json.loads(LICENSE_GRANT)
-                if _license_is_active(grant):
-                    _save_local_license(grant)
-                    print("[LICENSE] Recovered signed grant from LICENSE_GRANT env.")
-                    return
-                print("[LICENSE] LICENSE_GRANT present but invalid/expired — ignoring.")
-            except Exception as e:
-                print(f"[LICENSE] Could not parse LICENSE_GRANT: {e}")
+            grant = _parse_grant_blob(LICENSE_GRANT)
+            if grant is None:
+                print("[LICENSE] LICENSE_GRANT could not be parsed even after cleanup — "
+                      "re-copy the ENTIRE line, including the leading '{' and trailing '}'.")
+            elif _license_is_active(grant):
+                _save_local_license(grant)
+                print("[LICENSE] Recovered signed grant from LICENSE_GRANT env.")
+                return
+            else:
+                print("[LICENSE] LICENSE_GRANT parsed but is invalid/expired — ignoring.")
 
         # 2) Re-validate the purchase email against the central server (Stripe is
         #    the source of truth, so an active paid sub is re-derived after a wipe).
