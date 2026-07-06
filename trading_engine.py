@@ -224,6 +224,10 @@ class TradingEngine:
         self.heartbeat_path = os.environ.get("HEARTBEAT_PATH", "/api/worker/heartbeat")
         self.heartbeat_every = int(os.environ.get("HEARTBEAT_EVERY_SECONDS", "10"))
         self._last_heartbeat = 0
+        # Shared secret so our own calls to the dashboard pass its password gate.
+        # Same value the dashboard reads (FLASK_SECRET); empty locally = no gate.
+        _tok = os.environ.get("FLASK_SECRET", "")
+        self._internal_headers = {"X-Internal-Token": _tok} if _tok else {}
 
         # Operational guardrails
         self.max_trades_per_hour = int(os.environ.get("MAX_TRADES_PER_HOUR", "30"))
@@ -533,7 +537,8 @@ class TradingEngine:
         if not self.dashboard_base_url:
             return
         try:
-            r = requests.get(f"{self.dashboard_base_url}/api/settings/trading", timeout=3)
+            r = requests.get(f"{self.dashboard_base_url}/api/settings/trading",
+                             headers=self._internal_headers, timeout=3)
             if r.status_code != 200:
                 return
             s = r.json()
@@ -1417,6 +1422,7 @@ class TradingEngine:
                 requests.post(
                     f"{self.dashboard_base_url}/api/notifications",
                     json={"level": level, "message": message, "symbol": symbol},
+                    headers=self._internal_headers,
                     timeout=5,
                 )
             except Exception:
@@ -1480,6 +1486,7 @@ class TradingEngine:
             requests.post(
                 f"{self.dashboard_base_url}{self.heartbeat_path}",
                 json=payload,
+                headers=self._internal_headers,
                 timeout=5,
             )
         except Exception:

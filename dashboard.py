@@ -580,6 +580,13 @@ def _require_dashboard_login():
         return None
     if session.get("dash_authed"):
         return None
+    # The in-process trading engine authenticates its OWN calls (heartbeat,
+    # settings poll, notifications) with a shared token = FLASK_SECRET, so the
+    # gate never blocks the engine ↔ dashboard link. Public visitors don't have
+    # this token; it's never exposed to the browser.
+    tok = request.headers.get("X-Internal-Token", "")
+    if tok and hmac.compare_digest(tok, app.config["SECRET_KEY"]):
+        return None
     # Not logged in: API callers get 401 JSON; browsers get the login page.
     if request.path.startswith("/api/"):
         return jsonify({"status": "error", "message": "Authentication required. Log in first."}), 401
