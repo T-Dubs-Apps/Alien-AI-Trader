@@ -278,13 +278,25 @@ def _parse_grant_blob(raw: str):
     ignored — it can never forge a license."""
     if not raw:
         return None
-    candidates = []
     s = raw.strip()
-    candidates.append(s)
     # Strip surrounding quotes some UIs add around env values.
     if len(s) >= 2 and s[0] in "\"'" and s[-1] == s[0]:
         s = s[1:-1].strip()
-        candidates.append(s)
+
+    # A) Paste-proof form: base64-encoded JSON. Preferred, because base64 has no
+    #    quotes/braces to drop or "smart-quote", so it survives any copy/paste.
+    try:
+        import base64
+        decoded = base64.b64decode(s, validate=True).decode("utf-8").strip()
+        if decoded.startswith("{"):
+            obj = json.loads(decoded)
+            if isinstance(obj, dict):
+                return obj
+    except Exception:
+        pass
+
+    # B) Raw JSON (with healing). Kept for backward compatibility.
+    candidates = [s]
     # Heal a dropped leading '{' and/or trailing '}' (the classic paste slip).
     if s and not s.startswith("{"):
         candidates.append("{" + s)
