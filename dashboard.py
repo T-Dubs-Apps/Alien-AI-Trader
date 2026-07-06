@@ -233,6 +233,12 @@ def _revalidate_local_license(force: bool = False) -> None:
     reports no active license — then the local cache is deleted (live → paper)."""
     global _last_revalidation
     lic = _load_local_license()
+    # Offline owner/comp grants (installed via LICENSE_GRANT) are authoritative
+    # for this deployment and have no Stripe record to check — never let a
+    # server 'none' response revoke them. Expiry is still enforced separately by
+    # _license_is_active, so an expired grant still drops to free on its own.
+    if LICENSE_GRANT or lic.get("billingType") == "comp" or lic.get("grantedBy") == "owner":
+        return
     # Fall back to the purchase email from the environment so re-checks keep
     # working even if the local cache was wiped between boots.
     email = lic.get("email") or (os.environ.get("LICENSE_EMAIL") or "").strip()
