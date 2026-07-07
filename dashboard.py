@@ -90,6 +90,29 @@ LICENSE_SERVER_URL = os.environ.get(
 ).rstrip("/")
 LICENSE_FILE = os.path.join(DATA_DIR, "license.json")
 
+
+def _clean_env_value(name: str, default: str = "") -> str:
+    """Read an env var and normalize common copy/paste formatting slips.
+
+    Render env values are sometimes pasted with surrounding quotes. Stripping a
+    single matching wrapper quote pair prevents false mismatches (for example,
+    dashboard password appears correct but compares against a quoted value).
+    """
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    s = str(raw).strip()
+    if len(s) >= 2 and s[0] in ("'", '"') and s[-1] == s[0]:
+        s = s[1:-1].strip()
+    return s
+
+
+# Normalize once at boot so every endpoint reads one canonical value.
+LICENSE_SERVER_URL = _clean_env_value(
+    "LICENSE_SERVER_URL",
+    "https://alien-ai-trader-dashboard.onrender.com",
+).rstrip("/")
+
 # ── Dashboard access gate (per-deployment password) ───────────────────────────
 # Each owner sets their OWN password on their OWN Render service via the
 # DASHBOARD_PASSWORD env var. When set, the trading dashboard and every control
@@ -99,7 +122,7 @@ LICENSE_FILE = os.path.join(DATA_DIR, "license.json")
 # urging the owner to set one. The public store/landing pages and the central
 # license/Stripe endpoints always stay open so buyers and Stripe can reach them.
 import hmac
-DASHBOARD_PASSWORD = (os.environ.get("DASHBOARD_PASSWORD") or "").strip()
+DASHBOARD_PASSWORD = _clean_env_value("DASHBOARD_PASSWORD", "")
 
 # Path prefixes that must stay reachable WITHOUT logging in.
 _PUBLIC_PATH_PREFIXES = (
@@ -1738,6 +1761,12 @@ def _engine_session(session_num: int) -> None:
     mode = os.environ.get("ENGINE_MODE", "AI")
 
     _engine = TradingEngine(stock_list=stock_list, mode=mode, alert_callback=_engine_alert)
+    _worker_status.update({
+        "running": True,
+        "state": "starting",
+        "message": "Engine booted; initializing trading threads...",
+        "last_heartbeat": int(time.time()),
+    })
     ladder_symbols = list(dict.fromkeys(stock_list + DEFAULT_PORTFOLIO))
     _ladder = PortfolioLadderScanner(symbols=ladder_symbols, engine=_engine)
     integrate_ladder_with_engine(_engine, _ladder)
@@ -1870,6 +1899,16 @@ def _engine_supervisor() -> None:
         except Exception as e:
             msg = f"[ENGINE] Crash in session #{session}: {e}"
             print(msg)
+            _worker_status.update({
+                "running": False,
+                "state": "offline",
+                "message": f"Engine failed to start: {e}",
+                "last_heartbeat": int(time.time()),
+            })
+            try:
+                socketio.emit("worker_status", _worker_status)
+            except Exception:
+                pass
             try:
                 send_crash_notification(msg)
             except Exception:

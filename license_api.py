@@ -65,6 +65,113 @@ def _norm_email(value):
     return (value or '').strip().lower()
 
 
+def _grant_meta_key(app_id: str) -> str:
+    # Stripe metadata keys are flat strings; normalize app id for key safety.
+    return f"comp_grant_{(app_id or 'alien-ai-trader').replace('-', '_')}"
+
+
+def _sync_comp_grant_to_stripe(email: str, app_id: str, tier: str, expires_at: datetime) -> None:
+    """Persist owner/admin comp grants in Stripe customer metadata.
+
+    This makes grants recoverable after restarts/deploys even if local DB state
+    is wiped, because validate can re-derive the grant directly from Stripe.
+    """
+    if not STRIPE_SECRET_KEY:
+        return
+    email = _norm_email(email)
+    if not email:
+        return
+    try:
+        stripe.api_key = STRIPE_SECRET_KEY
+        key = _grant_meta_key(app_id)
+        value = json.dumps({
+            'tier': tier,
+            'expiresAt': int(expires_at.timestamp() * 1000),
+            'billingType': 'comp',
+            'source': 'owner-admin-grant',
+        }, separators=(',', ':'))
+
+        customers = stripe.Customer.list(email=email, limit=100)
+        cust_list = (customers.get('data', []) if isinstance(customers, dict)
+                     else list(customers.auto_paging_iter()))
+        if not cust_list:
+            stripe.Customer.create(email=email, metadata={key: value})
+            return
+
+        for cust in cust_list:
+            cid = cust.get('id') if isinstance(cust, dict) else cust.id
+            stripe.Customer.modify(cid, metadata={key: value})
+    except Exception as exc:
+        print(f'[LICENSE] Stripe comp-grant sync failed for {email}: {exc}')
+
+
+def _clear_comp_grant_in_stripe(email: str, app_id: str) -> None:
+    """Remove the comp-grant marker from Stripe metadata on revoke."""
+    if not STRIPE_SECRET_KEY:
+        return
+    email = _norm_email(email)
+    if not email:
+        return
+    try:
+        stripe.api_key = STRIPE_SECRET_KEY
+        key = _grant_meta_key(app_id)
+        customers = stripe.Customer.list(email=email, limit=100)
+        cust_list = (customers.get('data', []) if isinstance(customers, dict)
+                     else list(customers.auto_paging_iter()))
+        for cust in cust_list:
+            cid = cust.get('id') if isinstance(cust, dict) else cust.id
+            # Empty string clears a metadata key in Stripe.
+            stripe.Customer.modify(cid, metadata={key: ''})
+    except Exception as exc:
+        print(f'[LICENSE] Stripe comp-grant clear failed for {email}: {exc}')
+
+
+def _find_comp_grant_in_stripe(email: str, app_id: str):
+    """Look for an owner/admin comp grant in Stripe customer metadata."""
+    if not STRIPE_SECRET_KEY:
+        return None
+    email = _norm_email(email)
+    if not email:
+        return None
+    try:
+        stripe.api_key = STRIPE_SECRET_KEY
+        key = _grant_meta_key(app_id)
+        customers = stripe.Customer.list(email=email, limit=100)
+        cust_list = (customers.get('data', []) if isinstance(customers, dict)
+                     else list(customers.auto_paging_iter()))
+        best = None
+        for cust in cust_list:
+            md = cust.get('metadata', {}) if isinstance(cust, dict) else getattr(cust, 'metadata', {})
+            raw = md.get(key) if md else None
+            if not raw:
+                continue
+            try:
+                grant = json.loads(raw)
+            except Exception:
+                continue
+            try:
+                expires_ms = int(grant.get('expiresAt', 0))
+            except Exception:
+                expires_ms = 0
+            if expires_ms <= int(time.time() * 1000):
+                continue
+            tier = str(grant.get('tier') or '').strip()
+            if not tier:
+                continue
+            expires_at = datetime.fromtimestamp(expires_ms / 1000, tz=timezone.utc)
+            candidate = {
+                'tier': tier,
+                'expires_at': expires_at,
+                'billing_type': str(grant.get('billingType') or 'comp'),
+            }
+            if best is None or candidate['expires_at'] > best['expires_at']:
+                best = candidate
+        return best
+    except Exception as exc:
+        print(f'[LICENSE] Stripe comp-grant lookup failed for {email}: {exc}')
+        return None
+
+
 # ── Admin brute-force lockout ─────────────────────────────────────────────────
 # Granting/revoking licenses is owner-only. These endpoints require the exact
 # LICENSE_SECRET, and this locks out an IP after repeated bad guesses so the
@@ -280,6 +387,7 @@ def register_license_routes(app):
             session_id='manual-grant',
             billing_type=price_info.get('billingType', 'monthly'),
         )
+        _sync_comp_grant_to_stripe(email, app_id, tier, expires_at)
         return jsonify({'status': 'granted', 'email': email, 'tier': tier,
                         'licenseKey': key,
                         'expiresAt': int(expires_at.timestamp() * 1000)}), 200
@@ -316,6 +424,7 @@ def register_license_routes(app):
             session_id='admin-grant',
             billing_type=price_info.get('billingType', 'monthly'),
         )
+        _sync_comp_grant_to_stripe(email, app_id, tier, expires_at)
         
         print(f'[LICENSE] Admin granted {tier} license to {email}')
         return jsonify({
@@ -343,6 +452,7 @@ def register_license_routes(app):
             return jsonify({'error': 'email required'}), 400
 
         delete_license(email, app_id)
+        _clear_comp_grant_in_stripe(email, app_id)
         print(f'[LICENSE] Admin revoked license for {email} ({app_id})')
         return jsonify({'status': 'revoked', 'email': email, 'appId': app_id}), 200
 
@@ -1202,6 +1312,11 @@ def find_active_stripe_purchase(email, app_id):
             return best
     except Exception as exc:
         print(f'[LICENSE] Stripe lookup path 1 failed: {exc}')
+
+    # 1b) Owner/admin comp grants persisted in Stripe customer metadata.
+    comp = _find_comp_grant_in_stripe(email, app_id)
+    if comp:
+        return comp
 
     # 2) Checkout Sessions by typed checkout email (supports payment links)
     try:
