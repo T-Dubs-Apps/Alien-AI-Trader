@@ -66,6 +66,33 @@ def _norm_email(value):
     return (value or '').strip().lower()
 
 
+def _owner_email_set() -> set:
+    """Owner emails allowed to use live features without paid Stripe sub.
+
+    Configure via OWNER_EMAILS as a comma-separated list. This is server-local
+    policy and does not expose private data to customers.
+    """
+    raw = os.getenv('OWNER_EMAILS', '')
+    return {e for e in (_norm_email(x) for x in raw.split(',')) if e}
+
+
+def _owner_license_record(email: str, app_id: str) -> dict:
+    """Synthetic license record for owner exemption policy."""
+    now = datetime.now(timezone.utc)
+    tier = (os.getenv('OWNER_LICENSE_TIER') or 'pro_annual').strip() or 'pro_annual'
+    days = int((os.getenv('OWNER_LICENSE_DAYS') or '3650').strip() or '3650')
+    return {
+        'email': email,
+        'app_id': app_id,
+        'tier': tier,
+        'license_key': 'OWNER-EXEMPT',
+        'activated_at': now,
+        'expires_at': now + timedelta(days=days),
+        'session_id': 'owner-policy',
+        'billing_type': 'owner',
+    }
+
+
 def _grant_meta_key(app_id: str) -> str:
     # Stripe metadata keys are flat strings; normalize app id for key safety.
     return f"comp_grant_{(app_id or 'alien-ai-trader').replace('-', '_')}"
@@ -521,6 +548,11 @@ def register_license_routes(app):
         app_id = (payload.get('appId') or '').strip()
         if not email or not app_id:
             return jsonify({'error': 'email and appId required'}), 400
+
+        # Owner exemption policy: specific owner emails can be permanently
+        # licensed without a paid Stripe subscription.
+        if email in _owner_email_set():
+            return jsonify(_license_response(_owner_license_record(email, app_id))), 200
 
         record = get_license(email, app_id)
 
