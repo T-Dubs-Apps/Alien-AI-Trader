@@ -7,6 +7,7 @@ import smtplib
 import time
 from email.message import EmailMessage
 from datetime import datetime, timedelta, timezone
+from urllib.parse import quote, unquote
 
 import stripe
 from flask import jsonify, request
@@ -719,6 +720,151 @@ def register_license_routes(app):
 
         return jsonify(result), 200
 
+    @app.route('/api/updates/admin/create', methods=['POST'])
+    def admin_create_update_campaign():
+        """Create an update campaign record (owner/admin only)."""
+        ok, err = _admin_check(request)
+        if err:
+            return err
+
+        payload = request.json or {}
+        app_id = (payload.get('appId') or 'alien-ai-trader').strip()
+        version = (payload.get('version') or '').strip()
+        title = (payload.get('title') or '').strip()
+        message = (payload.get('message') or '').strip()
+        update_url = (payload.get('updateUrl') or '').strip()
+        created_by = (payload.get('createdBy') or 'owner').strip() or 'owner'
+
+        if not version or not title or not message:
+            return jsonify({'error': 'version, title, and message are required'}), 400
+
+        campaign_id = create_update_campaign(
+            app_id=app_id,
+            version=version,
+            title=title,
+            message=message,
+            update_url=update_url,
+            created_by=created_by,
+        )
+        row = get_update_campaign(campaign_id)
+        return jsonify({'status': 'ok', 'campaign': row}), 200
+
+    @app.route('/api/updates/admin/send', methods=['POST'])
+    def admin_send_update_campaign():
+        """Send an update campaign email to paid users (owner/admin only).
+
+        If emails[] is omitted, this targets all currently active licensed users
+        for the app_id in the local license DB.
+        """
+        ok, err = _admin_check(request)
+        if err:
+            return err
+
+        payload = request.json or {}
+        app_id = (payload.get('appId') or 'alien-ai-trader').strip()
+        campaign_id = payload.get('campaignId')
+        if campaign_id is None:
+            return jsonify({'error': 'campaignId is required'}), 400
+        try:
+            campaign_id = int(campaign_id)
+        except Exception:
+            return jsonify({'error': 'campaignId must be an integer'}), 400
+
+        campaign = get_update_campaign(campaign_id)
+        if not campaign:
+            return jsonify({'error': 'campaign not found'}), 404
+
+        incoming = payload.get('emails')
+        if isinstance(incoming, list) and incoming:
+            targets = sorted(set(_norm_email(e) for e in incoming if _norm_email(e)))
+        else:
+            targets = list_active_licensed_emails(app_id)
+
+        if not targets:
+            return jsonify({'status': 'ok', 'sent': 0, 'failed': 0, 'message': 'No eligible target emails found.'}), 200
+
+        # Link users click to accept this update notice.
+        base = HUB_BASE_URL or request.host_url.rstrip('/')
+        sent = 0
+        failed = 0
+        fail_rows = []
+        for email in targets:
+            try:
+                accept_url = (
+                    f"{base}/api/updates/accept"
+                    f"?updateId={campaign_id}&appId={quote(app_id)}&email={quote(email)}"
+                )
+                body = build_update_email_body(campaign, email, accept_url)
+                subject = f"Alien AI Trader update {campaign['version']}: {campaign['title']}"
+                if _send_email(email, subject, body):
+                    sent += 1
+                else:
+                    failed += 1
+                    fail_rows.append({'email': email, 'error': 'email service not configured'})
+            except Exception as exc:
+                failed += 1
+                fail_rows.append({'email': email, 'error': str(exc)})
+
+        return jsonify({
+            'status': 'ok',
+            'campaignId': campaign_id,
+            'targeted': len(targets),
+            'sent': sent,
+            'failed': failed,
+            'failures': fail_rows[:50],
+        }), 200
+
+    @app.route('/api/updates/inbox', methods=['POST'])
+    def updates_inbox():
+        """Return update campaigns for a user with accepted/not-accepted state."""
+        payload = request.json or {}
+        email = _norm_email(payload.get('email'))
+        app_id = (payload.get('appId') or 'alien-ai-trader').strip()
+        if not email:
+            return jsonify({'error': 'email required'}), 400
+        return jsonify(get_updates_for_email(email, app_id)), 200
+
+    @app.route('/api/updates/accept', methods=['GET', 'POST'])
+    def updates_accept():
+        """Accept an update campaign from an emailed link/button."""
+        if request.method == 'POST':
+            payload = request.json or {}
+            email = _norm_email(payload.get('email'))
+            app_id = (payload.get('appId') or 'alien-ai-trader').strip()
+            update_id = payload.get('updateId')
+            if not email or update_id is None:
+                return jsonify({'error': 'email and updateId required'}), 400
+            try:
+                update_id = int(update_id)
+            except Exception:
+                return jsonify({'error': 'updateId must be an integer'}), 400
+            record_update_acceptance(update_id, email, app_id)
+            return jsonify({'status': 'ok'}), 200
+
+        # GET mode supports one-click email button.
+        update_id_raw = request.args.get('updateId')
+        email = _norm_email(unquote(request.args.get('email', '')))
+        app_id = (unquote(request.args.get('appId', 'alien-ai-trader')) or 'alien-ai-trader').strip()
+        if not update_id_raw or not email:
+            return "Missing updateId or email.", 400
+        try:
+            update_id = int(update_id_raw)
+        except Exception:
+            return "Invalid updateId.", 400
+
+        record_update_acceptance(update_id, email, app_id)
+        campaign = get_update_campaign(update_id)
+        title = (campaign or {}).get('title', 'Update')
+        version = (campaign or {}).get('version', '')
+        update_url = (campaign or {}).get('update_url', '')
+        next_link = update_url or '/'
+        html = f"""<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\">
+<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">
+<title>Update Accepted</title>
+<style>body{{font-family:Segoe UI,Arial,sans-serif;background:#0b1220;color:#e2e8f0;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:16px}}.card{{max-width:560px;background:#111b30;border:1px solid #1f345f;border-radius:12px;padding:24px}}a.btn{{display:inline-block;margin-top:14px;padding:10px 14px;background:#22c55e;color:#06250f;text-decoration:none;border-radius:8px;font-weight:700}}</style>
+</head><body><div class=\"card\"><h2>Update accepted</h2><p>{title} {version}</p><p>Your preference has been saved for <b>{email}</b>.</p><a class=\"btn\" href=\"{next_link}\">Open update link</a></div></body></html>"""
+        return html, 200
+
 
 def _webhook_provision_license(session):
     """Provision a license record from a completed Stripe checkout session.
@@ -1083,7 +1229,158 @@ def init_db():
             )
             """
         )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS update_campaigns (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                app_id TEXT,
+                version TEXT,
+                title TEXT,
+                message TEXT,
+                update_url TEXT,
+                created_by TEXT,
+                created_at TEXT
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS update_acceptances (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                update_id INTEGER,
+                email TEXT,
+                app_id TEXT,
+                accepted_at TEXT,
+                UNIQUE(update_id, email, app_id)
+            )
+            """
+        )
         conn.commit()
+
+
+def create_update_campaign(app_id, version, title, message, update_url, created_by='owner'):
+    now = datetime.now(timezone.utc).isoformat()
+    with sqlite3.connect(DB_PATH) as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO update_campaigns (app_id, version, title, message, update_url, created_by, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (app_id, version, title, message, update_url, created_by, now),
+        )
+        conn.commit()
+        return cur.lastrowid
+
+
+def get_update_campaign(campaign_id):
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT * FROM update_campaigns WHERE id = ?",
+            (campaign_id,),
+        ).fetchone()
+        if not row:
+            return None
+        return {
+            'id': row['id'],
+            'app_id': row['app_id'],
+            'version': row['version'],
+            'title': row['title'],
+            'message': row['message'],
+            'update_url': row['update_url'],
+            'created_by': row['created_by'],
+            'created_at': row['created_at'],
+        }
+
+
+def list_active_licensed_emails(app_id):
+    now_iso = datetime.now(timezone.utc).isoformat()
+    with sqlite3.connect(DB_PATH) as conn:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT LOWER(email) AS email
+            FROM licenses
+            WHERE app_id = ? AND expires_at > ?
+            """,
+            (app_id, now_iso),
+        ).fetchall()
+    return [r[0] for r in rows if r and r[0]]
+
+
+def record_update_acceptance(update_id, email, app_id):
+    email = _norm_email(email)
+    if not email:
+        return
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO update_acceptances (update_id, email, app_id, accepted_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (update_id, email, app_id, datetime.now(timezone.utc).isoformat()),
+        )
+        conn.commit()
+
+
+def get_updates_for_email(email, app_id):
+    email = _norm_email(email)
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT c.id, c.app_id, c.version, c.title, c.message, c.update_url,
+                   c.created_by, c.created_at,
+                   a.accepted_at
+            FROM update_campaigns c
+            LEFT JOIN update_acceptances a
+              ON a.update_id = c.id
+             AND LOWER(a.email) = LOWER(?)
+             AND a.app_id = c.app_id
+            WHERE c.app_id = ?
+            ORDER BY c.id DESC
+            """,
+            (email, app_id),
+        ).fetchall()
+    out = []
+    for r in rows:
+        out.append({
+            'id': r['id'],
+            'appId': r['app_id'],
+            'version': r['version'],
+            'title': r['title'],
+            'message': r['message'],
+            'updateUrl': r['update_url'],
+            'createdBy': r['created_by'],
+            'createdAt': r['created_at'],
+            'accepted': bool(r['accepted_at']),
+            'acceptedAt': r['accepted_at'],
+        })
+    return out
+
+
+def build_update_email_body(campaign, email, accept_url):
+    version = campaign.get('version') or ''
+    title = campaign.get('title') or 'Alien AI Trader update'
+    message = campaign.get('message') or ''
+    update_url = campaign.get('update_url') or ''
+    manual = f"\nUpdate link: {update_url}\n" if update_url else "\n"
+    return f"""Hi,
+
+A new Alien AI Trader update is ready.
+
+Version: {version}
+Title: {title}
+
+{message}
+
+Accept this update:
+{accept_url}
+{manual}
+If the button/link does not open, copy and paste the URL into your browser.
+
+This message was sent to: {email}
+"""
 
 
 def store_verification(verification_id, email, phone, app_id, tier, code, expires_at):
