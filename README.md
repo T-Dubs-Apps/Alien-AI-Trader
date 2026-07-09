@@ -393,6 +393,9 @@ nothing else to pay for):
 > **Tip:** every user can run their own private cloud copy this way — your keys,
 > your account, your trades. Nothing is shared.
 
+If you want the app to behave more like a self-monitoring system, see
+[AI_GUARDIAN_ROADMAP.md](AI_GUARDIAN_ROADMAP.md) for the recommended build order.
+
 ### Recommended Blueprint Defaults (Production-Safe)
 
 These defaults are chosen to maximize stability, reduce accidental risk, and
