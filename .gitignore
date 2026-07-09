@@ -52,6 +52,19 @@ backup files zipped/
 
 # Claude local worktrees
 .claude/worktrees/
+.claude/
+
+# Local emergency / maintenance scripts
+EMERGENCY_FIX_NOW_GITBASH.sh
+RUN_EMERGENCY_FIX_GITBASH.cmd
+
+# Local backup exports created during repair work
+_pre_fix_backup_*/
+_pre_render_store_backup_*/
+
+# Generated installer branding assets
+installer/alien_icon.ico
+installer/alien_icon.png
 
 # Standalone apps live outside this project (../Standalone Apps/)
 black_box/
