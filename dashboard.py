@@ -784,11 +784,43 @@ def _alpaca_auth_probe(key, secret, base_url):
     broker's error text (e.g. 'request is not authorized')."""
     if not key or not secret:
         return False, "keys not set"
-    try:
-        acct = REST(key, secret, base_url=base_url).get_account()
-        return True, f"authorized (account status: {getattr(acct, 'status', 'unknown')})"
-    except Exception as e:
-        return False, str(e)
+    last_err = "unknown error"
+    for attempt in range(3):
+        try:
+            acct = REST(key, secret, base_url=base_url).get_account()
+            return True, f"authorized (account status: {getattr(acct, 'status', 'unknown')})"
+        except Exception as e:
+            last_err = str(e)
+            if attempt < 2 and _is_transient_broker_error(last_err):
+                time.sleep(1.0 + (attempt * 1.0))
+                continue
+            break
+    return False, last_err
+
+
+def _is_transient_broker_error(detail: str) -> bool:
+    txt = (detail or "").strip().lower()
+    if not txt:
+        return False
+    transient_tokens = (
+        "connection aborted",
+        "remotedisconnected",
+        "remote end closed connection",
+        "connection reset",
+        "max retries exceeded",
+        "timed out",
+        "timeout",
+        "temporarily unavailable",
+        "bad gateway",
+        "service unavailable",
+        "502",
+        "503",
+        "504",
+        "ssl eof",
+        "name or service not known",
+        "temporary failure in name resolution",
+    )
+    return any(token in txt for token in transient_tokens)
 
 
 @app.route("/api/engine/diag", methods=["GET"])
@@ -2112,6 +2144,12 @@ def _engine_preflight_error() -> str:
         ALPACA_KEY, ALPACA_SECRET, "https://paper-api.alpaca.markets"
     )
     if not paper_ok:
+        if _is_transient_broker_error(paper_detail):
+            return (
+                "Paper Alpaca preflight could not reach broker (temporary network/API issue). "
+                "Engine will auto-retry. "
+                f"Detail: {paper_detail}"
+            )
         return (
             "Paper Alpaca authorization failed. Re-enter ALPACA_KEY and "
             f"ALPACA_SECRET as a matching PAPER pair. Detail: {paper_detail}"
