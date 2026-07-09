@@ -192,6 +192,25 @@ def _clean_env_value(name: str, default: str = "") -> str:
     return s
 
 
+def _normalize_dashboard_password(value: str) -> str:
+    """Normalize password text from env/forms for reliable comparison.
+
+    Handles common Render/dashboard paste artifacts without weakening auth:
+    wrapper quotes, stray CR/LF, non-breaking/zero-width spaces, and edge
+    whitespace. Content inside the password remains unchanged.
+    """
+    s = str(value or "")
+    s = s.replace("\r", "").replace("\n", "")
+    # Remove invisible separators that can sneak in during copy/paste.
+    for ch in ("\u200b", "\u200c", "\u200d", "\ufeff", "\u00a0"):
+        s = s.replace(ch, "")
+    s = s.strip()
+    # Unwrap accidental wrapper quotes repeatedly ("..." or '...').
+    while len(s) >= 2 and s[0] in ("'", '"') and s[-1] == s[0]:
+        s = s[1:-1].strip()
+    return s
+
+
 # Normalize once at boot so every endpoint reads one canonical value.
 LICENSE_SERVER_URL = _clean_env_value(
     "LICENSE_SERVER_URL",
@@ -737,9 +756,10 @@ def dashboard_login():
     if not DASHBOARD_PASSWORD:
         return redirect("/")   # nothing to log into
     if request.method == "POST":
-        supplied = (request.form.get("password") or "").strip()
+        supplied = _normalize_dashboard_password(request.form.get("password") or "")
+        expected = _normalize_dashboard_password(DASHBOARD_PASSWORD)
         # Constant-time compare (on bytes, so a non-ASCII password never errors).
-        if hmac.compare_digest(supplied.encode("utf-8"), DASHBOARD_PASSWORD.encode("utf-8")):
+        if hmac.compare_digest(supplied.encode("utf-8"), expected.encode("utf-8")):
             session["dash_authed"] = True
             session.permanent = True
             return redirect("/")
