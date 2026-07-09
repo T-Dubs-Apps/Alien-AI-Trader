@@ -6,6 +6,8 @@ monkey.patch_all()
 
 import json
 import os
+import random
+import secrets
 import sys
 import threading
 import time
@@ -174,6 +176,7 @@ LICENSE_SERVER_URL = os.environ.get(
     "LICENSE_SERVER_URL", "https://alien-ai-trader-dashboard.onrender.com"
 ).rstrip("/")
 LICENSE_FILE = os.path.join(DATA_DIR, "license.json")
+TRUSTED_DEVICES_FILE = os.path.join(DATA_DIR, "trusted_devices.json")
 
 
 def _clean_env_value(name: str, default: str = "") -> str:
@@ -250,6 +253,11 @@ LICENSE_SERVER_URL = _clean_env_value(
 # license/Stripe endpoints always stay open so buyers and Stripe can reach them.
 import hmac
 DASHBOARD_PASSWORD = _clean_env_value("DASHBOARD_PASSWORD", "")
+TRUSTED_OWNER_EMAILS_ENV = _clean_env_value("TRUSTED_OWNER_EMAILS", "")
+TRUSTED_DEVICE_COOKIE = "aat_trusted_device"
+OWNER_REAUTH_DAYS_MIN = int(os.environ.get("OWNER_REAUTH_DAYS_MIN", "120"))
+OWNER_REAUTH_DAYS_MAX = int(os.environ.get("OWNER_REAUTH_DAYS_MAX", "180"))
+_trusted_devices_lock = Lock()
 
 # Path prefixes that must stay reachable WITHOUT logging in.
 _PUBLIC_PATH_PREFIXES = (
@@ -268,6 +276,109 @@ def _dashboard_authed() -> bool:
     """True when access is allowed: either no password is configured (gate off)
     or the visitor has logged in this session."""
     return (not DASHBOARD_PASSWORD) or bool(session.get("dash_authed"))
+
+
+def _norm_email(value: str) -> str:
+    return str(value or "").strip().lower()
+
+
+def _trusted_owner_emails() -> set[str]:
+    emails = set()
+    for raw in TRUSTED_OWNER_EMAILS_ENV.split(","):
+        e = _norm_email(raw)
+        if e:
+            emails.add(e)
+    return emails
+
+
+def _load_trusted_devices() -> dict:
+    try:
+        with open(TRUSTED_DEVICES_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_trusted_devices(data: dict) -> None:
+    try:
+        with open(TRUSTED_DEVICES_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+    except Exception:
+        pass
+
+
+def _get_device_id_from_cookie() -> str:
+    raw = str(request.cookies.get(TRUSTED_DEVICE_COOKIE, "") or "").strip()
+    if not raw or len(raw) > 120:
+        return ""
+    return raw
+
+
+def _new_device_id() -> str:
+    return secrets.token_urlsafe(24)
+
+
+def _next_reauth_ts() -> int:
+    lo = max(30, OWNER_REAUTH_DAYS_MIN)
+    hi = max(lo, OWNER_REAUTH_DAYS_MAX)
+    days = random.randint(lo, hi)
+    return int(time.time()) + (days * 86400)
+
+
+def _get_trusted_record(device_id: str) -> dict:
+    if not device_id:
+        return {}
+    with _trusted_devices_lock:
+        data = _load_trusted_devices()
+        rec = data.get(device_id)
+        return rec if isinstance(rec, dict) else {}
+
+
+def _mark_trusted_device(device_id: str, owner_email: str) -> None:
+    if not device_id or not owner_email:
+        return
+    with _trusted_devices_lock:
+        data = _load_trusted_devices()
+        data[device_id] = {
+            "email": _norm_email(owner_email),
+            "last_full_login": int(time.time()),
+            "next_reauth_ts": _next_reauth_ts(),
+        }
+        # Keep file bounded in case many devices touched this deployment.
+        if len(data) > 200:
+            items = sorted(
+                data.items(),
+                key=lambda kv: int((kv[1] or {}).get("last_full_login", 0)),
+                reverse=True,
+            )[:200]
+            data = dict(items)
+        _save_trusted_devices(data)
+
+
+def _trusted_device_allows_bypass(device_id: str) -> tuple[bool, str]:
+    """Return (allowed, email) when this device can skip full login."""
+    rec = _get_trusted_record(device_id)
+    if not rec:
+        return False, ""
+    email = _norm_email(rec.get("email", ""))
+    if not email or email not in _trusted_owner_emails():
+        return False, ""
+    due = int(rec.get("next_reauth_ts", 0) or 0)
+    if due and int(time.time()) >= due:
+        return False, ""
+    return True, email
+
+
+def _trusted_device_reauth_due(device_id: str) -> bool:
+    rec = _get_trusted_record(device_id)
+    if not rec:
+        return False
+    email = _norm_email(rec.get("email", ""))
+    if not email or email not in _trusted_owner_emails():
+        return False
+    due = int(rec.get("next_reauth_ts", 0) or 0)
+    return bool(due and int(time.time()) >= due)
 
 # -- Distribution URLs (used by the shareable Render landing page /get) --------
 # The public repo IS the installation package. The GitHub archive link always
@@ -734,6 +845,16 @@ def _require_dashboard_login():
         return None
     if _path_is_public(request.path):
         return None
+    device_id = _get_device_id_from_cookie()
+    allow_bypass, owner_email = _trusted_device_allows_bypass(device_id)
+    if allow_bypass:
+        session["dash_authed"] = True
+        session["owner_email"] = owner_email
+        session.permanent = True
+        return None
+    if _trusted_device_reauth_due(device_id):
+        session.pop("dash_authed", None)
+        session.pop("owner_email", None)
     if session.get("dash_authed"):
         return None
     # The in-process trading engine authenticates its OWN calls (heartbeat,
@@ -751,6 +872,12 @@ def _require_dashboard_login():
 
 def _login_page(error: str = "") -> str:
     note = (f'<p class="err">&#9888;&#65039; {error}</p>' if error else "")
+    owner_hint = ""
+    if _trusted_owner_emails():
+        owner_hint = (
+            '<p class="sub">New device for owner accounts: enter owner email '
+            'plus dashboard password. Trusted devices are re-verified every few months.</p>'
+        )
     return f"""<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Sign in — Alien AI Trader</title><link rel="icon" href="/favicon.svg">
@@ -767,8 +894,10 @@ background:linear-gradient(135deg,#22c55e,#16a34a);color:#fff;font-weight:700;fo
 </head><body><div class="card">
 <h1>&#128123; Alien AI Trader</h1>
 <p class="sub">Enter your dashboard password to continue.</p>
+{owner_hint}
 {note}
 <form method="POST" action="/login">
+<input type="email" name="owner_email" placeholder="Owner email (required on new owner devices)">
 <input type="password" name="password" placeholder="Dashboard password" autofocus required>
 <button type="submit">Sign in</button>
 </form></div></body></html>"""
@@ -780,16 +909,45 @@ def dashboard_login():
         return redirect("/")   # nothing to log into
     if request.method == "POST":
         supplied = _normalize_dashboard_password(request.form.get("password") or "")
+        owner_email = _norm_email(request.form.get("owner_email") or "")
         accepted = _dashboard_password_candidates()
+        trusted_emails = _trusted_owner_emails()
+        device_id = _get_device_id_from_cookie()
+        known_rec = _get_trusted_record(device_id) if device_id else {}
+        known_email = _norm_email(known_rec.get("email", "")) if known_rec else ""
+        known_is_owner = bool(known_email and known_email in trusted_emails)
         # Constant-time compare (on bytes, so a non-ASCII password never errors).
         ok = any(
             hmac.compare_digest(supplied.encode("utf-8"), expected.encode("utf-8"))
             for expected in accepted
         )
         if ok:
+            # For owner accounts, a new device must provide owner email once.
+            if trusted_emails and not known_is_owner and owner_email not in trusted_emails:
+                return _login_page("Enter owner email plus password on a new owner device."), 401
+
+            if owner_email in trusted_emails:
+                known_email = owner_email
+
+            if known_email in trusted_emails:
+                if not device_id:
+                    device_id = _new_device_id()
+                _mark_trusted_device(device_id, known_email)
+                session["owner_email"] = known_email
+
             session["dash_authed"] = True
             session.permanent = True
-            return redirect("/")
+            resp = redirect("/")
+            if device_id:
+                resp.set_cookie(
+                    TRUSTED_DEVICE_COOKIE,
+                    device_id,
+                    max_age=60 * 60 * 24 * 400,
+                    httponly=True,
+                    samesite="Lax",
+                    secure=request.is_secure,
+                )
+            return resp
         return _login_page("Incorrect password."), 401
     return _login_page(), 200
 
@@ -1639,7 +1797,7 @@ def license_local():
 @app.route("/api/license/activate", methods=["POST"])
 def license_activate():
     payload = request.json or {}
-    email = (payload.get("email") or "").strip()
+    email = _norm_email(payload.get("email") or "")
     if not email:
         return jsonify({"status": "error", "message": "Enter the email address you used at purchase."}), 400
     try:
@@ -1656,9 +1814,25 @@ def license_activate():
 
     if data.get("status") == "active":
         _save_local_license(data)
-        return jsonify({"status": "ok", "licensed": True, "tier": data.get("tier"),
+        resp = jsonify({"status": "ok", "licensed": True, "tier": data.get("tier"),
                         "expiresAt": data.get("expiresAt"),
-                        "message": "License activated — live trading is unlocked. Restart the app to trade live."}), 200
+                        "message": "License activated — live trading is unlocked. Restart the app to trade live."})
+
+        # Owner convenience: if activation email is one of the trusted owner
+        # emails, bind this browser as a trusted device automatically.
+        if email in _trusted_owner_emails():
+            device_id = _get_device_id_from_cookie() or _new_device_id()
+            _mark_trusted_device(device_id, email)
+            session["owner_email"] = email
+            resp.set_cookie(
+                TRUSTED_DEVICE_COOKIE,
+                device_id,
+                max_age=60 * 60 * 24 * 400,
+                httponly=True,
+                samesite="Lax",
+                secure=request.is_secure,
+            )
+        return resp, 200
 
     return jsonify({"status": "error", "licensed": False,
                     "message": "No active purchase found for that email. "

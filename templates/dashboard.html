@@ -715,7 +715,7 @@
               <div class="d-flex gap-2 mb-3 flex-wrap" id="licenseBuyButtons"></div>
               <div class="row g-2">
                 <div class="col-12 col-md-7">
-                  <input id="licEmail" type="email" class="form-control form-control-sm" placeholder="Email used at purchase">
+                  <input id="licEmail" type="email" class="form-control form-control-sm" placeholder="Email used at purchase (owner/brother account)">
                 </div>
                 <div class="col-12 col-md-5">
                   <input id="licKey" type="text" class="form-control form-control-sm" placeholder="License key (optional)">
@@ -1688,7 +1688,12 @@
           pill.className = 'status-pill online';
           pill.innerHTML = '&#x25cf; Licensed';
           const exp = d.expiresAt ? new Date(+d.expiresAt).toLocaleDateString() : '';
-          info.textContent = (d.tier ? d.tier + ' plan' : '') + (exp ? ' · renews/expires ' + exp : '');
+          const acct = d.email ? (' · account ' + d.email) : '';
+          info.textContent = (d.tier ? d.tier + ' plan' : '') + acct + (exp ? ' · renews/expires ' + exp : '');
+          const emailInput = document.getElementById('licEmail');
+          if (emailInput && d.email && !emailInput.value.trim()) {
+            emailInput.value = d.email;
+          }
         } else {
           pill.className = 'status-pill unknown';
           pill.innerHTML = '&#x25cf; Free plan';
