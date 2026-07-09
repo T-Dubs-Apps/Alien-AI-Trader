@@ -916,6 +916,7 @@ def dashboard_login():
         known_rec = _get_trusted_record(device_id) if device_id else {}
         known_email = _norm_email(known_rec.get("email", "")) if known_rec else ""
         known_is_owner = bool(known_email and known_email in trusted_emails)
+        reauth_due = _trusted_device_reauth_due(device_id)
         # Constant-time compare (on bytes, so a non-ASCII password never errors).
         ok = any(
             hmac.compare_digest(supplied.encode("utf-8"), expected.encode("utf-8"))
@@ -923,8 +924,8 @@ def dashboard_login():
         )
         if ok:
             # For owner accounts, a new device must provide owner email once.
-            if trusted_emails and not known_is_owner and owner_email not in trusted_emails:
-                return _login_page("Enter owner email plus password on a new owner device."), 401
+            if trusted_emails and (not known_is_owner or reauth_due) and owner_email not in trusted_emails:
+                return _login_page("Enter owner email plus password for new or re-verification login."), 401
 
             if owner_email in trusted_emails:
                 known_email = owner_email
