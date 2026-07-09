@@ -211,6 +211,29 @@ def _normalize_dashboard_password(value: str) -> str:
     return s
 
 
+def _dashboard_password_candidates() -> list[str]:
+    """Return accepted dashboard passwords (normalized), from common env names.
+
+    DASHBOARD_PASSWORD remains the primary key; alternates are accepted only as
+    a compatibility bridge for deployments that set an older variable name.
+    """
+    names = (
+        "DASHBOARD_PASSWORD",
+        "ADMIN_PASSWORD",
+        "TRADER_PASSWORD",
+        "PASSWORD",
+    )
+    vals: list[str] = []
+    for name in names:
+        raw = os.environ.get(name)
+        if raw is None:
+            continue
+        norm = _normalize_dashboard_password(raw)
+        if norm and norm not in vals:
+            vals.append(norm)
+    return vals
+
+
 # Normalize once at boot so every endpoint reads one canonical value.
 LICENSE_SERVER_URL = _clean_env_value(
     "LICENSE_SERVER_URL",
@@ -757,9 +780,13 @@ def dashboard_login():
         return redirect("/")   # nothing to log into
     if request.method == "POST":
         supplied = _normalize_dashboard_password(request.form.get("password") or "")
-        expected = _normalize_dashboard_password(DASHBOARD_PASSWORD)
+        accepted = _dashboard_password_candidates()
         # Constant-time compare (on bytes, so a non-ASCII password never errors).
-        if hmac.compare_digest(supplied.encode("utf-8"), expected.encode("utf-8")):
+        ok = any(
+            hmac.compare_digest(supplied.encode("utf-8"), expected.encode("utf-8"))
+            for expected in accepted
+        )
+        if ok:
             session["dash_authed"] = True
             session.permanent = True
             return redirect("/")
@@ -2165,9 +2192,10 @@ def _engine_supervisor() -> None:
     while True:
         preflight_error = _engine_preflight_error()
         if preflight_error:
+            state = "starting" if "temporary network/api issue" in preflight_error.lower() else "offline"
             _worker_status.update({
                 "running": False,
-                "state": "offline",
+                "state": state,
                 "message": preflight_error,
                 "last_heartbeat": int(time.time()),
             })
