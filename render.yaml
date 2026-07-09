@@ -53,7 +53,10 @@ services:
         sync: false
       - key: ALPHA_VANTAGE_KEY
         sync: false
+      # Pushbullet token (either variable name works; code checks both).
       - key: PUSHBULLET_API_KEY
+        sync: false
+      - key: PUSHBULLET_TOKEN
         sync: false
       - key: PUSHOVER_TOKEN
         sync: false
@@ -89,9 +92,9 @@ services:
         value: AAPL,GOOG,TSLA,MSFT,AMZN
       # -- Scan & execution -------------------------------------------------
       - key: POLL_SECONDS
-        value: "30"         # safe: daily bars cached 30min, only live prices hit API
+        value: "60"         # conservative default: lower API churn, steadier behavior
       - key: SCAN_WORKERS
-        value: "8"
+        value: "6"
       - key: TRAILING_STOP_PCT
         value: "3.0"
       - key: LOSS_THRESHOLD
@@ -99,11 +102,11 @@ services:
       - key: MAX_POSITIONS
         value: "5"
       - key: SCAN_ALL_MARKET
-        value: "true"       # safe now: list_assets cached 10min, bars cached 30min
+        value: "false"      # safer default for new users; enable manually after validation
       - key: MARKET_SCAN_CANDIDATES
-        value: "20"
+        value: "12"
       - key: MAX_TRADES_PER_HOUR
-        value: "10"
+        value: "6"
       - key: ORDER_QTY
         value: "1"
       # -- Capital & position sizing ----------------------------------------

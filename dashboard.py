@@ -39,6 +39,91 @@ from alpha_vantage.timeseries import TimeSeries
 base_dir = os.path.dirname(os.path.abspath(__file__))
 template_dir = os.path.join(base_dir, "templates")
 
+
+def _bootstrap_local_env() -> None:
+    """Fill missing env vars from local key files when running outside START.bat.
+
+    Local users often launch dashboard.py directly, which skips keys.bat loading
+    done by START.bat. That leaves required vars empty and the engine reports
+    offline. We only hydrate empty env vars and never overwrite already-set
+    process/deployment values.
+    """
+    wanted = {
+        "ALPACA_KEY",
+        "ALPACA_SECRET",
+        "ALPACA_LIVE_KEY",
+        "ALPACA_LIVE_SECRET",
+        "ALPHA_VANTAGE_KEY",
+        "PUSHBULLET_TOKEN",
+        "PUSHOVER_TOKEN",
+        "PUSHOVER_USER",
+        "FLASK_SECRET",
+        "DASHBOARD_PASSWORD",
+        "LICENSE_EMAIL",
+        "LICENSE_SERVER_URL",
+        "TRADING_MODE",
+        "LIVE_TRADING_ENABLED",
+    }
+
+    loaded_from_bat = 0
+    keys_bat = os.path.join(base_dir, "keys.bat")
+    try:
+        if os.path.exists(keys_bat):
+            with open(keys_bat, "r", encoding="utf-8", errors="replace") as f:
+                for raw in f:
+                    line = raw.strip()
+                    if not line or line.lower().startswith("rem") or line.startswith("::"):
+                        continue
+                    lo = line.lower()
+                    if lo.startswith("@echo"):
+                        continue
+                    if not lo.startswith("set "):
+                        continue
+                    body = line[4:].strip()
+                    # Support both: set KEY=VAL and set "KEY=VAL"
+                    if len(body) >= 2 and body[0] == '"' and body[-1] == '"':
+                        body = body[1:-1]
+                    if "=" not in body:
+                        continue
+                    key, val = body.split("=", 1)
+                    key = key.strip()
+                    val = val.strip()
+                    if key in wanted and not os.environ.get(key) and val:
+                        os.environ[key] = val
+                        loaded_from_bat += 1
+    except Exception:
+        pass
+
+    loaded_from_json = 0
+    config_json = os.path.join(base_dir, "config.json")
+    try:
+        if os.path.exists(config_json):
+            with open(config_json, "r", encoding="utf-8", errors="replace") as f:
+                raw = f.read().strip()
+            if raw:
+                if not raw.lstrip().startswith("{"):
+                    raw = "{" + raw
+                if not raw.rstrip().endswith("}"):
+                    raw = raw + "}"
+                cfg = json.loads(raw)
+                if isinstance(cfg, dict):
+                    for key in wanted:
+                        val = cfg.get(key)
+                        if isinstance(val, str) and val.strip() and not os.environ.get(key):
+                            os.environ[key] = val.strip()
+                            loaded_from_json += 1
+    except Exception:
+        pass
+
+    if loaded_from_bat or loaded_from_json:
+        print(
+            f"[BOOT] Loaded {loaded_from_bat} env var(s) from keys.bat and "
+            f"{loaded_from_json} from config.json."
+        )
+
+
+_bootstrap_local_env()
+
 # ── Durable state directory ───────────────────────────────────────────────────
 # All runtime state (license cache, settings, live keys, grants DB) is written
 # here. On Render the container filesystem is EPHEMERAL — wiped on every deploy,
@@ -487,15 +572,15 @@ _notifications: List[Dict[str, Any]] = []
 
 # ---- Providers (server-side only) ----
 # These are safe because values come from Render env vars; never sent to browser.
-ALPACA_KEY = os.environ.get("ALPACA_KEY")
-ALPACA_SECRET = os.environ.get("ALPACA_SECRET")
-ALPACA_BASE_URL = os.environ.get("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
-ALPHA_VANTAGE_KEY = os.environ.get("ALPHA_VANTAGE_KEY")
+ALPACA_KEY = _clean_env_value("ALPACA_KEY", "")
+ALPACA_SECRET = _clean_env_value("ALPACA_SECRET", "")
+ALPACA_BASE_URL = _clean_env_value("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+ALPHA_VANTAGE_KEY = _clean_env_value("ALPHA_VANTAGE_KEY", "")
 # Separate LIVE credentials so the licensed Paper↔Live toggle can switch accounts
 # without the buyer ever regenerating keys. Paper keys above stay paper; these
 # stay live. Absent live keys = live simply cannot be enabled (fail safe).
-ALPACA_LIVE_KEY    = os.environ.get("ALPACA_LIVE_KEY")
-ALPACA_LIVE_SECRET = os.environ.get("ALPACA_LIVE_SECRET")
+ALPACA_LIVE_KEY    = _clean_env_value("ALPACA_LIVE_KEY", "")
+ALPACA_LIVE_SECRET = _clean_env_value("ALPACA_LIVE_SECRET", "")
 
 _alpaca = None        # paper client (always paper endpoint)
 _alpaca_live = None   # live client, built lazily only when live is used
@@ -730,6 +815,60 @@ def engine_diag():
         },
         "requested_mode": _requested_mode(),
         "effective_mode": _effective_mode(),
+    }), 200
+
+
+@app.route("/api/support/snapshot", methods=["GET"])
+def support_snapshot():
+    """Non-secret runtime snapshot to troubleshoot customer blueprints quickly."""
+    alpha_present = bool(key_store.get_alpha_key())
+    paper_ok, paper_detail = _alpaca_auth_probe(
+        ALPACA_KEY, ALPACA_SECRET, "https://paper-api.alpaca.markets")
+    live_key, live_secret = key_store.get_live_keys()
+    live_ok, live_detail = _alpaca_auth_probe(
+        live_key, live_secret, "https://api.alpaca.markets") if (live_key and live_secret) else (False, "live keys not set")
+
+    status = dict(_worker_status)
+    last = status.get("last_heartbeat")
+    stale = (int(time.time()) - int(last)) if last is not None else None
+
+    return jsonify({
+        "timestamp": int(time.time()),
+        "app": {
+            "version": os.environ.get("APP_VERSION", "unknown"),
+            "render_service": os.environ.get("RENDER_SERVICE_NAME", "local"),
+            "render_commit": os.environ.get("RENDER_GIT_COMMIT", "local"),
+            "python": sys.version.split()[0],
+        },
+        "engine": {
+            "state": status.get("state"),
+            "running": bool(status.get("running")),
+            "message": status.get("message"),
+            "stale_seconds": stale,
+            "requested_mode": _requested_mode(),
+            "effective_mode": _effective_mode(),
+        },
+        "license": {
+            "active": _license_is_active(),
+            "live_allowed": _live_allowed()[0],
+            "live_block_reason": _live_allowed()[1],
+        },
+        "keys": {
+            "alpha_vantage_present": alpha_present,
+            "paper_keys_present": bool(ALPACA_KEY and ALPACA_SECRET),
+            "paper_authorized": paper_ok,
+            "paper_detail": paper_detail,
+            "live_keys_present": bool(live_key and live_secret),
+            "live_authorized": live_ok,
+            "live_detail": live_detail,
+        },
+        "settings": {
+            "market_hours_only": _MARKET_HOURS_ONLY,
+            "heartbeat_seconds": _HEARTBEAT_SECS,
+            "poll_seconds": _trading_settings.get("poll_seconds"),
+            "scan_all_market": _trading_settings.get("scan_all_market"),
+            "max_positions": _trading_settings.get("max_positions"),
+        }
     }), 200
 
 
@@ -1546,6 +1685,7 @@ def _settings_response() -> dict:
     resp["live_keys_present"] = _live_keys_present()
     resp["licensed"]          = _license_is_active()
     resp["live_block_reason"] = "" if allowed else reason
+    resp["market_hours_only"] = bool(_MARKET_HOURS_ONLY)
     # Pro-tier feature gating (Safety Shield is deliberately NOT gated).
     _apply_pro_gating(resp)
     return resp
@@ -1558,7 +1698,7 @@ def get_trading_settings():
 
 @app.route("/api/settings/trading", methods=["POST"])
 def update_trading_settings():
-    global _trading_settings
+    global _trading_settings, _MARKET_HOURS_ONLY
     payload = request.json or {}
 
     # ── Paper ↔ Live switch — license-gated, fails safe to paper ──────────────
@@ -1600,10 +1740,27 @@ def update_trading_settings():
         "portfolio_stop_loss", "portfolio_stop_buffer", "shield_enabled",
         # 5hr 59min minimum hold rule
         "min_hold_seconds",
+        # Runtime schedule mode (true=market hours only, false=24/7 loop)
+        "market_hours_only",
     }
     for k, v in payload.items():
         if k in allowed:
-            _trading_settings[k] = v
+            if k == "market_hours_only":
+                _MARKET_HOURS_ONLY = bool(v)
+                note = {
+                    "time": int(time.time()),
+                    "level": "info",
+                    "symbol": "",
+                    "message": (
+                        "Market-hours mode enabled (engine pauses when market is closed)."
+                        if _MARKET_HOURS_ONLY else
+                        "Off-hours mode enabled (engine continues running after close)."
+                    ),
+                }
+                _notifications.append(note)
+                socketio.emit("notification", note)
+            else:
+                _trading_settings[k] = v
     # Persist to disk so settings survive restarts
     _save_settings()
     # Push updated settings to all browser clients so UI stays in sync
@@ -1866,8 +2023,49 @@ def _wait_for_market_open() -> None:
     """Sleep until market hours. Refreshes the heartbeat every 30s so the UI
     shows 'Paused — market closed' instead of going stale/offline."""
     announced = 0.0
+    last_equity_check = 0.0
+    shield_alerted = False
+    shield_alert_ts = 0.0
     while not _is_market_hours():
         now_et = _now_eastern()
+        now_ts = time.time()
+
+        # During paused market-hours mode, keep a lightweight portfolio check
+        # alive so Safety Shield still monitors account-level drawdowns.
+        if now_ts - last_equity_check >= 60:
+            last_equity_check = now_ts
+            try:
+                threshold = float(_trading_settings.get("portfolio_stop_loss", 0) or 0)
+                buffer_usd = float(_trading_settings.get("portfolio_stop_buffer", 200) or 0)
+                shield_on = bool(_trading_settings.get("shield_enabled", True))
+                client = _active_alpaca()
+                if shield_on and threshold > 0 and client is not None:
+                    acct = client.get_account()
+                    equity = float(getattr(acct, "equity", 0) or 0)
+                    recovery_target = threshold + buffer_usd
+                    if equity > 0 and equity <= threshold:
+                        if (not shield_alerted) or (now_ts - shield_alert_ts >= 900):
+                            shield_alerted = True
+                            shield_alert_ts = now_ts
+                            _engine_alert(
+                                (
+                                    f"Shield watch (market closed): account equity ${equity:,.2f} "
+                                    f"is at/below threshold ${threshold:,.2f}."
+                                ),
+                                level="alert",
+                            )
+                    elif shield_alerted and equity >= recovery_target:
+                        shield_alerted = False
+                        _engine_alert(
+                            (
+                                f"Shield watch reset (market closed): equity recovered to "
+                                f"${equity:,.2f} above ${recovery_target:,.2f}."
+                            ),
+                            level="info",
+                        )
+            except Exception:
+                pass
+
         msg = (f"Market closed — engine paused until 9:30 ET "
                f"(ET now: {now_et.strftime('%a %H:%M')}).")
         _worker_status.update({
@@ -1884,10 +2082,49 @@ def _wait_for_market_open() -> None:
     print("[ENGINE] Market open — starting trading session.")
 
 
+def _engine_preflight_error() -> str:
+    """Return a user-facing preflight error, or empty string when config is OK."""
+    alpha_present = bool(key_store.get_alpha_key())
+    if not alpha_present:
+        return "Missing ALPHA_VANTAGE_KEY. Open SETUP API KEYS and save it."
+
+    paper_ok, paper_detail = _alpaca_auth_probe(
+        ALPACA_KEY, ALPACA_SECRET, "https://paper-api.alpaca.markets"
+    )
+    if not paper_ok:
+        return (
+            "Paper Alpaca authorization failed. Re-enter ALPACA_KEY and "
+            f"ALPACA_SECRET as a matching PAPER pair. Detail: {paper_detail}"
+        )
+    return ""
+
+
 def _engine_supervisor() -> None:
     """Outer loop: starts sessions indefinitely, restarting after each one ends or crashes."""
     session = 0
+    last_preflight_msg = ""
+    last_preflight_log_ts = 0.0
     while True:
+        preflight_error = _engine_preflight_error()
+        if preflight_error:
+            _worker_status.update({
+                "running": False,
+                "state": "offline",
+                "message": preflight_error,
+                "last_heartbeat": int(time.time()),
+            })
+            try:
+                socketio.emit("worker_status", _worker_status)
+            except Exception:
+                pass
+            now = time.time()
+            if preflight_error != last_preflight_msg or (now - last_preflight_log_ts) >= 300:
+                print(f"[ENGINE] Preflight failed: {preflight_error}")
+                last_preflight_msg = preflight_error
+                last_preflight_log_ts = now
+            time.sleep(30)
+            continue
+
         if _MARKET_HOURS_ONLY:
             _wait_for_market_open()
         session += 1

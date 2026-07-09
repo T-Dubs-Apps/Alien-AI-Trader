@@ -54,7 +54,7 @@ def has_live_keys() -> bool:
 
 def get_alpha_key():
     d = _read()
-    return (d.get("ALPHA_VANTAGE_KEY") or os.environ.get("ALPHA_VANTAGE_KEY") or "").strip() or None
+    return (os.environ.get("ALPHA_VANTAGE_KEY") or d.get("ALPHA_VANTAGE_KEY") or "").strip() or None
 
 
 def set_keys(alpaca_key=None, alpaca_secret=None, alpha=None) -> bool:

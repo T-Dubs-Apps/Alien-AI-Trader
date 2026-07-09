@@ -28,6 +28,17 @@ except Exception:
 
 
 class TradingEngine:
+    @staticmethod
+    def _clean_env(name: str, default: str = "") -> str:
+        """Normalize env values, stripping accidental wrapper quotes."""
+        raw = os.environ.get(name)
+        if raw is None:
+            return default
+        s = str(raw).strip()
+        if len(s) >= 2 and s[0] in ("'", '"') and s[-1] == s[0]:
+            s = s[1:-1].strip()
+        return s
+
     def _calc_macd(self, closes: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9):
         if len(closes) < slow + signal:
             return None, None
@@ -165,12 +176,15 @@ class TradingEngine:
         # signed license (see dashboard _live_allowed()). The engine trusts the
         # effective mode it is handed on /api/settings/trading and always fails
         # SAFE to paper when live keys are absent.
-        self._paper_key    = os.environ.get("ALPACA_KEY")
-        self._paper_secret = os.environ.get("ALPACA_SECRET")
-        self._live_key     = os.environ.get("ALPACA_LIVE_KEY")
-        self._live_secret  = os.environ.get("ALPACA_LIVE_SECRET")
-        alpha_vantage_key  = os.environ.get("ALPHA_VANTAGE_KEY")
-        pushbullet_token   = os.environ.get("PUSHBULLET_TOKEN", "")
+        self._paper_key    = self._clean_env("ALPACA_KEY", "")
+        self._paper_secret = self._clean_env("ALPACA_SECRET", "")
+        self._live_key     = self._clean_env("ALPACA_LIVE_KEY", "")
+        self._live_secret  = self._clean_env("ALPACA_LIVE_SECRET", "")
+        alpha_vantage_key  = key_store.get_alpha_key()
+        pushbullet_token   = (
+            self._clean_env("PUSHBULLET_TOKEN", "")
+            or self._clean_env("PUSHBULLET_API_KEY", "")
+        )
 
         if not self._paper_key or not self._paper_secret:
             raise RuntimeError("Missing ALPACA_KEY / ALPACA_SECRET env vars.")

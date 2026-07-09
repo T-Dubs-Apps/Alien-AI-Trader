@@ -379,8 +379,38 @@ nothing else to pay for):
 4. Render will find `render.yaml` and create the service automatically
 5. Set your environment variables (API keys) in the Render dashboard
 
+> **Critical Render tip (easy to miss):** after changing Environment Variables,
+> use Render's **Save and deploy** (or **Save, rebuild and deploy**) button in
+> the Env Vars panel. Triggering a deploy from the top-level manual deploy menu
+> can redeploy the previous code commit without applying your new env values.
+
+**After changing keys, always verify in this order:**
+1. Open Render Env Vars and confirm the saved values are still present.
+2. Deploy via **Save and deploy** (or **Save, rebuild and deploy**).
+3. Check `https://YOUR-SERVICE.onrender.com/api/engine/diag`.
+4. Confirm `alpaca_paper.authorized=true` before trusting trading status.
+
 > **Tip:** every user can run their own private cloud copy this way — your keys,
 > your account, your trades. Nothing is shared.
+
+### Recommended Blueprint Defaults (Production-Safe)
+
+These defaults are chosen to maximize stability, reduce accidental risk, and
+keep API usage predictable for most users:
+
+1. `TRADING_MODE=paper` and `LIVE_TRADING_ENABLED=false`
+2. `MARKET_HOURS_ONLY=true` (strategy loop pauses when market is closed)
+3. `POLL_SECONDS=60` (steadier API usage than 15/30 second loops)
+4. `SCAN_ALL_MARKET=false` initially (turn on only after validation)
+5. `MAX_TRADES_PER_HOUR=6` (reduces overtrading and runaway behavior)
+6. `RUN_SECONDS=21540` (5h59m recycle keeps sessions healthy while reconciling positions on restart)
+
+Why this profile works:
+
+1. Keeps all new deployments safe in paper mode by default.
+2. Prevents off-hours surprises unless the user explicitly enables them.
+3. Reduces API burst and timeout risk across many customer blueprints.
+4. Gives the safest baseline before scaling to live mode.
 
 ---
 
@@ -407,7 +437,7 @@ nothing else to pay for):
 |----------|---------|-------------|
 | `TRADING_MODE` | `paper` | **Boot mode only.** The real control is the in-app **Paper↔Live toggle** (license-gated). Leave as `paper`. |
 | `LIVE_TRADING_ENABLED` | `false` | Legacy safety flag. Live is now gated by your **license + live keys**, not this. |
-| `POLL_SECONDS` | `15` | Scan interval in seconds |
+| `POLL_SECONDS` | `60` | Scan interval in seconds (recommended baseline for stability) |
 | `MAX_POSITIONS` | `5` | Max simultaneous open positions |
 | `INITIAL_CAPITAL` | `0` | Starting capital $ (0 = fixed 1-share mode) |
 | `RISK_PER_TRADE_PCT` | `2.0` | % of capital risked per trade |
@@ -416,6 +446,8 @@ nothing else to pay for):
 | `LOSS_THRESHOLD` | `5.0` | % drop from buy price before stop-loss |
 | `FORECAST_EXIT_ENABLED` | `true` | Sell early on momentum reversal |
 | `RUN_SECONDS` | `21540` | Session length — 5h 59m (under API limits) |
+| `MAX_TRADES_PER_HOUR` | `6` | Trade throttle (recommended baseline) |
+| `MARKET_HOURS_ONLY` | `true` | Pause strategy loop outside market hours |
 | `SCAN_ALL_MARKET` | `false` | Scan all US equities for momentum movers |
 
 ---

@@ -756,6 +756,27 @@
             </div>
           </div>
 
+          <div class="col-12">
+            <div class="glass-card">
+              <div class="section-title"><i class="fa-solid fa-stethoscope me-1"></i>Blueprint Self-Test</div>
+              <div class="small-muted mb-3">
+                Run this before market open. It checks mode, license, Alpaca auth, heartbeat, and core settings,
+                then gives you a safe support report with no secrets.
+              </div>
+              <div class="d-flex gap-2 flex-wrap mb-3">
+                <button class="btn btn-outline-primary btn-sm" onclick="runBlueprintSelfTest()">
+                  <i class="fa-solid fa-heart-pulse me-1"></i>Run Self-Test
+                </button>
+                <button class="btn btn-outline-secondary btn-sm" onclick="copySupportSnapshot()">
+                  <i class="fa-solid fa-copy me-1"></i>Copy Support Report
+                </button>
+              </div>
+              <div id="supportTestSummary" class="small-muted mb-2">No self-test run yet.</div>
+              <div id="supportTestChecks" class="small-muted mb-3"></div>
+              <pre id="supportSnapshotBox" style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px;font-size:.75rem;color:var(--text);max-height:220px;overflow:auto;">Support snapshot will appear here.</pre>
+            </div>
+          </div>
+
           <!-- Trading Mode -->
           <!-- ── PORTFOLIO SAFETY SHIELD ── -->
           <div class="col-12">
@@ -944,14 +965,28 @@
                   </select>
                 </div>
               </div>
+              <div class="row g-2 mt-1">
+                <div class="col-12">
+                  <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" id="marketHoursOnlyToggle" checked>
+                    <label class="form-check-label" for="marketHoursOnlyToggle">
+                      <strong>Market-hours only</strong> — pause strategy loop when market is closed
+                    </label>
+                  </div>
+                  <div class="small-muted" style="font-size:.74rem;">
+                    Turn OFF to keep strategy scans running after close. Account/portfolio checks still work in either mode.
+                  </div>
+                </div>
+              </div>
               <div id="tradingModeBanner" class="alert mt-3 mb-0 py-2" style="background:rgba(37,99,235,.1);border:1px solid rgba(37,99,235,.3);color:var(--muted);font-size:.8rem;border-radius:8px;">
                 <i class="fa-solid fa-circle-info me-1"></i>
                 Checking trading mode…
               </div>
               <div class="small-muted mt-2" style="font-size:.75rem;">
-                Switching takes effect within a few seconds — no restart needed. Live trading
-                requires an <strong>active license</strong> and your <strong>live Alpaca keys</strong>;
-                until then the app stays safely in paper. This is where you toggle Paper ↔ Live anytime.
+                Two-click switch: click once to open the Mode list, click again to choose Paper or Live.
+                Switching takes effect within a few seconds — no restart needed. Live trading requires
+                an <strong>active license</strong> and your <strong>live Alpaca keys</strong>; until then
+                the app stays safely in paper.
               </div>
 
               <div id="liveKeyPanel" class="mt-3 p-3 rounded" style="display:none;background:rgba(239,68,68,.06);border:1px solid rgba(239,68,68,.35);">
@@ -1709,16 +1744,19 @@
     // ═══════════════════════════════════════════
     //  PAPER ↔ LIVE TRADING MODE (license-gated)
     // ═══════════════════════════════════════════
-    function _setModeBanner(mode, allowed, reason) {
+    function _setModeBanner(mode, allowed, reason, marketHoursOnly) {
       const b = document.getElementById('tradingModeBanner');
       if (!b) return;
+      const scheduleText = marketHoursOnly
+        ? '<div style="font-size:.74rem;color:var(--muted);margin-top:.2rem;">Schedule: Market-hours mode (pauses after close).</div>'
+        : '<div style="font-size:.74rem;color:var(--muted);margin-top:.2rem;">Schedule: Off-hours mode (strategy remains active after close).</div>';
       if (mode === 'live') {
         b.style.background = 'rgba(239,68,68,.12)';
         b.style.borderColor = 'rgba(239,68,68,.45)';
         b.style.color = 'var(--down)';
         b.innerHTML = '<i class="fa-solid fa-circle-dot me-1"></i>' +
           '<strong>LIVE — real money.</strong> The AI is trading your live Alpaca account. ' +
-          'Switch to Paper anytime above.';
+          'Switch to Paper anytime above.' + scheduleText;
       } else {
         b.style.background = 'rgba(34,197,94,.1)';
         b.style.borderColor = 'rgba(34,197,94,.35)';
@@ -1727,19 +1765,22 @@
           '<strong>PAPER — practice money.</strong> Zero risk. ' +
           (allowed
             ? 'You can switch to Live above whenever you’re ready.'
-            : '<span style="color:var(--muted)">To enable Live: ' + (reason || 'activate a license and add live keys') + '</span>');
+            : '<span style="color:var(--muted)">To enable Live: ' + (reason || 'activate a license and add live keys') + '</span>') + scheduleText;
       }
     }
 
     // Reflect the true server state (effective mode + whether live is allowed).
     async function initTradingMode() {
       const sel = document.getElementById('tradingModeSelect');
+      const mh = document.getElementById('marketHoursOnlyToggle');
       try {
         const r = await fetch('/api/settings/trading');
         const s = await r.json();
         const effective = s.trading_mode || 'paper';
         if (sel) sel.value = effective;
-        _setModeBanner(effective, !!s.live_allowed, s.live_block_reason || '');
+        const mhOn = (s.market_hours_only !== false);
+        if (mh) mh.checked = mhOn;
+        _setModeBanner(effective, !!s.live_allowed, s.live_block_reason || '', mhOn);
         // Annotate the Live option so the user sees why it may be unavailable.
         if (sel) {
           const liveOpt = sel.querySelector('option[value="live"]');
@@ -1754,19 +1795,6 @@
       const sel  = document.getElementById('tradingModeSelect');
       const want = sel ? sel.value : 'paper';
 
-      if (want === 'live' && !fromKeySave) {
-        // Hard confirmation guard: require the user to type LIVE.
-        const typed = window.prompt(
-          '⚠ REAL MONEY.\n\nThis switches the AI to your LIVE Alpaca account — actual ' +
-          'buy/sell orders with real funds. Only continue if your license is active and ' +
-          'your live keys are set.\n\nType  LIVE  (all caps) to confirm:');
-        if (typed !== 'LIVE') {
-          sel.value = 'paper';
-          _setModeBanner('paper', true, '');
-          return;
-        }
-      }
-
       try {
         const r = await fetch('/api/settings/trading', {
           method: 'POST',
@@ -1778,20 +1806,20 @@
           sel.value = 'paper';
           if (want === 'live' && d.licensed && d.live_keys_present === false) {
             // Licensed but no live keys — guide them to add keys right here.
-            _setModeBanner('paper', false, 'add your live Alpaca keys below to go live');
+            _setModeBanner('paper', false, 'add your live Alpaca keys below to go live', !!document.getElementById('marketHoursOnlyToggle')?.checked);
             openLiveKeyPanel();
           } else {
-            _setModeBanner('paper', false, d.message || '');
+            _setModeBanner('paper', false, d.message || '', !!document.getElementById('marketHoursOnlyToggle')?.checked);
             alert('Live trading not enabled:\n\n' + (d.message || 'Not allowed yet.'));
           }
           return;
         }
         const effective = d.trading_mode || want;
         sel.value = effective;
-        _setModeBanner(effective, effective === 'live' || !!d.live_allowed, d.live_block_reason || '');
+        _setModeBanner(effective, effective === 'live' || !!d.live_allowed, d.live_block_reason || '', !!d.market_hours_only);
       } catch {
         sel.value = 'paper';
-        _setModeBanner('paper', false, 'Could not reach the app.');
+        _setModeBanner('paper', false, 'Could not reach the app.', !!document.getElementById('marketHoursOnlyToggle')?.checked);
       }
     }
 
@@ -1828,6 +1856,83 @@
         await onTradingModeChange(true);   // retry the switch; keys now exist
       } catch {
         res.innerHTML = '<span class="text-warning">Network error — try again.</span>';
+      }
+    }
+
+    async function fetchSupportSnapshot() {
+      const r = await fetch('/api/support/snapshot');
+      if (!r.ok) throw new Error('snapshot unavailable');
+      return r.json();
+    }
+
+    function renderSupportSnapshot(snapshot) {
+      const box = document.getElementById('supportSnapshotBox');
+      if (box) box.textContent = JSON.stringify(snapshot, null, 2);
+    }
+
+    function renderSupportChecks(snapshot) {
+      const checks = [];
+      checks.push({
+        ok: !!snapshot.keys.paper_keys_present,
+        text: snapshot.keys.paper_keys_present ? 'Paper keys present' : 'Paper keys missing'
+      });
+      checks.push({
+        ok: !!snapshot.keys.paper_authorized,
+        text: snapshot.keys.paper_authorized ? 'Paper Alpaca auth OK' : 'Paper Alpaca auth failed'
+      });
+      checks.push({
+        ok: !!snapshot.keys.alpha_vantage_present,
+        text: snapshot.keys.alpha_vantage_present ? 'Alpha Vantage key present' : 'Alpha Vantage key missing'
+      });
+      checks.push({
+        ok: snapshot.engine.state !== 'offline' || snapshot.engine.message === 'Market closed',
+        text: 'Engine state: ' + (snapshot.engine.state || 'unknown')
+      });
+      checks.push({
+        ok: snapshot.license.active || snapshot.engine.effective_mode === 'paper',
+        text: snapshot.license.active ? 'License active' : 'Running safely on free/paper mode'
+      });
+
+      const summary = document.getElementById('supportTestSummary');
+      const wrap = document.getElementById('supportTestChecks');
+      const failCount = checks.filter(c => !c.ok).length;
+
+      if (summary) {
+        summary.innerHTML = failCount === 0
+          ? '<span style="color:var(--up)">Self-test passed. Blueprint looks ready.</span>'
+          : '<span style="color:var(--down)">Self-test found ' + failCount + ' issue(s) that should be fixed before trusting live operation.</span>';
+      }
+      if (wrap) {
+        wrap.innerHTML = checks.map(c =>
+          '<div style="margin:.2rem 0;color:' + (c.ok ? 'var(--up)' : 'var(--down)') + '">' +
+          (c.ok ? '&#10003; ' : '&#9888; ') + escHtml(c.text) + '</div>'
+        ).join('');
+      }
+    }
+
+    async function runBlueprintSelfTest() {
+      const summary = document.getElementById('supportTestSummary');
+      if (summary) summary.textContent = 'Running self-test...';
+      try {
+        const snapshot = await fetchSupportSnapshot();
+        renderSupportSnapshot(snapshot);
+        renderSupportChecks(snapshot);
+      } catch {
+        if (summary) summary.innerHTML = '<span style="color:var(--down)">Could not run self-test. Is the app reachable?</span>';
+      }
+    }
+
+    async function copySupportSnapshot() {
+      try {
+        const snapshot = await fetchSupportSnapshot();
+        renderSupportSnapshot(snapshot);
+        const text = JSON.stringify(snapshot, null, 2);
+        await navigator.clipboard.writeText(text);
+        const summary = document.getElementById('supportTestSummary');
+        if (summary) summary.innerHTML = '<span style="color:var(--up)">Support report copied to clipboard.</span>';
+      } catch {
+        const summary = document.getElementById('supportTestSummary');
+        if (summary) summary.innerHTML = '<span style="color:var(--down)">Could not copy support report.</span>';
       }
     }
 
@@ -1918,6 +2023,7 @@
         rsi_buy_max:         settings.rsi_buy_max,
         rsi_sell_min:        settings.rsi_sell_min,
         sma_spread_min:      settings.sma_spread_min,
+        market_hours_only:   document.getElementById('marketHoursOnlyToggle').checked,
       };
       fetch('/api/settings/trading', {
         method: 'POST',
@@ -1981,6 +2087,7 @@
       if (s.rsi_buy_max        != null) document.getElementById('rsiBuyMax').value       = s.rsi_buy_max;
       if (s.rsi_sell_min       != null) document.getElementById('rsiSellMin').value      = s.rsi_sell_min;
       if (s.sma_spread_min     != null) document.getElementById('smaSpreadMin').value    = s.sma_spread_min;
+      if (s.market_hours_only  != null) document.getElementById('marketHoursOnlyToggle').checked = !!s.market_hours_only;
     });
 
     // ═══════════════════════════════════════════
@@ -2353,6 +2460,7 @@
     fetchLicenseStatus();
     loadLicensePricing();
     initTradingMode();
+    runBlueprintSelfTest();
 
     // Fallback REST pollers (WebSocket is primary; these catch up if WS stalls)
     setInterval(fetchWorkerStatus, 20000);
