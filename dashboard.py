@@ -2211,7 +2211,8 @@ def _engine_supervisor() -> None:
     while True:
         preflight_error = _engine_preflight_error()
         if preflight_error:
-            state = "starting" if "temporary network/api issue" in preflight_error.lower() else "offline"
+            transient = "temporary network/api issue" in preflight_error.lower()
+            state = "starting" if transient else "offline"
             _worker_status.update({
                 "running": False,
                 "state": state,
@@ -2227,8 +2228,10 @@ def _engine_supervisor() -> None:
                 print(f"[ENGINE] Preflight failed: {preflight_error}")
                 last_preflight_msg = preflight_error
                 last_preflight_log_ts = now
-            time.sleep(30)
-            continue
+            if not transient:
+                time.sleep(30)
+                continue
+            print("[ENGINE] Continuing startup despite transient preflight issue; will retry inside session.")
 
         if _MARKET_HOURS_ONLY:
             _wait_for_market_open()
