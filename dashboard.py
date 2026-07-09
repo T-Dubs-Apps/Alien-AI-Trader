@@ -2280,63 +2280,106 @@ def _engine_preflight_error() -> str:
     return ""
 
 
+def _heartbeat_watchdog() -> None:
+    """Independent thread: refreshes last_heartbeat every 10 s so the heartbeat
+    never goes stale even if the supervisor or session thread crashes.
+    This is the ONLY place that guarantees liveness of the status endpoint."""
+    while True:
+        try:
+            _worker_status["last_heartbeat"] = int(time.time())
+        except Exception:
+            pass
+        time.sleep(10)
+
+
 def _engine_supervisor() -> None:
-    """Outer loop: starts sessions indefinitely, restarting after each one ends or crashes."""
+    """Outer loop: starts sessions indefinitely, restarting after each one ends or crashes.
+    The entire loop body is wrapped so an unhandled exception can never silently kill
+    this thread and leave last_heartbeat stale."""
     session = 0
     last_preflight_msg = ""
     last_preflight_log_ts = 0.0
     while True:
-        preflight_error = _engine_preflight_error()
-        if preflight_error:
-            transient = "temporary network/api issue" in preflight_error.lower()
-            state = "starting" if transient else "offline"
-            _worker_status.update({
-                "running": False,
-                "state": state,
-                "message": preflight_error,
-                "last_heartbeat": int(time.time()),
-            })
-            try:
-                socketio.emit("worker_status", _worker_status)
-            except Exception:
-                pass
-            now = time.time()
-            if preflight_error != last_preflight_msg or (now - last_preflight_log_ts) >= 300:
-                print(f"[ENGINE] Preflight failed: {preflight_error}")
-                last_preflight_msg = preflight_error
-                last_preflight_log_ts = now
-            if not transient:
-                time.sleep(30)
-                continue
-            print("[ENGINE] Continuing startup despite transient preflight issue; will retry inside session.")
-
-        if _MARKET_HOURS_ONLY:
-            _wait_for_market_open()
-        session += 1
-        print(f"[ENGINE] {'Starting' if session == 1 else 'Restarting'} session #{session} ...")
         try:
-            _engine_session(session)
+            try:
+                preflight_error = _engine_preflight_error()
+            except Exception as pe:
+                preflight_error = f"Preflight check raised an unexpected error: {pe}"
+
+            if preflight_error:
+                transient = "temporary network/api issue" in preflight_error.lower()
+                state = "starting" if transient else "offline"
+                _worker_status.update({
+                    "running": False,
+                    "state": state,
+                    "message": preflight_error,
+                    "last_heartbeat": int(time.time()),
+                })
+                try:
+                    socketio.emit("worker_status", _worker_status)
+                except Exception:
+                    pass
+                now = time.time()
+                if preflight_error != last_preflight_msg or (now - last_preflight_log_ts) >= 300:
+                    print(f"[ENGINE] Preflight failed: {preflight_error}")
+                    last_preflight_msg = preflight_error
+                    last_preflight_log_ts = now
+                if not transient:
+                    time.sleep(30)
+                    continue
+                print("[ENGINE] Continuing startup despite transient preflight issue; will retry inside session.")
+
+            if _MARKET_HOURS_ONLY:
+                try:
+                    _wait_for_market_open()
+                except Exception as wme:
+                    print(f"[ENGINE] _wait_for_market_open raised: {wme}")
+                    time.sleep(30)
+                    continue
+
+            session += 1
+            print(f"[ENGINE] {'Starting' if session == 1 else 'Restarting'} session #{session} ...")
+            try:
+                _engine_session(session)
+            except SystemExit:
+                raise
+            except Exception as e:
+                msg = f"[ENGINE] Crash in session #{session}: {e}"
+                print(msg)
+                _worker_status.update({
+                    "running": False,
+                    "state": "offline",
+                    "message": f"Engine failed to start: {e}",
+                    "last_heartbeat": int(time.time()),
+                })
+                try:
+                    socketio.emit("worker_status", _worker_status)
+                except Exception:
+                    pass
+                try:
+                    send_crash_notification(msg)
+                except Exception:
+                    pass
+            print(f"[ENGINE] Session #{session} ended. Next session in 5s ...")
+            time.sleep(5)
+
         except SystemExit:
             raise
-        except Exception as e:
-            msg = f"[ENGINE] Crash in session #{session}: {e}"
-            print(msg)
+        except Exception as supervisor_err:
+            # Last-resort catch: log the unexpected error, refresh heartbeat,
+            # and continue looping so the supervisor thread NEVER dies.
+            print(f"[ENGINE] Unexpected supervisor error (will retry in 15s): {supervisor_err}")
             _worker_status.update({
                 "running": False,
                 "state": "offline",
-                "message": f"Engine failed to start: {e}",
+                "message": f"Supervisor recovered from unexpected error: {supervisor_err}",
                 "last_heartbeat": int(time.time()),
             })
             try:
                 socketio.emit("worker_status", _worker_status)
             except Exception:
                 pass
-            try:
-                send_crash_notification(msg)
-            except Exception:
-                pass
-        print(f"[ENGINE] Session #{session} ended. Next session in 5s ...")
-        time.sleep(5)
+            time.sleep(15)
 
 
 # Engine always starts inside the dashboard process.
@@ -2356,6 +2399,11 @@ else:
           "in your Render env vars to lock it down.")
 
 if os.environ.get("DISABLE_ENGINE_AUTOSTART") != "1":
+    # Independent watchdog: keeps last_heartbeat fresh even if supervisor crashes.
+    _watchdog_thread = threading.Thread(
+        target=_heartbeat_watchdog, daemon=True, name="HeartbeatWatchdog"
+    )
+    _watchdog_thread.start()
     _supervisor_thread = threading.Thread(
         target=_engine_supervisor, daemon=True, name="EngineSupervisor"
     )
