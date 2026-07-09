@@ -1979,9 +1979,9 @@ def _engine_session(session_num: int) -> None:
     # License gate: live trading requires an active license. Paper is free.
     # Force a fresh server re-check so a cancelled/refunded license can't start
     # a new live session on stale local data.
-    if os.environ.get("TRADING_MODE", "paper").strip().lower() == "live":
+    if _requested_mode() == "live":
         _revalidate_local_license(force=True)
-    if os.environ.get("TRADING_MODE", "paper").strip().lower() == "live" and not _license_is_active():
+    if _requested_mode() == "live" and not _license_is_active():
         os.environ["TRADING_MODE"] = "paper"
         os.environ["LIVE_TRADING_ENABLED"] = "false"
         msg = ("Live trading requires an active license — running in PAPER mode. "
@@ -2166,6 +2166,25 @@ def _engine_preflight_error() -> str:
     alpha_present = bool(key_store.get_alpha_key())
     if not alpha_present:
         return "Missing ALPHA_VANTAGE_KEY. Open SETUP API KEYS and save it."
+
+    # Preflight the account that the engine will actually use right now.
+    if _effective_mode() == "live":
+        lk, ls = key_store.get_live_keys()
+        live_ok, live_detail = _alpaca_auth_probe(
+            lk, ls, "https://api.alpaca.markets"
+        )
+        if not live_ok:
+            if _is_transient_broker_error(live_detail):
+                return (
+                    "Live Alpaca preflight could not reach broker (temporary network/API issue). "
+                    "Engine will auto-retry. "
+                    f"Detail: {live_detail}"
+                )
+            return (
+                "Live Alpaca authorization failed. Re-enter ALPACA_LIVE_KEY and "
+                f"ALPACA_LIVE_SECRET as a matching LIVE pair. Detail: {live_detail}"
+            )
+        return ""
 
     paper_ok, paper_detail = _alpaca_auth_probe(
         ALPACA_KEY, ALPACA_SECRET, "https://paper-api.alpaca.markets"
