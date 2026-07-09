@@ -770,6 +770,9 @@
                 <button class="btn btn-outline-secondary btn-sm" onclick="copySupportSnapshot()">
                   <i class="fa-solid fa-copy me-1"></i>Copy Support Report
                 </button>
+                <button class="btn btn-outline-warning btn-sm" onclick="copySupportPayload()">
+                  <i class="fa-solid fa-file-export me-1"></i>Copy Full Support Payload
+                </button>
               </div>
               <div id="supportTestSummary" class="small-muted mb-2">No self-test run yet.</div>
               <div id="supportTestChecks" class="small-muted mb-3"></div>
@@ -1865,6 +1868,12 @@
       return r.json();
     }
 
+    async function fetchSupportPayload() {
+      const r = await fetch('/api/support/payload');
+      if (!r.ok) throw new Error('payload unavailable');
+      return r.json();
+    }
+
     function renderSupportSnapshot(snapshot) {
       const box = document.getElementById('supportSnapshotBox');
       if (box) box.textContent = JSON.stringify(snapshot, null, 2);
@@ -1933,6 +1942,21 @@
       } catch {
         const summary = document.getElementById('supportTestSummary');
         if (summary) summary.innerHTML = '<span style="color:var(--down)">Could not copy support report.</span>';
+      }
+    }
+
+    async function copySupportPayload() {
+      try {
+        const payload = await fetchSupportPayload();
+        const box = document.getElementById('supportSnapshotBox');
+        if (box) box.textContent = JSON.stringify(payload, null, 2);
+        const text = JSON.stringify(payload, null, 2);
+        await navigator.clipboard.writeText(text);
+        const summary = document.getElementById('supportTestSummary');
+        if (summary) summary.innerHTML = '<span style="color:var(--up)">Full support payload copied to clipboard.</span>';
+      } catch {
+        const summary = document.getElementById('supportTestSummary');
+        if (summary) summary.innerHTML = '<span style="color:var(--down)">Could not copy full support payload.</span>';
       }
     }
 

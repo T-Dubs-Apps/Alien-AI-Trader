@@ -951,6 +951,83 @@ def support_snapshot():
     }), 200
 
 
+@app.route("/api/support/payload", methods=["GET"])
+def support_payload():
+    """One-shot support bundle (non-secret) for customer troubleshooting."""
+    alpha_present = bool(key_store.get_alpha_key())
+    paper_ok, paper_detail = _alpaca_auth_probe(
+        ALPACA_KEY, ALPACA_SECRET, "https://paper-api.alpaca.markets")
+    live_key, live_secret = key_store.get_live_keys()
+    live_ok, live_detail = _alpaca_auth_probe(
+        live_key, live_secret, "https://api.alpaca.markets") if (live_key and live_secret) else (False, "live keys not set")
+
+    status = dict(_worker_status)
+    last = status.get("last_heartbeat")
+    stale = (int(time.time()) - int(last)) if last is not None else None
+
+    payload = {
+        "timestamp": int(time.time()),
+        "capture": {
+            "requested_by": "dashboard_ui",
+            "schema": "support-payload-v1",
+        },
+        "app": {
+            "version": os.environ.get("APP_VERSION", "unknown"),
+            "render_service": os.environ.get("RENDER_SERVICE_NAME", "local"),
+            "render_commit": os.environ.get("RENDER_GIT_COMMIT", "local"),
+            "python": sys.version.split()[0],
+        },
+        "engine_status": {
+            "state": status.get("state"),
+            "running": bool(status.get("running")),
+            "message": status.get("message"),
+            "stale_seconds": stale,
+            "requested_mode": _requested_mode(),
+            "effective_mode": _effective_mode(),
+        },
+        "engine_diag": {
+            "engine_can_start": alpha_present and (live_ok if _effective_mode() == "live" else paper_ok),
+            "alpha_vantage_key": {
+                "present": alpha_present,
+                "from_env": bool(os.environ.get("ALPHA_VANTAGE_KEY")),
+            },
+            "alpaca_paper": {
+                "keys_present": bool(ALPACA_KEY and ALPACA_SECRET),
+                "authorized": paper_ok,
+                "detail": paper_detail,
+            },
+            "alpaca_live": {
+                "keys_present": bool(live_key and live_secret),
+                "authorized": live_ok,
+                "detail": live_detail,
+            },
+            "requested_mode": _requested_mode(),
+            "effective_mode": _effective_mode(),
+        },
+        "license": {
+            "active": _license_is_active(),
+            "live_allowed": _live_allowed()[0],
+            "live_block_reason": _live_allowed()[1],
+        },
+        "settings": {
+            "trading_mode_requested": _requested_mode(),
+            "trading_mode_effective": _effective_mode(),
+            "market_hours_only": _MARKET_HOURS_ONLY,
+            "heartbeat_seconds": _HEARTBEAT_SECS,
+            "poll_seconds": _trading_settings.get("poll_seconds"),
+            "scan_all_market": _trading_settings.get("scan_all_market"),
+            "max_positions": _trading_settings.get("max_positions"),
+            "max_trades_per_hour": _trading_settings.get("max_trades_per_hour"),
+            "auto_trade": bool(_trading_settings.get("auto_trade", True)),
+        },
+        "notes": [
+            "No secrets are included in this payload.",
+            "Share this JSON with support to diagnose offline/live issues quickly.",
+        ],
+    }
+    return jsonify(payload), 200
+
+
 @app.route("/favicon.svg", methods=["GET"])
 def favicon_svg():
     resp = app.make_response(FAVICON_SVG)
