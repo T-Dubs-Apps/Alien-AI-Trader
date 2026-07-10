@@ -203,6 +203,7 @@ class TradingEngine:
         self.ts = TimeSeries(key=alpha_vantage_key, output_format="json")
 
         self.pb = Pushbullet(pushbullet_token) if pushbullet_token else None
+        self._pb_disabled_reason = ""
 
         # ── Pushover (DND-breaking mobile alerts) ──
         self.pushover_token = os.environ.get("PUSHOVER_TOKEN", "")
@@ -1407,7 +1408,15 @@ class TradingEngine:
             try:
                 self.pb.push_note(f"Alien AI Trader [{level.upper()}]", message)
             except Exception as e:
-                print(f"[Pushbullet] send failed: {e}")
+                err_txt = str(e)
+                print(f"[Pushbullet] send failed: {err_txt}")
+                # Pushbullet may return plan-gate errors (e.g. pushbullet_pro_required).
+                # Disable further PB sends to avoid log spam while keeping trading alive.
+                if "pushbullet_pro_required" in err_txt.lower() or "pro is required" in err_txt.lower():
+                    self._pb_disabled_reason = "Pushbullet API call requires Pro for this account"
+                    self.pb = None
+                    print("[Pushbullet] Disabled further Pushbullet sends for this session: "
+                          f"{self._pb_disabled_reason}. Use Pushover or upgrade Pushbullet plan.")
 
         title = f"Alien AI Trader — {symbol or level.upper()}"
         if level == "warn":
