@@ -177,6 +177,7 @@ LICENSE_SERVER_URL = os.environ.get(
 ).rstrip("/")
 LICENSE_FILE = os.path.join(DATA_DIR, "license.json")
 TRUSTED_DEVICES_FILE = os.path.join(DATA_DIR, "trusted_devices.json")
+OWNER_FREEZE_FILE = os.path.join(DATA_DIR, "owner_freeze.json")
 
 
 def _clean_env_value(name: str, default: str = "") -> str:
@@ -254,10 +255,12 @@ LICENSE_SERVER_URL = _clean_env_value(
 import hmac
 DASHBOARD_PASSWORD = _clean_env_value("DASHBOARD_PASSWORD", "")
 TRUSTED_OWNER_EMAILS_ENV = _clean_env_value("TRUSTED_OWNER_EMAILS", "")
+OWNER_FREEZE_TOKEN = _clean_env_value("OWNER_FREEZE_TOKEN", "")
 TRUSTED_DEVICE_COOKIE = "aat_trusted_device"
 OWNER_REAUTH_DAYS_MIN = int(os.environ.get("OWNER_REAUTH_DAYS_MIN", "120"))
 OWNER_REAUTH_DAYS_MAX = int(os.environ.get("OWNER_REAUTH_DAYS_MAX", "180"))
 _trusted_devices_lock = Lock()
+_owner_freeze_lock = Lock()
 
 # Path prefixes that must stay reachable WITHOUT logging in.
 _PUBLIC_PATH_PREFIXES = (
@@ -379,6 +382,54 @@ def _trusted_device_reauth_due(device_id: str) -> bool:
         return False
     due = int(rec.get("next_reauth_ts", 0) or 0)
     return bool(due and int(time.time()) >= due)
+
+
+def _owner_freeze_enabled() -> bool:
+    return bool(OWNER_FREEZE_TOKEN)
+
+
+def _load_owner_freeze_state() -> dict:
+    try:
+        with open(OWNER_FREEZE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        pass
+    return {"locked": False, "updated_at": 0, "updated_by": ""}
+
+
+def _save_owner_freeze_state(data: dict) -> None:
+    try:
+        with open(OWNER_FREEZE_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+    except Exception:
+        pass
+
+
+def _owner_freeze_is_locked() -> bool:
+    if not _owner_freeze_enabled():
+        return False
+    with _owner_freeze_lock:
+        state = _load_owner_freeze_state()
+        return bool(state.get("locked", False))
+
+
+def _owner_freeze_block(action: str):
+    if not _owner_freeze_is_locked():
+        return None
+    return jsonify({
+        "status": "locked",
+        "message": f"Owner Lockdown Freeze is enabled. '{action}' is blocked until owner unlocks.",
+    }), 423
+
+
+def _owner_freeze_token_ok(supplied: str) -> bool:
+    candidate = _normalize_dashboard_password(supplied or "")
+    expected = _normalize_dashboard_password(OWNER_FREEZE_TOKEN)
+    if not candidate or not expected:
+        return False
+    return hmac.compare_digest(candidate.encode("utf-8"), expected.encode("utf-8"))
 
 # -- Distribution URLs (used by the shareable Render landing page /get) --------
 # The public repo IS the installation package. The GitHub archive link always
@@ -963,6 +1014,43 @@ def dashboard_logout():
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"status": "ok"}), 200
+
+
+@app.route("/api/owner/freeze/status", methods=["GET"])
+def owner_freeze_status():
+    with _owner_freeze_lock:
+        state = _load_owner_freeze_state()
+    return jsonify({
+        "enabled": _owner_freeze_enabled(),
+        "locked": bool(state.get("locked", False)) if _owner_freeze_enabled() else False,
+        "updated_at": int(state.get("updated_at", 0) or 0),
+        "updated_by": state.get("updated_by", ""),
+    }), 200
+
+
+@app.route("/api/owner/freeze", methods=["POST"])
+def owner_freeze_set():
+    if not _owner_freeze_enabled():
+        return jsonify({
+            "status": "error",
+            "message": "OWNER_FREEZE_TOKEN is not configured for this deployment.",
+        }), 400
+
+    payload = request.json or {}
+    token = payload.get("token") or ""
+    if not _owner_freeze_token_ok(token):
+        return jsonify({"status": "error", "message": "Invalid owner freeze token."}), 403
+
+    lock_value = bool(payload.get("locked", True))
+    actor = _norm_email(session.get("owner_email") or "") or "owner"
+    with _owner_freeze_lock:
+        state = {
+            "locked": lock_value,
+            "updated_at": int(time.time()),
+            "updated_by": actor,
+        }
+        _save_owner_freeze_state(state)
+    return jsonify({"status": "ok", **state}), 200
 
 
 def _alpaca_auth_probe(key, secret, base_url):
@@ -1798,6 +1886,9 @@ def license_local():
 
 @app.route("/api/license/activate", methods=["POST"])
 def license_activate():
+    blocked = _owner_freeze_block("license activation")
+    if blocked:
+        return blocked
     payload = request.json or {}
     email = _norm_email(payload.get("email") or "")
     if not email:
@@ -1884,6 +1975,9 @@ def license_pricing_proxy():
 def submit_order():
     """Submit a real order through Alpaca. Paper or live follows the current
     license-gated effective mode (same account the AI engine is trading)."""
+    blocked = _owner_freeze_block("manual orders")
+    if blocked:
+        return blocked
     client = _active_alpaca()
     if not client:
         return jsonify({
@@ -1951,6 +2045,9 @@ def submit_order():
 @app.route("/api/trader/toggle", methods=["POST"])
 def trader_toggle():
     global _ai_trader_enabled
+    blocked = _owner_freeze_block("AI trader toggle")
+    if blocked:
+        return blocked
     payload = request.json or {}
     if "enabled" in payload:
         _ai_trader_enabled = bool(payload["enabled"])
@@ -1997,6 +2094,9 @@ def add_notification():
 
 @app.route("/api/notifications/clear", methods=["POST"])
 def clear_notifications():
+    blocked = _owner_freeze_block("notification clearing")
+    if blocked:
+        return blocked
     global _notifications
     _notifications = []
     socketio.emit("notifications_cleared", {})
@@ -2031,6 +2131,9 @@ def get_trading_settings():
 @app.route("/api/settings/trading", methods=["POST"])
 def update_trading_settings():
     global _trading_settings, _MARKET_HOURS_ONLY
+    blocked = _owner_freeze_block("trading settings update")
+    if blocked:
+        return blocked
     payload = request.json or {}
 
     # ── Paper ↔ Live switch — license-gated, fails safe to paper ──────────────
@@ -2106,6 +2209,9 @@ def save_live_keys():
     """Save the user's LIVE Alpaca keys entered in-app (no Render dashboard trip).
     Verifies them against Alpaca before storing so we never enable live with bad
     keys. An optional Alpha Vantage key can be added/updated at the same time."""
+    blocked = _owner_freeze_block("live key updates")
+    if blocked:
+        return blocked
     payload = request.json or {}
     k = (payload.get("alpaca_live_key") or "").strip()
     s = (payload.get("alpaca_live_secret") or "").strip()

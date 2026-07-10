@@ -20,6 +20,12 @@ services:
       # Strongly recommended: pick a strong password unique to your deployment.
       - key: DASHBOARD_PASSWORD
         sync: false
+      # Trusted owner emails for new-device owner login (comma-separated).
+      - key: TRUSTED_OWNER_EMAILS
+        sync: false
+      # Owner-only lockdown token used by in-app Freeze button.
+      - key: OWNER_FREEZE_TOKEN
+        sync: false
       # -- Subscription persistence (survive updates / restarts / crashes) --
       # LICENSE_EMAIL: the email you purchased with. On every boot the app
       #   re-validates it and auto-restores your license from Stripe — so an

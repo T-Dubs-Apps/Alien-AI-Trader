@@ -780,6 +780,34 @@
             </div>
           </div>
 
+          <div class="col-12">
+            <div class="glass-card">
+              <div class="section-title"><i class="fa-solid fa-lock me-1"></i>Owner Lockdown Freeze</div>
+              <div class="small-muted mb-2">
+                When locked, in-app write actions are blocked (settings, keys, manual orders, toggles). Blueprint access remains unchanged.
+              </div>
+              <div class="d-flex align-items-center gap-3 mb-2">
+                <span id="freezePill" class="status-pill unknown">Checking…</span>
+                <span class="small-muted" id="freezeInfo"></span>
+              </div>
+              <div class="row g-2 align-items-end">
+                <div class="col-12 col-md-6">
+                  <label class="form-label">Owner Freeze Token</label>
+                  <input id="freezeToken" type="password" class="form-control form-control-sm" placeholder="Set OWNER_FREEZE_TOKEN in Render and enter it here">
+                </div>
+                <div class="col-12 col-md-6 d-flex gap-2">
+                  <button class="btn btn-sm btn-danger" onclick="setOwnerFreeze(true)">
+                    <i class="fa-solid fa-lock me-1"></i>Lock
+                  </button>
+                  <button class="btn btn-sm btn-outline-success" onclick="setOwnerFreeze(false)">
+                    <i class="fa-solid fa-lock-open me-1"></i>Unlock
+                  </button>
+                </div>
+              </div>
+              <div class="small-muted mt-2" id="freezeResult"></div>
+            </div>
+          </div>
+
           <!-- Trading Mode -->
           <!-- ── PORTFOLIO SAFETY SHIELD ── -->
           <div class="col-12">
@@ -1965,6 +1993,58 @@
       }
     }
 
+    async function fetchOwnerFreezeStatus() {
+      const pill = document.getElementById('freezePill');
+      const info = document.getElementById('freezeInfo');
+      const result = document.getElementById('freezeResult');
+      try {
+        const r = await fetch('/api/owner/freeze/status');
+        const d = await r.json();
+        if (!d.enabled) {
+          if (pill) { pill.className = 'status-pill unknown'; pill.innerHTML = '&#x25cf; Disabled'; }
+          if (info) info.textContent = 'Set OWNER_FREEZE_TOKEN in Render to enable owner freeze.';
+          if (result) result.textContent = '';
+          return;
+        }
+        if (d.locked) {
+          if (pill) { pill.className = 'status-pill offline'; pill.innerHTML = '&#x25cf; Locked'; }
+          if (info) info.textContent = 'Write actions blocked until owner unlocks.';
+        } else {
+          if (pill) { pill.className = 'status-pill online'; pill.innerHTML = '&#x25cf; Unlocked'; }
+          if (info) info.textContent = 'Write actions allowed.';
+        }
+      } catch {
+        if (pill) { pill.className = 'status-pill unknown'; pill.innerHTML = '&#x25cf; Unavailable'; }
+        if (info) info.textContent = 'Could not load freeze status.';
+      }
+    }
+
+    async function setOwnerFreeze(locked) {
+      const tokenEl = document.getElementById('freezeToken');
+      const result = document.getElementById('freezeResult');
+      const token = tokenEl ? tokenEl.value.trim() : '';
+      if (!token) {
+        if (result) result.innerHTML = '<span style="color:var(--down)">Enter your owner freeze token first.</span>';
+        return;
+      }
+      try {
+        const r = await fetch('/api/owner/freeze', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ locked: !!locked, token: token })
+        });
+        const d = await r.json();
+        if (!r.ok || d.status !== 'ok') {
+          if (result) result.innerHTML = '<span style="color:var(--down)">⚠ ' + escHtml(d.message || 'Could not update freeze state.') + '</span>';
+          return;
+        }
+        if (result) result.innerHTML = '<span style="color:var(--up)">✔ Owner freeze is now ' + (d.locked ? 'LOCKED' : 'UNLOCKED') + '.</span>';
+        await fetchOwnerFreezeStatus();
+      } catch {
+        if (result) result.innerHTML = '<span style="color:var(--down)">⚠ Could not update freeze state.</span>';
+      }
+    }
+
     // ═══════════════════════════════════════════
     //  TRADE PANEL
     // ═══════════════════════════════════════════
@@ -2490,6 +2570,7 @@
     loadLicensePricing();
     initTradingMode();
     runBlueprintSelfTest();
+    fetchOwnerFreezeStatus();
 
     // Fallback REST pollers (WebSocket is primary; these catch up if WS stalls)
     setInterval(fetchWorkerStatus, 20000);
