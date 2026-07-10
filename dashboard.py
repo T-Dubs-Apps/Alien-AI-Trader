@@ -653,6 +653,7 @@ _ai_trader_enabled = True
 # ── Integrated engine globals ────────────────────────────────────────────
 _engine: "TradingEngine | None" = None
 _ladder: "PortfolioLadderScanner | None" = None
+_supervisor_thread: "threading.Thread | None" = None
 _RUN_SECONDS     = int(os.environ.get("RUN_SECONDS",             "21540"))
 _LADDER_INTERVAL = int(os.environ.get("LADDER_INTERVAL",         "120"))
 _HEARTBEAT_SECS  = int(os.environ.get("HEARTBEAT_EVERY_SECONDS", "10"))
@@ -2459,9 +2460,29 @@ def _heartbeat_watchdog() -> None:
     """Independent thread: refreshes last_heartbeat every 10 s so the heartbeat
     never goes stale even if the supervisor or session thread crashes.
     This is the ONLY place that guarantees liveness of the status endpoint."""
+    global _supervisor_thread
     while True:
         try:
             _worker_status["last_heartbeat"] = int(time.time())
+            # If supervisor is not running (or never started), recover it.
+            if os.environ.get("DISABLE_ENGINE_AUTOSTART") != "1":
+                need_restart = (_supervisor_thread is None) or (not _supervisor_thread.is_alive())
+                if need_restart:
+                    _worker_status.update({
+                        "running": False,
+                        "state": "starting",
+                        "message": "Engine supervisor recovering...",
+                        "last_heartbeat": int(time.time()),
+                    })
+                    try:
+                        socketio.emit("worker_status", _worker_status)
+                    except Exception:
+                        pass
+                    print("[ENGINE] Supervisor was not alive; restarting supervisor thread.")
+                    _supervisor_thread = threading.Thread(
+                        target=_engine_supervisor, daemon=True, name="EngineSupervisor"
+                    )
+                    _supervisor_thread.start()
         except Exception:
             pass
         time.sleep(10)
