@@ -1171,6 +1171,20 @@
     }
     function saveWatchlist(l) { localStorage.setItem(LS_KEY, JSON.stringify(l)); }
     function normalizeSymbol(s) { return String(s||"").trim().toUpperCase(); }
+    function upsertWatchlistSymbols(symbols) {
+      const list = loadWatchlist();
+      let changed = false;
+      (symbols || []).forEach(raw => {
+        const sym = normalizeSymbol(raw);
+        if (!sym) return;
+        if (!list.includes(sym)) {
+          list.push(sym);
+          changed = true;
+        }
+      });
+      if (changed) saveWatchlist(list);
+      return changed;
+    }
 
     // ═══════════════════════════════════════════
     //  FORMATTING HELPERS
@@ -1567,6 +1581,19 @@
       badge.style.display = '';
       badge.textContent = unreadAlerts > 99 ? '99+' : unreadAlerts;
 
+      // Mirror actual trade executions into the Live Feed and auto-track symbol.
+      try {
+        const sym = normalizeSymbol(note?.symbol || '');
+        const msg = String(note?.message || '');
+        const upper = msg.toUpperCase();
+        const isTradeEvent = upper.includes(' BUY ') || upper.startsWith('BUY ') || upper.includes(' SELL ') || upper.includes(': SELL ');
+        if (sym && isTradeEvent) {
+          const changed = upsertWatchlistSymbols([sym]);
+          addFeedSysLine(`${sym} ${msg}`);
+          if (changed) refreshQuotesNow();
+        }
+      } catch {}
+
       if (document.getElementById('tabNotifications').classList.contains('active')) {
         renderNotifs(_notifications_cache);
       }
@@ -1697,6 +1724,14 @@
         const posCount = Object.keys(d.positions || {}).length;
         posEl.textContent = posCount + (d.max_positions ? ' / ' + d.max_positions : '');
         posSub.textContent = d.scan_all_market ? 'Full market scan ON' : 'Watchlist scan';
+
+        // Ensure current holdings are visible on cards/feed even if user never
+        // manually added them to the watchlist.
+        const held = Object.keys(d.positions || {});
+        if (held.length) {
+          const changed = upsertWatchlistSymbols(held);
+          if (changed) refreshQuotesNow();
+        }
       }
 
       // ROI % display

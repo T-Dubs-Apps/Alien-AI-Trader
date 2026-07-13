@@ -1772,6 +1772,185 @@ def _safe_float(x):
         return None
 
 
+def _symbol_name(sym: str) -> str:
+    return next((i["name"] for i in SYMBOL_CATALOG if i["symbol"] == sym), sym)
+
+
+def _quote_diag_symbol(sym: str, active_client, feed_order: List[str]) -> Dict[str, Any]:
+    """Best-effort diagnostics for a single symbol quote path."""
+    diag: Dict[str, Any] = {
+        "symbol": sym,
+        "name": _symbol_name(sym),
+        "attempts": [],
+        "result": {
+            "price": None,
+            "open": None,
+            "change": None,
+            "change_percent": None,
+            "provider": None,
+        },
+    }
+
+    price = None
+    open_px = None
+
+    if active_client:
+        for feed in feed_order:
+            try:
+                try:
+                    snap = active_client.get_snapshot(sym, feed=feed)
+                except TypeError:
+                    snap = active_client.get_snapshot(sym)
+                latest = getattr(snap, "latest_trade", None)
+                daily = getattr(snap, "daily_bar", None)
+                p = _safe_float(getattr(latest, "price", None)) if latest else None
+                o = _safe_float(getattr(daily, "o", None)) if daily else None
+                diag["attempts"].append({
+                    "step": "alpaca_snapshot",
+                    "feed": feed,
+                    "ok": True,
+                    "price": p,
+                    "open": o,
+                })
+                if price is None and p is not None:
+                    price = p
+                if open_px is None and o is not None:
+                    open_px = o
+                if price is not None and open_px is not None:
+                    break
+            except Exception as e:
+                diag["attempts"].append({
+                    "step": "alpaca_snapshot",
+                    "feed": feed,
+                    "ok": False,
+                    "error": str(e)[:180],
+                })
+
+        if price is None:
+            for feed in feed_order:
+                try:
+                    try:
+                        t = active_client.get_latest_trade(sym, feed=feed)
+                    except TypeError:
+                        t = active_client.get_latest_trade(sym)
+                    p = _safe_float(getattr(t, "price", None))
+                    diag["attempts"].append({
+                        "step": "alpaca_latest_trade",
+                        "feed": feed,
+                        "ok": True,
+                        "price": p,
+                    })
+                    if p is not None:
+                        price = p
+                        break
+                except Exception as e:
+                    diag["attempts"].append({
+                        "step": "alpaca_latest_trade",
+                        "feed": feed,
+                        "ok": False,
+                        "error": str(e)[:180],
+                    })
+
+        if price is None:
+            for feed in feed_order:
+                try:
+                    try:
+                        q = active_client.get_latest_quote(sym, feed=feed)
+                    except TypeError:
+                        q = active_client.get_latest_quote(sym)
+                    bid = _safe_float(getattr(q, "bidprice", None))
+                    ask = _safe_float(getattr(q, "askprice", None))
+                    p = (bid + ask) / 2.0 if (bid and ask) else (ask or bid)
+                    diag["attempts"].append({
+                        "step": "alpaca_latest_quote",
+                        "feed": feed,
+                        "ok": True,
+                        "bid": bid,
+                        "ask": ask,
+                        "price": p,
+                    })
+                    if p is not None:
+                        price = p
+                        break
+                except Exception as e:
+                    diag["attempts"].append({
+                        "step": "alpaca_latest_quote",
+                        "feed": feed,
+                        "ok": False,
+                        "error": str(e)[:180],
+                    })
+
+        if open_px is None:
+            for feed in feed_order:
+                try:
+                    try:
+                        bars = active_client.get_bars(sym, "1Day", limit=1, feed=feed)
+                    except TypeError:
+                        bars = active_client.get_bars(sym, "1Day", limit=1)
+                    bar_list = list(bars) if bars else []
+                    o = _safe_float(getattr(bar_list[-1], "o", None)) if bar_list else None
+                    diag["attempts"].append({
+                        "step": "alpaca_daily_bar_open",
+                        "feed": feed,
+                        "ok": True,
+                        "open": o,
+                    })
+                    if o is not None:
+                        open_px = o
+                        break
+                except Exception as e:
+                    diag["attempts"].append({
+                        "step": "alpaca_daily_bar_open",
+                        "feed": feed,
+                        "ok": False,
+                        "error": str(e)[:180],
+                    })
+
+    if price is None and _alpha:
+        try:
+            data, _ = _alpha.get_quote_endpoint(sym)
+            p = _safe_float(data.get("05. price"))
+            ch = _safe_float(data.get("09. change"))
+            chp = _safe_float(str(data.get("10. change percent", "")).replace("%", "").strip())
+            diag["attempts"].append({
+                "step": "alpha_vantage_quote",
+                "ok": True,
+                "price": p,
+                "change": ch,
+                "change_percent": chp,
+            })
+            if p is not None:
+                price = p
+                if open_px is None and ch is not None:
+                    open_px = p - ch
+        except Exception as e:
+            diag["attempts"].append({
+                "step": "alpha_vantage_quote",
+                "ok": False,
+                "error": str(e)[:180],
+            })
+
+    change = change_pct = None
+    if price is not None and open_px:
+        change = round(price - open_px, 4)
+        change_pct = round(change / open_px * 100, 4)
+
+    provider = None
+    for step in diag["attempts"]:
+        if step.get("ok") and step.get("price") is not None:
+            provider = step.get("step")
+            break
+
+    diag["result"] = {
+        "price": price,
+        "open": open_px,
+        "change": change,
+        "change_percent": change_pct,
+        "provider": provider,
+    }
+    return diag
+
+
 def _fetch_quotes_uncached(symbols: List[str]) -> Dict[str, Any]:
     """Internal: hits Alpaca then Alpha Vantage without cache."""
     out: Dict[str, Any] = {}
@@ -1862,7 +2041,7 @@ def _fetch_quotes_uncached(symbols: List[str]) -> Dict[str, Any]:
                     change_pct = round(change / open_px * 100, 4)
                 out[sym] = {
                     "symbol": sym,
-                    "name": next((i["name"] for i in SYMBOL_CATALOG if i["symbol"] == sym), sym),
+                    "name": _symbol_name(sym),
                     "price": price,
                     "change": change,
                     "change_percent": change_pct,
@@ -1882,7 +2061,7 @@ def _fetch_quotes_uncached(symbols: List[str]) -> Dict[str, Any]:
                 change_pct = _safe_float(str(change_pct_raw).replace("%", "").strip())
                 out[sym] = {
                     "symbol": sym,
-                    "name": next((i["name"] for i in SYMBOL_CATALOG if i["symbol"] == sym), sym),
+                    "name": _symbol_name(sym),
                     "price": price,
                     "change": change,
                     "change_percent": change_pct,
@@ -1894,7 +2073,7 @@ def _fetch_quotes_uncached(symbols: List[str]) -> Dict[str, Any]:
         if sym not in out:
             out[sym] = {
                 "symbol": sym,
-                "name": next((i["name"] for i in SYMBOL_CATALOG if i["symbol"] == sym), sym),
+                "name": _symbol_name(sym),
                 "price": None, "change": None, "change_percent": None,
             }
 
@@ -1940,6 +2119,43 @@ def api_quotes():
             out[sym]["verdict"] = signals[sym].get("verdict")
 
     return jsonify(out), 200
+
+
+@app.route("/api/quotes/diag", methods=["GET"])
+def api_quotes_diag():
+    """Diagnostic quote probe for support. No secrets included."""
+    symbols_raw = (request.args.get("symbols", "") or "").strip()
+    if symbols_raw:
+        symbols = list(dict.fromkeys(
+            s.strip().upper() for s in symbols_raw.split(",") if s.strip()
+        ))
+    else:
+        from_worker = list(_worker_status.get("stocks") or [])
+        from_positions = list((_worker_status.get("positions") or {}).keys())
+        symbols = list(dict.fromkeys([*(s.upper() for s in from_worker), *(s.upper() for s in from_positions)]))
+        symbols = symbols[:10]
+
+    active_client = _active_alpaca()
+    feed_order = [ALPACA_DATA_FEED]
+    if ALPACA_DATA_FEED != "iex":
+        feed_order.append("iex")
+
+    results = []
+    for sym in symbols:
+        results.append(_quote_diag_symbol(sym, active_client, feed_order))
+
+    return jsonify({
+        "timestamp": int(time.time()),
+        "effective_mode": _effective_mode(),
+        "requested_mode": _requested_mode(),
+        "alpaca_client_present": bool(active_client),
+        "alpha_vantage_present": bool(_alpha),
+        "configured_feed": ALPACA_DATA_FEED,
+        "feed_probe_order": feed_order,
+        "symbols": symbols,
+        "results": results,
+        "note": "No secrets are included in this diagnostic payload.",
+    }), 200
 
 
 # -----------------------------------------------
