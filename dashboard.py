@@ -1216,6 +1216,42 @@ def support_payload():
     last = status.get("last_heartbeat")
     stale = (int(time.time()) - int(last)) if last is not None else None
 
+    # Include compact quote diagnostics so support can see exactly where
+    # market-data retrieval succeeds/fails without requiring extra API calls.
+    quote_symbols = []
+    try:
+        from_positions = list((status.get("positions") or {}).keys())
+        from_watchlist = list(status.get("stocks") or [])
+        quote_symbols = list(dict.fromkeys([
+            *(str(s).upper() for s in from_positions),
+            *(str(s).upper() for s in from_watchlist),
+        ]))[:10]
+    except Exception:
+        quote_symbols = []
+
+    quote_diag = {
+        "configured_feed": ALPACA_DATA_FEED,
+        "effective_mode": _effective_mode(),
+        "symbols": quote_symbols,
+        "results": [],
+    }
+    try:
+        active_client = _active_alpaca()
+        feed_order = [ALPACA_DATA_FEED]
+        if ALPACA_DATA_FEED != "iex":
+            feed_order.append("iex")
+        for sym in quote_symbols:
+            d = _quote_diag_symbol(sym, active_client, feed_order)
+            quote_diag["results"].append({
+                "symbol": d.get("symbol"),
+                "provider": (d.get("result") or {}).get("provider"),
+                "price": (d.get("result") or {}).get("price"),
+                "change_percent": (d.get("result") or {}).get("change_percent"),
+                "attempts": d.get("attempts", []),
+            })
+    except Exception as e:
+        quote_diag["error"] = str(e)
+
     payload = {
         "timestamp": int(time.time()),
         "capture": {
@@ -1271,9 +1307,11 @@ def support_payload():
             "max_trades_per_hour": _trading_settings.get("max_trades_per_hour"),
             "auto_trade": bool(_trading_settings.get("auto_trade", True)),
         },
+        "quotes_diag": quote_diag,
         "notes": [
             "No secrets are included in this payload.",
             "Share this JSON with support to diagnose offline/live issues quickly.",
+            "quotes_diag shows per-symbol quote provider/feed attempts.",
         ],
     }
     return jsonify(payload), 200
