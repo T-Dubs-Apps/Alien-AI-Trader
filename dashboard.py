@@ -780,6 +780,9 @@ _notifications: List[Dict[str, Any]] = []
 ALPACA_KEY = _clean_env_value("ALPACA_KEY", "")
 ALPACA_SECRET = _clean_env_value("ALPACA_SECRET", "")
 ALPACA_BASE_URL = _clean_env_value("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+ALPACA_DATA_FEED = (_clean_env_value("ALPACA_DATA_FEED", "iex") or "iex").lower()
+if ALPACA_DATA_FEED not in ("iex", "sip"):
+    ALPACA_DATA_FEED = "iex"
 ALPHA_VANTAGE_KEY = _clean_env_value("ALPHA_VANTAGE_KEY", "")
 # Separate LIVE credentials so the licensed Paper↔Live toggle can switch accounts
 # without the buyer ever regenerating keys. Paper keys above stay paper; these
@@ -1772,17 +1775,87 @@ def _safe_float(x):
 def _fetch_quotes_uncached(symbols: List[str]) -> Dict[str, Any]:
     """Internal: hits Alpaca then Alpha Vantage without cache."""
     out: Dict[str, Any] = {}
+    active_client = _active_alpaca()
 
-    if _alpaca:
+    feed_order = [ALPACA_DATA_FEED]
+    if ALPACA_DATA_FEED != "iex":
+        feed_order.append("iex")
+
+    if active_client:
         for sym in symbols:
             try:
-                # Snapshot gives the latest trade AND today's daily bar in one call,
-                # so we can show the day's move (▲/▼ vs open) — not just the price.
-                snap = _alpaca.get_snapshot(sym)
-                latest = getattr(snap, "latest_trade", None)
-                price = _safe_float(getattr(latest, "price", None)) if latest else None
-                daily = getattr(snap, "daily_bar", None)
-                open_px = _safe_float(getattr(daily, "o", None)) if daily else None
+                price = None
+                open_px = None
+
+                # 1) Try snapshot first (single call includes trade + daily bar).
+                for feed in feed_order:
+                    try:
+                        snap = active_client.get_snapshot(sym, feed=feed)
+                    except TypeError:
+                        snap = active_client.get_snapshot(sym)
+                    except Exception:
+                        continue
+                    latest = getattr(snap, "latest_trade", None)
+                    daily = getattr(snap, "daily_bar", None)
+                    if price is None and latest is not None:
+                        price = _safe_float(getattr(latest, "price", None))
+                    if open_px is None and daily is not None:
+                        open_px = _safe_float(getattr(daily, "o", None))
+                    if price is not None and open_px is not None:
+                        break
+
+                # 2) Fallback to latest trade if snapshot did not provide price.
+                if price is None:
+                    for feed in feed_order:
+                        try:
+                            try:
+                                t = active_client.get_latest_trade(sym, feed=feed)
+                            except TypeError:
+                                t = active_client.get_latest_trade(sym)
+                            price = _safe_float(getattr(t, "price", None))
+                            if price is not None:
+                                break
+                        except Exception:
+                            continue
+
+                # 3) Fallback to latest quote midpoint.
+                if price is None:
+                    for feed in feed_order:
+                        try:
+                            try:
+                                q = active_client.get_latest_quote(sym, feed=feed)
+                            except TypeError:
+                                q = active_client.get_latest_quote(sym)
+                            bid = _safe_float(getattr(q, "bidprice", None))
+                            ask = _safe_float(getattr(q, "askprice", None))
+                            if bid and ask:
+                                price = (bid + ask) / 2.0
+                                break
+                            if ask:
+                                price = ask
+                                break
+                            if bid:
+                                price = bid
+                                break
+                        except Exception:
+                            continue
+
+                # 4) If open is missing, fetch latest daily bar.
+                if open_px is None:
+                    for feed in feed_order:
+                        try:
+                            try:
+                                bars = active_client.get_bars(sym, "1Day", limit=1, feed=feed)
+                            except TypeError:
+                                bars = active_client.get_bars(sym, "1Day", limit=1)
+                            bar_list = list(bars) if bars else []
+                            if bar_list:
+                                open_px = _safe_float(getattr(bar_list[-1], "o", None))
+                                if open_px is not None:
+                                    break
+                        except Exception:
+                            continue
+
                 change = change_pct = None
                 if price is not None and open_px:
                     change = round(price - open_px, 4)

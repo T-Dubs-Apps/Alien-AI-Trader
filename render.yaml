@@ -10,6 +10,10 @@ services:
     # gthread does not support WebSockets and will break live dashboard updates.
     startCommand: gunicorn --worker-class gevent --workers 1 --bind 0.0.0.0:$PORT dashboard:app
     envVars:
+      # Pin a stable supported runtime; avoid automatic jumps to new Python
+      # majors that can break broker/data SDK compatibility.
+      - key: PYTHON_VERSION
+        value: 3.11.9
       - key: FLASK_SECRET
         generateValue: true
       # -- Dashboard security -----------------------------------------------
@@ -51,6 +55,10 @@ services:
         sync: false
       - key: ALPACA_BASE_URL
         sync: false
+      # Market data feed for Alpaca quote/bar calls.
+      # Use IEX by default so data keeps flowing on plans without SIP access.
+      - key: ALPACA_DATA_FEED
+        value: iex
       # LIVE account keys (real money). Optional — set these to enable the
       # in-app Paper→Live toggle. Live still only activates with a valid license.
       - key: ALPACA_LIVE_KEY

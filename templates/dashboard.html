@@ -1118,6 +1118,7 @@
     let pollTimer     = null;
     let notifFilter   = 'all';
     let unreadAlerts  = 0;
+    let marketDataSeen = false;
     const sparkCharts = {};  // symbol -> Chart instance
 
     // ═══════════════════════════════════════════
@@ -1387,6 +1388,11 @@
       if (!list.length) { renderWatchlistCards({}); return; }
       try {
         const quotes = await fetchQuotes(list);
+        const gotAnyPrice = list.some(sym => quotes[sym]?.price != null);
+        if (gotAnyPrice && !marketDataSeen) {
+          marketDataSeen = true;
+          addFeedSysLine('Market data stream active');
+        }
 
         list.forEach(sym => {
           if (openPrices[sym] == null && quotes[sym]?.price != null)
@@ -1468,6 +1474,7 @@
     //  LIVE FEED
     // ═══════════════════════════════════════════
     function addFeedLine(sym, newPrice, oldPrice, change) {
+      clearWaitingFeedPlaceholder();
       const dir = newPrice > oldPrice ? 'up' : 'down';
       const diff = newPrice - oldPrice;
       const el = document.getElementById('liveFeed');
@@ -1478,12 +1485,28 @@
       while (el.children.length > 200) el.removeChild(el.firstChild);
     }
     function addFeedSysLine(msg) {
+      clearWaitingFeedPlaceholder();
       const el = document.getElementById('liveFeed');
       const line = document.createElement('div');
       line.className = 'feed-line';
       line.innerHTML = `<span class="ts">${tsNow()}</span><span class="msg" style="color:var(--warn);">${escHtml(msg)}</span>`;
       el.appendChild(line);
       while (el.children.length > 200) el.removeChild(el.firstChild);
+    }
+    function clearWaitingFeedPlaceholder() {
+      const el = document.getElementById('liveFeed');
+      if (!el || !el.children || !el.children.length) return;
+      const toRemove = [];
+      Array.from(el.children).forEach(node => {
+        const msgNode = node.querySelector ? node.querySelector('.msg') : null;
+        const txt = (msgNode && msgNode.textContent ? msgNode.textContent : '').toLowerCase();
+        if (txt.includes('waiting for market data')) {
+          toRemove.push(node);
+        }
+      });
+      toRemove.forEach(node => {
+        try { el.removeChild(node); } catch (_) {}
+      });
     }
     function clearFeed() { document.getElementById('liveFeed').innerHTML = ''; }
 

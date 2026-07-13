@@ -200,6 +200,11 @@ class TradingEngine:
             self.api = self._make_alpaca("live")
             self.trading_mode = "live"
 
+        # Market data feed: default to IEX (widely available) so live mode keeps
+        # receiving quotes/bars even when SIP entitlement is absent.
+        feed = str(os.environ.get("ALPACA_DATA_FEED", "iex") or "iex").strip().lower()
+        self.alpaca_data_feed = feed if feed in ("iex", "sip") else "iex"
+
         self.ts = TimeSeries(key=alpha_vantage_key, output_format="json")
 
         self.pb = Pushbullet(pushbullet_token) if pushbullet_token else None
@@ -261,6 +266,11 @@ class TradingEngine:
         # Market candidates cache: avoid calling list_assets every scan cycle
         self._market_candidates_cache: Tuple[List[str], float] = ([], 0.0)
         self._market_candidates_ttl = int(os.environ.get("MARKET_CANDIDATES_TTL", "600"))  # 10 min
+
+        # Data-issue alert throttle: prevents notification spam when a symbol's
+        # market data feed is unavailable for multiple scan cycles.
+        self.data_issue_alert_cooldown = int(os.environ.get("DATA_ISSUE_ALERT_COOLDOWN", "300"))
+        self._last_data_issue_alert: Dict[str, float] = {}
 
         # ── Portfolio Safety Shield ─────────────────────────────────────────────
         # If the total portfolio value drops to/below this threshold,
@@ -504,7 +514,39 @@ class TradingEngine:
     def _scan_symbol(self, symbol: str):
         """Fetch price and evaluate a single symbol (runs in thread pool)."""
         price = self.get_live_price(symbol)
+        if price is None:
+            with self.lock:
+                self._symbol_signals[symbol] = {
+                    "symbol": symbol,
+                    "price": None,
+                    "verdict": "HOLD",
+                    "data_issue": "price_unavailable",
+                    "data_issue_detail": "No latest trade/quote available from broker or fallback feeds.",
+                }
+            self._alert_data_issue(
+                symbol,
+                "price_unavailable",
+                "Skipping this scan because no live price was returned.",
+            )
+            return
         self.evaluate(symbol, price)
+
+    def _alert_data_issue(self, symbol: str, issue: str, detail: str) -> None:
+        """Emit a throttled warning for data issues so users can diagnose skips."""
+        key = f"{symbol}:{issue}"
+        now = time.time()
+        last = self._last_data_issue_alert.get(key, 0.0)
+        if now - last < self.data_issue_alert_cooldown:
+            return
+        self._last_data_issue_alert[key] = now
+        self.send_alert(
+            (
+                f"DATA ISSUE {symbol}: {issue.replace('_', ' ')}. "
+                f"{detail}"
+            ),
+            level="warn",
+            symbol=symbol,
+        )
 
     # -------------------------------
     # Live settings poll
@@ -875,13 +917,53 @@ class TradingEngine:
 
         price = None
         try:
-            t = self.api.get_latest_trade(symbol)
-            price = float(t.price)
+            try:
+                t = self.api.get_latest_trade(symbol, feed=self.alpaca_data_feed)
+            except TypeError:
+                # Older alpaca_trade_api versions do not support feed=...
+                t = self.api.get_latest_trade(symbol)
+            price = float(getattr(t, "price", 0) or 0)
+            if price <= 0:
+                price = None
         except Exception:
-            # Failover to Alpha Vantage if Alpaca fails
+            # Feed entitlement mismatches are common in live mode; retry with IEX.
+            if self.alpaca_data_feed != "iex":
+                try:
+                    t = self.api.get_latest_trade(symbol, feed="iex")
+                    price = float(getattr(t, "price", 0) or 0)
+                    if price <= 0:
+                        price = None
+                except Exception:
+                    pass
+
+        # Fallback to quote midpoint when latest trade is unavailable.
+        if price is None:
+            for feed_try in [self.alpaca_data_feed, "iex"]:
+                try:
+                    try:
+                        q = self.api.get_latest_quote(symbol, feed=feed_try)
+                    except TypeError:
+                        q = self.api.get_latest_quote(symbol)
+                    bid = float(getattr(q, "bidprice", 0) or 0)
+                    ask = float(getattr(q, "askprice", 0) or 0)
+                    if bid > 0 and ask > 0:
+                        price = (bid + ask) / 2.0
+                        break
+                    if ask > 0:
+                        price = ask
+                        break
+                    if bid > 0:
+                        price = bid
+                        break
+                except Exception:
+                    continue
+
+        if price is None:
+            # Last-resort fallback to Alpha Vantage.
             try:
                 data, _ = self.ts.get_quote_endpoint(symbol)
-                price = float(data["05. price"])
+                px = float(data.get("05. price", 0) or 0)
+                price = px if px > 0 else None
             except Exception:
                 pass
 
@@ -911,7 +993,15 @@ class TradingEngine:
 
         df = None
         try:
-            bars = self.api.get_bars(symbol, TimeFrame.Day, limit=limit)
+            try:
+                bars = self.api.get_bars(symbol, TimeFrame.Day, limit=limit, feed=self.alpaca_data_feed)
+            except TypeError:
+                bars = self.api.get_bars(symbol, TimeFrame.Day, limit=limit)
+            except Exception:
+                if self.alpaca_data_feed != "iex":
+                    bars = self.api.get_bars(symbol, TimeFrame.Day, limit=limit, feed="iex")
+                else:
+                    raise
             bar_list = list(bars) if bars else []
             if bar_list:
                 df = pd.DataFrame([{
@@ -924,7 +1014,15 @@ class TradingEngine:
             else:
                 # Fallback: try hourly bars if daily returns nothing
                 # (can happen for thinly traded or recently listed symbols)
-                bars_h = self.api.get_bars(symbol, TimeFrame.Hour, limit=limit)
+                try:
+                    bars_h = self.api.get_bars(symbol, TimeFrame.Hour, limit=limit, feed=self.alpaca_data_feed)
+                except TypeError:
+                    bars_h = self.api.get_bars(symbol, TimeFrame.Hour, limit=limit)
+                except Exception:
+                    if self.alpaca_data_feed != "iex":
+                        bars_h = self.api.get_bars(symbol, TimeFrame.Hour, limit=limit, feed="iex")
+                    else:
+                        raise
                 bar_list_h = list(bars_h) if bars_h else []
                 if bar_list_h:
                     df = pd.DataFrame([{
@@ -987,9 +1085,13 @@ class TradingEngine:
             "forecast_direction": "neutral",
             "forecast_phase": "unknown",
             "predicted_price": None,
-            "verdict": "HOLD"
+            "verdict": "HOLD",
+            "data_issue": None,
+            "data_issue_detail": "",
         }
         if df is None or df.empty:
+            signal["data_issue"] = "bars_unavailable"
+            signal["data_issue_detail"] = "No historical bars available to compute indicators."
             return signal
 
         # Populate 52-week range from the daily bar window (up to ~5 months
@@ -1080,6 +1182,12 @@ class TradingEngine:
             return
 
         signal = self._get_signal(symbol, price)
+        if signal.get("data_issue"):
+            self._alert_data_issue(
+                symbol,
+                str(signal.get("data_issue")),
+                str(signal.get("data_issue_detail") or "Missing market data for indicators."),
+            )
         # Integrate news/sentiment analysis
         sentiment = get_symbol_sentiment(symbol)
         signal["sentiment_score"] = sentiment["sentiment_score"]
