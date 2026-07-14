@@ -1076,6 +1076,83 @@ def _alpaca_auth_probe(key, secret, base_url):
     return False, last_err
 
 
+def _alpaca_account_readiness(key, secret, base_url):
+    """Best-effort broker readiness details (no secrets).
+    Returns account status/block flags that commonly explain why deposits or
+    live orders are not allowed.
+    """
+    if not key or not secret:
+        return {
+            "available": False,
+            "error": "keys not set",
+            "hint": "Set matching key/secret for this account mode.",
+        }
+    try:
+        acct = REST(key, secret, base_url=base_url).get_account()
+
+        def _bool_attr(name, default=False):
+            try:
+                v = getattr(acct, name, default)
+                if isinstance(v, bool):
+                    return v
+                if v is None:
+                    return default
+                return str(v).strip().lower() == "true"
+            except Exception:
+                return default
+
+        def _str_attr(name, default=""):
+            try:
+                v = getattr(acct, name, default)
+                return "" if v is None else str(v)
+            except Exception:
+                return default
+
+        status = _str_attr("status", "unknown")
+        trading_blocked = _bool_attr("trading_blocked", False)
+        transfers_blocked = _bool_attr("transfers_blocked", False)
+        account_blocked = _bool_attr("account_blocked", False)
+
+        hint = "Account appears tradable."
+        if status.upper() != "ACTIVE":
+            hint = (
+                "Account status is not ACTIVE. Complete Alpaca onboarding/KYC "
+                "and wait for approval before funding/trading."
+            )
+        elif account_blocked:
+            hint = "Account is blocked. Contact Alpaca support to remove account restriction."
+        elif transfers_blocked:
+            hint = (
+                "Transfers are blocked. Bank link/ACH verification or compliance "
+                "review may be required in Alpaca dashboard."
+            )
+        elif trading_blocked:
+            hint = (
+                "Trading is blocked. Check account restrictions, funding status, "
+                "and Alpaca compliance notices."
+            )
+
+        return {
+            "available": True,
+            "status": status,
+            "trading_blocked": trading_blocked,
+            "transfers_blocked": transfers_blocked,
+            "account_blocked": account_blocked,
+            "buying_power": _str_attr("buying_power", ""),
+            "cash": _str_attr("cash", ""),
+            "portfolio_value": _str_attr("portfolio_value", ""),
+            "pattern_day_trader": _bool_attr("pattern_day_trader", False),
+            "daytrade_count": _str_attr("daytrade_count", ""),
+            "hint": hint,
+        }
+    except Exception as e:
+        return {
+            "available": False,
+            "error": str(e),
+            "hint": "Could not read account details. Verify credentials and broker API availability.",
+        }
+
+
 def _is_transient_broker_error(detail: str) -> bool:
     txt = (detail or "").strip().lower()
     if not txt:
@@ -1120,6 +1197,15 @@ def engine_diag():
     else:
         live_ok, live_detail = False, "live keys not set (optional)"
 
+    paper_readiness = _alpaca_account_readiness(
+        ALPACA_KEY, ALPACA_SECRET, "https://paper-api.alpaca.markets")
+    live_readiness = _alpaca_account_readiness(
+        live_key, live_secret, "https://api.alpaca.markets") if (live_key and live_secret) else {
+            "available": False,
+            "error": "keys not set",
+            "hint": "Live keys are not configured.",
+        }
+
     return jsonify({
         # True only when the engine could actually boot and trade paper.
         "engine_can_start": alpha_present and paper_ok,
@@ -1133,6 +1219,7 @@ def engine_diag():
             "keys_present": bool(ALPACA_KEY and ALPACA_SECRET),
             "authorized": paper_ok,
             "detail": paper_detail,
+            "readiness": paper_readiness,
             "hint": None if paper_ok else
                     "Paper keys must be generated in Alpaca's PAPER dashboard and go in "
                     "ALPACA_KEY / ALPACA_SECRET. LIVE keys do NOT authorize on the paper "
@@ -1142,6 +1229,7 @@ def engine_diag():
             "keys_present": bool(live_key and live_secret),
             "authorized": live_ok,
             "detail": live_detail,
+            "readiness": live_readiness,
         },
         "requested_mode": _requested_mode(),
         "effective_mode": _effective_mode(),
@@ -1211,6 +1299,14 @@ def support_payload():
     live_key, live_secret = key_store.get_live_keys()
     live_ok, live_detail = _alpaca_auth_probe(
         live_key, live_secret, "https://api.alpaca.markets") if (live_key and live_secret) else (False, "live keys not set")
+    paper_readiness = _alpaca_account_readiness(
+        ALPACA_KEY, ALPACA_SECRET, "https://paper-api.alpaca.markets")
+    live_readiness = _alpaca_account_readiness(
+        live_key, live_secret, "https://api.alpaca.markets") if (live_key and live_secret) else {
+            "available": False,
+            "error": "keys not set",
+            "hint": "Live keys are not configured.",
+        }
 
     status = dict(_worker_status)
     last = status.get("last_heartbeat")
@@ -1282,11 +1378,13 @@ def support_payload():
                 "keys_present": bool(ALPACA_KEY and ALPACA_SECRET),
                 "authorized": paper_ok,
                 "detail": paper_detail,
+                "readiness": paper_readiness,
             },
             "alpaca_live": {
                 "keys_present": bool(live_key and live_secret),
                 "authorized": live_ok,
                 "detail": live_detail,
+                "readiness": live_readiness,
             },
             "requested_mode": _requested_mode(),
             "effective_mode": _effective_mode(),
