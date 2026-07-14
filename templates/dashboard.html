@@ -1120,6 +1120,7 @@
     let unreadAlerts  = 0;
     let marketDataSeen = false;
     const lastFeedEmitTs = {}; // symbol -> epoch ms of last emitted feed tick
+    const FEED_ROLL_INTERVAL_MS = 5000;
     const sparkCharts = {};  // symbol -> Chart instance
 
     // ═══════════════════════════════════════════
@@ -1499,7 +1500,7 @@
       const last = lastFeedEmitTs[sym] || 0;
       const firstSeen = (prevPrice == null);
       const changed = (prevPrice != null && price !== prevPrice);
-      const periodic = (now - last) >= 15000; // keep stream alive every ~15s/symbol
+      const periodic = (now - last) >= FEED_ROLL_INTERVAL_MS; // keep stream alive every ~5s/symbol
       if (firstSeen || changed || periodic) {
         lastFeedEmitTs[sym] = now;
         return true;

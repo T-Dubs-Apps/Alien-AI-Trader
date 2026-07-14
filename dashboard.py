@@ -1307,6 +1307,16 @@ def support_payload():
             "max_trades_per_hour": _trading_settings.get("max_trades_per_hour"),
             "auto_trade": bool(_trading_settings.get("auto_trade", True)),
         },
+        "mode_transparency": {
+            "engine_logic_same": True,
+            "differences": [
+                "Paper uses simulated fills; live uses real exchange routing/fills.",
+                "Live may reject/partial-fill orders due to account/broker constraints.",
+                "Market data entitlements/feeds can differ between paper and live accounts.",
+                "Slippage, spreads, halts, and liquidity impact live behavior more than paper.",
+                "Both modes now use the same in-app strategy rules and settings path.",
+            ],
+        },
         "quotes_diag": quote_diag,
         "notes": [
             "No secrets are included in this payload.",
