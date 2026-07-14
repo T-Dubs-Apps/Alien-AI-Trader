@@ -1119,6 +1119,7 @@
     let notifFilter   = 'all';
     let unreadAlerts  = 0;
     let marketDataSeen = false;
+    const lastFeedEmitTs = {}; // symbol -> epoch ms of last emitted feed tick
     const sparkCharts = {};  // symbol -> Chart instance
 
     // ═══════════════════════════════════════════
@@ -1371,6 +1372,11 @@
           card.classList.remove('up-flash','down-flash');
           void card.offsetWidth;
           card.classList.add(dir);
+        }
+
+        // Feed behavior: log first-seen, changed, or periodic ticks so live mode
+        // always shows a rolling ticker stream (not only when price changes).
+        if (shouldLogFeedTick(sym, price, prevPrice)) {
           addFeedLine(sym, price, prevPrice, change);
         }
 
@@ -1487,14 +1493,33 @@
     // ═══════════════════════════════════════════
     //  LIVE FEED
     // ═══════════════════════════════════════════
+    function shouldLogFeedTick(sym, price, prevPrice) {
+      if (price == null) return false;
+      const now = Date.now();
+      const last = lastFeedEmitTs[sym] || 0;
+      const firstSeen = (prevPrice == null);
+      const changed = (prevPrice != null && price !== prevPrice);
+      const periodic = (now - last) >= 15000; // keep stream alive every ~15s/symbol
+      if (firstSeen || changed || periodic) {
+        lastFeedEmitTs[sym] = now;
+        return true;
+      }
+      return false;
+    }
+
     function addFeedLine(sym, newPrice, oldPrice, change) {
       clearWaitingFeedPlaceholder();
-      const dir = newPrice > oldPrice ? 'up' : 'down';
-      const diff = newPrice - oldPrice;
+      let dir = 'flat';
+      if (oldPrice != null && newPrice > oldPrice) dir = 'up';
+      else if (oldPrice != null && newPrice < oldPrice) dir = 'down';
+      const diff = (oldPrice == null) ? 0 : (newPrice - oldPrice);
       const el = document.getElementById('liveFeed');
       const line = document.createElement('div');
       line.className = 'feed-line ' + dir + '-line';
-      line.innerHTML = `<span class="ts">${tsNow()}</span><span class="sym">${sym}</span><span class="msg">${fmtMoney(newPrice)} (${dir === 'up' ? '+' : ''}${fmtMoney(diff)} tick | day: ${fmtMoney(change)})</span>`;
+      const tickLabel = (oldPrice == null)
+        ? 'new symbol'
+        : `${dir === 'up' ? '+' : ''}${fmtMoney(diff)} tick`;
+      line.innerHTML = `<span class="ts">${tsNow()}</span><span class="sym">${sym}</span><span class="msg">${fmtMoney(newPrice)} (${tickLabel} | day: ${fmtMoney(change)})</span>`;
       el.appendChild(line);
       while (el.children.length > 200) el.removeChild(el.firstChild);
     }
