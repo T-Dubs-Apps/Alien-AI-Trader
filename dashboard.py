@@ -11,9 +11,16 @@ import secrets
 import sys
 import threading
 import time
+import zipfile
 import requests
 from threading import Lock
 from typing import Dict, Any, List
+from audit_stream import AuditStream
+
+try:
+    from cryptography.fernet import Fernet
+except Exception:
+    Fernet = None
 
 # Force UTF-8 console/log output so emoji or special characters in any log line
 # can never crash a trading session on Windows. Without this, stdout defaults to
@@ -142,13 +149,31 @@ except Exception:
 # Settings are persisted here so they survive restarts
 SETTINGS_FILE = os.path.join(DATA_DIR, "trading_settings.json")
 
+# Signed tamper-evident audit stream (orders/settings/security writes).
+AUDIT_SIGNING_KEY = os.environ.get("AUDIT_SIGNING_KEY", "") or os.environ.get("FLASK_SECRET", "")
+_audit_stream = AuditStream(DATA_DIR, AUDIT_SIGNING_KEY)
+
+# Runtime anomaly guard can lock the control plane and halt auto-trading.
+AUTO_FREEZE_ON_ANOMALY = os.environ.get("AUTO_FREEZE_ON_ANOMALY", "true").lower() == "true"
+_auto_lock = {
+    "locked": False,
+    "reason": "",
+    "updated_at": 0,
+}
+_anomaly_lock = Lock()
+_anomaly_hits: Dict[str, List[float]] = {}
+
 app = Flask(__name__, template_folder=template_dir)
 app.config["SECRET_KEY"] = os.environ.get("FLASK_SECRET", os.urandom(24).hex())
 
 # CORS
-allowed_origins = os.environ.get("ALLOWED_ORIGINS", "*")
-origins = [o.strip() for o in allowed_origins.split(",")] if allowed_origins else ["*"]
-CORS(app, resources={r"/api/*": {"origins": origins}})
+allowed_origins = (os.environ.get("ALLOWED_ORIGINS", "") or "").strip()
+origins = [o.strip() for o in allowed_origins.split(",") if o.strip()]
+if origins:
+    CORS(app, resources={r"/api/*": {"origins": origins}})
+else:
+    # Strict default: no cross-origin API access unless ALLOWED_ORIGINS is set.
+    print("[SECURITY] ALLOWED_ORIGINS is empty — cross-origin API access disabled (same-origin only).")
 
 # WebSocket via SocketIO
 # gevent mode required for Render/gunicorn production deployment.
@@ -156,7 +181,7 @@ CORS(app, resources={r"/api/*": {"origins": origins}})
 _async_mode = os.environ.get("SOCKETIO_ASYNC_MODE", "gevent")
 socketio = SocketIO(
     app,
-    cors_allowed_origins="*",
+    cors_allowed_origins=(origins if origins else []),
     async_mode=_async_mode,
     logger=False,
     engineio_logger=False,
@@ -256,11 +281,78 @@ import hmac
 DASHBOARD_PASSWORD = _clean_env_value("DASHBOARD_PASSWORD", "")
 TRUSTED_OWNER_EMAILS_ENV = _clean_env_value("TRUSTED_OWNER_EMAILS", "")
 OWNER_FREEZE_TOKEN = _clean_env_value("OWNER_FREEZE_TOKEN", "")
+ADMIN_API_TOKEN = _clean_env_value("ADMIN_API_TOKEN", "")
+STRICT_PRODUCTION_GUARDS = os.environ.get("STRICT_PRODUCTION_GUARDS", "").strip().lower()
 TRUSTED_DEVICE_COOKIE = "aat_trusted_device"
 OWNER_REAUTH_DAYS_MIN = int(os.environ.get("OWNER_REAUTH_DAYS_MIN", "120"))
 OWNER_REAUTH_DAYS_MAX = int(os.environ.get("OWNER_REAUTH_DAYS_MAX", "180"))
 _trusted_devices_lock = Lock()
 _owner_freeze_lock = Lock()
+_rate_limit_lock = Lock()
+_rate_limit_state: Dict[str, List[float]] = {}
+
+
+def _is_production_mode() -> bool:
+    env = (os.environ.get("ENVIRONMENT") or os.environ.get("APP_ENV") or os.environ.get("FLASK_ENV") or "").strip().lower()
+    if env in ("prod", "production"):
+        return True
+    if os.environ.get("RENDER"):
+        return True
+    return False
+
+
+def _strict_guard_enabled() -> bool:
+    if STRICT_PRODUCTION_GUARDS in ("1", "true", "yes", "on"):
+        return True
+    if STRICT_PRODUCTION_GUARDS in ("0", "false", "no", "off"):
+        return False
+    # Default: enabled in production, relaxed in local/dev.
+    return _is_production_mode()
+
+
+def _enforce_production_security_baseline() -> None:
+    if not _strict_guard_enabled():
+        return
+
+    missing: List[str] = []
+    if not _normalize_dashboard_password(DASHBOARD_PASSWORD):
+        missing.append("DASHBOARD_PASSWORD")
+    if not origins:
+        missing.append("ALLOWED_ORIGINS")
+    if not _normalize_dashboard_password(ADMIN_API_TOKEN):
+        missing.append("ADMIN_API_TOKEN")
+
+    if missing:
+        raise RuntimeError(
+            "Refusing to start in production with insecure configuration. "
+            f"Missing required env var(s): {', '.join(missing)}. "
+            "Set required values or disable STRICT_PRODUCTION_GUARDS only for local development."
+        )
+
+    # Validate explicit origins. In strict mode, production origins must be
+    # HTTPS; localhost/dev loopback is allowed for local tooling and testing.
+    invalid_origins: List[str] = []
+    for origin in origins:
+        o = (origin or "").strip()
+        lo = o.lower()
+        if not o:
+            invalid_origins.append(origin)
+            continue
+        if lo.startswith("https://"):
+            continue
+        if lo.startswith("http://localhost") or lo.startswith("http://127.0.0.1"):
+            continue
+        invalid_origins.append(origin)
+
+    if invalid_origins:
+        raise RuntimeError(
+            "Refusing to start in strict production mode due to insecure ALLOWED_ORIGINS entries: "
+            + ", ".join(invalid_origins)
+            + ". Use HTTPS origins only (localhost/127.0.0.1 HTTP allowed for local testing)."
+        )
+
+
+_enforce_production_security_baseline()
 
 # Path prefixes that must stay reachable WITHOUT logging in.
 _PUBLIC_PATH_PREFIXES = (
@@ -279,6 +371,246 @@ def _dashboard_authed() -> bool:
     """True when access is allowed: either no password is configured (gate off)
     or the visitor has logged in this session."""
     return (not DASHBOARD_PASSWORD) or bool(session.get("dash_authed"))
+
+
+def _is_internal_call() -> bool:
+    tok = request.headers.get("X-Internal-Token", "")
+    if not tok:
+        return False
+    return hmac.compare_digest(tok.encode("utf-8"), str(app.config["SECRET_KEY"]).encode("utf-8"))
+
+
+def _admin_api_token_ok() -> bool:
+    candidate = _normalize_dashboard_password(request.headers.get("X-Admin-Token", "") or "")
+    expected = _normalize_dashboard_password(ADMIN_API_TOKEN)
+    if not candidate or not expected:
+        return False
+    return hmac.compare_digest(candidate.encode("utf-8"), expected.encode("utf-8"))
+
+
+def _require_admin_api_access():
+    """Protect sensitive operational APIs in production.
+
+    Allowed via one of:
+    - internal token (in-process system calls)
+    - authenticated dashboard session (when password gate is on)
+    - explicit X-Admin-Token header (ADMIN_API_TOKEN)
+    """
+    if _is_internal_call():
+        return None
+    if DASHBOARD_PASSWORD and session.get("dash_authed"):
+        return None
+    if _admin_api_token_ok():
+        return None
+    return jsonify({
+        "status": "error",
+        "message": "Admin authorization required for this endpoint.",
+    }), 403
+
+
+def _client_ip() -> str:
+    xf = request.headers.get("X-Forwarded-For", "")
+    if xf:
+        return xf.split(",")[0].strip()
+    return request.remote_addr or "unknown"
+
+
+def _allow_write(bucket: str, limit: int, window_seconds: int) -> bool:
+    """Best-effort in-memory write throttling to reduce abuse and accidental floods."""
+    now = time.time()
+    ip = _client_ip()
+    key = f"{bucket}:{ip}"
+    with _rate_limit_lock:
+        hits = [ts for ts in _rate_limit_state.get(key, []) if (now - ts) < window_seconds]
+        if len(hits) >= limit:
+            _rate_limit_state[key] = hits
+            return False
+        hits.append(now)
+        _rate_limit_state[key] = hits
+        return True
+
+
+def _rate_limited(bucket: str, limit: int, window_seconds: int):
+    if _is_internal_call():
+        return None
+    if _allow_write(bucket, limit, window_seconds):
+        return None
+    return jsonify({
+        "status": "error",
+        "message": "Too many requests. Please slow down and try again.",
+    }), 429
+
+
+def _audit_event(event_type: str, payload: Dict[str, Any], actor: str = "api") -> None:
+    try:
+        _audit_stream.append(
+            event_type=event_type,
+            actor=actor,
+            ip=_client_ip(),
+            payload=payload,
+        )
+    except Exception as e:
+        print(f"[AUDIT] append failed: {e}")
+
+
+def _trigger_auto_freeze(reason: str) -> None:
+    global _ai_trader_enabled
+    if not AUTO_FREEZE_ON_ANOMALY:
+        return
+    if _auto_lock.get("locked"):
+        return
+    _auto_lock.update({
+        "locked": True,
+        "reason": str(reason),
+        "updated_at": int(time.time()),
+    })
+    _ai_trader_enabled = False
+    _trading_settings["auto_trade"] = False
+    _save_settings()
+    # Persist lock in freeze file so state survives restarts.
+    with _owner_freeze_lock:
+        state = _load_owner_freeze_state()
+        state.update({
+            "locked": True,
+            "updated_at": int(time.time()),
+            "updated_by": "anomaly_guard",
+            "reason": str(reason),
+        })
+        _save_owner_freeze_state(state)
+    note = {
+        "time": int(time.time()),
+        "level": "alert",
+        "symbol": "",
+        "message": f"AUTO-FREEZE triggered: {reason}. AI auto-trading paused.",
+    }
+    _notifications.append(note)
+    _notifications[:] = _notifications[-200:]
+    try:
+        socketio.emit("notification", note)
+        socketio.emit("ai_trader_state", {"ai_trader_enabled": _ai_trader_enabled})
+    except Exception:
+        pass
+    _audit_event("anomaly_auto_freeze", {"reason": reason}, actor="anomaly_guard")
+
+
+def _record_anomaly(signal: str) -> None:
+    now = time.time()
+    ip = _client_ip()
+    with _anomaly_lock:
+        key = f"{signal}:{ip}"
+        hits = [ts for ts in _anomaly_hits.get(key, []) if (now - ts) < 600]
+        hits.append(now)
+        _anomaly_hits[key] = hits
+
+        # per-IP manual order burst
+        if signal == "manual_order" and len([ts for ts in hits if (now - ts) < 60]) >= 12:
+            _trigger_auto_freeze(f"manual order burst from {ip}")
+            return
+
+        # per-IP settings churn
+        if signal == "settings_update" and len([ts for ts in hits if (now - ts) < 300]) >= 10:
+            _trigger_auto_freeze(f"settings churn from {ip}")
+            return
+
+        # multi-IP write-plane anomaly
+        recent_ips = set()
+        for k, vals in list(_anomaly_hits.items()):
+            vals2 = [ts for ts in vals if (now - ts) < 300]
+            if vals2:
+                _anomaly_hits[k] = vals2
+                if ":" in k:
+                    recent_ips.add(k.split(":", 1)[1])
+        if len(recent_ips) >= 4:
+            _trigger_auto_freeze("write-plane requests from 4+ IPs in 5 minutes")
+
+
+BACKUP_ENABLED = os.environ.get("BACKUP_ENABLED", "true").lower() == "true"
+BACKUP_INTERVAL_SECONDS = int(os.environ.get("BACKUP_INTERVAL_SECONDS", "900"))
+BACKUP_RETENTION = int(os.environ.get("BACKUP_RETENTION", "96"))
+BACKUP_DIR = os.path.join(DATA_DIR, "snapshots")
+BACKUP_REPLICA_URL = (os.environ.get("BACKUP_REPLICA_URL", "") or "").rstrip("/")
+BACKUP_REPLICA_TOKEN = os.environ.get("BACKUP_REPLICA_TOKEN", "")
+BACKUP_ENCRYPTION_KEY = os.environ.get("BACKUP_ENCRYPTION_KEY", "")
+REPLICA_RECEIVE_TOKEN = os.environ.get("REPLICA_RECEIVE_TOKEN", "")
+_fernet = None
+if BACKUP_ENCRYPTION_KEY and Fernet:
+    try:
+        _fernet = Fernet(BACKUP_ENCRYPTION_KEY.encode("utf-8"))
+    except Exception:
+        _fernet = None
+
+
+def _backup_targets() -> List[str]:
+    """Critical local state for recovery. Broker cash stays at Alpaca custody."""
+    out = [
+        SETTINGS_FILE,
+        LICENSE_FILE,
+        TRUSTED_DEVICES_FILE,
+        OWNER_FREEZE_FILE,
+        os.path.join(DATA_DIR, "license_grants.json"),
+    ]
+    if _audit_stream and _audit_stream.file_path:
+        out.append(_audit_stream.file_path)
+    return out
+
+
+def _replicate_backup_snapshot(path: str) -> None:
+    if not BACKUP_REPLICA_URL or not BACKUP_REPLICA_TOKEN:
+        return
+    if not _fernet:
+        # Encryption is mandatory for offsite replication.
+        print("[BACKUP] Replica skipped: BACKUP_ENCRYPTION_KEY missing/invalid.")
+        return
+    try:
+        with open(path, "rb") as f:
+            plain = f.read()
+        encrypted = _fernet.encrypt(plain)
+        name = os.path.basename(path) + ".fernet"
+        resp = requests.post(
+            f"{BACKUP_REPLICA_URL}/api/backup/replica",
+            headers={
+                "X-Replica-Token": BACKUP_REPLICA_TOKEN,
+                "X-Snapshot-Name": name,
+                "X-Snapshot-Source": "alien-ai-trader",
+            },
+            data=encrypted,
+            timeout=25,
+        )
+        if resp.status_code != 200:
+            print(f"[BACKUP] Replica upload failed: HTTP {resp.status_code}")
+    except Exception as e:
+        print(f"[BACKUP] Replica upload error: {e}")
+
+
+def _write_backup_snapshot() -> None:
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    stamp = time.strftime("%Y%m%d_%H%M%S", time.gmtime())
+    out_path = os.path.join(BACKUP_DIR, f"snapshot_{stamp}.zip")
+    with zipfile.ZipFile(out_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for p in _backup_targets():
+            if os.path.exists(p) and os.path.isfile(p):
+                zf.write(p, arcname=os.path.basename(p))
+
+    keep = sorted(
+        [os.path.join(BACKUP_DIR, n) for n in os.listdir(BACKUP_DIR) if n.endswith(".zip")],
+        reverse=True,
+    )
+    for old in keep[BACKUP_RETENTION:]:
+        try:
+            os.remove(old)
+        except Exception:
+            pass
+    _replicate_backup_snapshot(out_path)
+
+
+def _backup_loop() -> None:
+    while True:
+        try:
+            if BACKUP_ENABLED:
+                _write_backup_snapshot()
+        except Exception as e:
+            print(f"[BACKUP] Snapshot failed: {e}")
+        time.sleep(max(120, BACKUP_INTERVAL_SECONDS))
 
 
 def _norm_email(value: str) -> str:
@@ -408,8 +740,13 @@ def _save_owner_freeze_state(data: dict) -> None:
 
 
 def _owner_freeze_is_locked() -> bool:
+    if _auto_lock.get("locked"):
+        return True
     if not _owner_freeze_enabled():
-        return False
+        # Allow persisted anomaly lock to block writes even when owner token is unset.
+        with _owner_freeze_lock:
+            state = _load_owner_freeze_state()
+            return bool(state.get("locked", False) and state.get("updated_by") == "anomaly_guard")
     with _owner_freeze_lock:
         state = _load_owner_freeze_state()
         return bool(state.get("locked", False))
@@ -1019,6 +1356,65 @@ def health():
     return jsonify({"status": "ok"}), 200
 
 
+@app.route("/api/audit/verify", methods=["GET"])
+def audit_verify():
+    blocked = _require_admin_api_access()
+    if blocked:
+        return blocked
+    result = _audit_stream.verify()
+    code = 200 if result.get("ok") else 409
+    _audit_event("audit_verify", {"ok": bool(result.get("ok")), "count": int(result.get("count", 0))}, actor="admin")
+    return jsonify(result), code
+
+
+@app.route("/api/anomaly/status", methods=["GET"])
+def anomaly_status():
+    blocked = _require_admin_api_access()
+    if blocked:
+        return blocked
+    return jsonify({
+        "auto_freeze_enabled": AUTO_FREEZE_ON_ANOMALY,
+        "locked": bool(_auto_lock.get("locked")),
+        "reason": _auto_lock.get("reason", ""),
+        "updated_at": _auto_lock.get("updated_at", 0),
+    }), 200
+
+
+@app.route("/api/backup/replica", methods=["POST"])
+def replica_backup_ingest():
+    if not REPLICA_RECEIVE_TOKEN:
+        return jsonify({"status": "error", "message": "Replica receiver is disabled."}), 404
+    tok = request.headers.get("X-Replica-Token", "")
+    if not tok or not hmac.compare_digest(tok.encode("utf-8"), REPLICA_RECEIVE_TOKEN.encode("utf-8")):
+        return jsonify({"status": "error", "message": "Unauthorized."}), 401
+
+    payload = request.get_data(cache=False, as_text=False) or b""
+    if not payload:
+        return jsonify({"status": "error", "message": "Empty payload."}), 400
+
+    replica_dir = os.path.join(DATA_DIR, "replica_store")
+    os.makedirs(replica_dir, exist_ok=True)
+    raw_name = str(request.headers.get("X-Snapshot-Name", "")).strip()
+    name = os.path.basename(raw_name) or f"replica_{int(time.time())}.bin"
+    out_path = os.path.join(replica_dir, name)
+    with open(out_path, "wb") as f:
+        f.write(payload)
+
+    # Keep bounded storage.
+    keep = sorted(
+        [os.path.join(replica_dir, n) for n in os.listdir(replica_dir)],
+        reverse=True,
+    )
+    for old in keep[BACKUP_RETENTION:]:
+        try:
+            os.remove(old)
+        except Exception:
+            pass
+
+    _audit_event("backup_replica_ingest", {"name": name, "bytes": len(payload)}, actor="replica")
+    return jsonify({"status": "ok", "stored": name, "bytes": len(payload)}), 200
+
+
 @app.route("/api/owner/freeze/status", methods=["GET"])
 def owner_freeze_status():
     with _owner_freeze_lock:
@@ -1053,6 +1449,10 @@ def owner_freeze_set():
             "updated_by": actor,
         }
         _save_owner_freeze_state(state)
+    if not lock_value and _auto_lock.get("locked"):
+        # Explicit owner unlock clears automatic lock state too.
+        _auto_lock.update({"locked": False, "reason": "", "updated_at": int(time.time())})
+    _audit_event("owner_freeze_set", {"locked": lock_value, "actor": actor}, actor="owner")
     return jsonify({"status": "ok", **state}), 200
 
 
@@ -1762,10 +2162,27 @@ def get_tickers():
 @app.route("/api/update_market", methods=["POST"])
 def receive_data():
     global market_data
+    limited = _rate_limited("update_market", limit=120, window_seconds=60)
+    if limited:
+        return limited
     try:
         data = request.json
-        if data:
-            market_data = data
+        if isinstance(data, list):
+            cleaned = []
+            for row in data:
+                if not isinstance(row, dict):
+                    continue
+                sym = str(row.get("symbol", "")).strip().upper()
+                if not sym:
+                    continue
+                cleaned.append({
+                    "symbol": sym,
+                    "price": _safe_float(row.get("price")),
+                    "change": _safe_float(row.get("change")),
+                    "change_percent": _safe_float(row.get("change_percent")),
+                    "name": str(row.get("name", sym))[:120],
+                })
+            market_data = cleaned
             # Push to all connected browser clients immediately via WebSocket
             socketio.emit("market_update", {"tickers": market_data})
             return jsonify({"status": "Success", "count": len(market_data)}), 200
@@ -2413,6 +2830,9 @@ def submit_order():
     blocked = _owner_freeze_block("manual orders")
     if blocked:
         return blocked
+    limited = _rate_limited("manual_order", limit=20, window_seconds=60)
+    if limited:
+        return limited
     client = _active_alpaca()
     if not client:
         return jsonify({
@@ -2455,6 +2875,21 @@ def submit_order():
     is_paper = _effective_mode() != "live"
     try:
         order = client.submit_order(**order_kwargs)
+        _record_anomaly("manual_order")
+        _audit_event(
+            "manual_order_submit",
+            {
+                "symbol": symbol,
+                "side": side,
+                "qty": qty,
+                "type": otype,
+                "tif": tif,
+                "paper": is_paper,
+                "order_id": getattr(order, "id", None),
+                "order_status": getattr(order, "status", None),
+            },
+            actor="dashboard_user",
+        )
         note = {
             "time": int(time.time()),
             "level": "trade",
@@ -2480,6 +2915,9 @@ def submit_order():
 @app.route("/api/trader/toggle", methods=["POST"])
 def trader_toggle():
     global _ai_trader_enabled
+    limited = _rate_limited("trader_toggle", limit=20, window_seconds=60)
+    if limited:
+        return limited
     blocked = _owner_freeze_block("AI trader toggle")
     if blocked:
         return blocked
@@ -2488,6 +2926,8 @@ def trader_toggle():
         _ai_trader_enabled = bool(payload["enabled"])
     else:
         _ai_trader_enabled = not _ai_trader_enabled
+    _record_anomaly("settings_update")
+    _audit_event("ai_trader_toggle", {"enabled": _ai_trader_enabled}, actor="dashboard_user")
     # Keep trading settings in sync so the engine picks it up on next poll
     _trading_settings["auto_trade"] = _ai_trader_enabled
     # Persist so the auto-trade state survives restarts
@@ -2513,12 +2953,15 @@ def get_notifications():
 @app.route("/api/notifications", methods=["POST"])
 def add_notification():
     global _notifications
+    limited = _rate_limited("notifications_add", limit=120, window_seconds=60)
+    if limited:
+        return limited
     payload = request.json or {}
     note = {
         "time": int(time.time()),
         "level": payload.get("level", "info"),
-        "symbol": payload.get("symbol", ""),
-        "message": payload.get("message", ""),
+        "symbol": str(payload.get("symbol", ""))[:12].upper(),
+        "message": str(payload.get("message", ""))[:1200],
     }
     _notifications.append(note)
     _notifications = _notifications[-200:]
@@ -2566,10 +3009,14 @@ def get_trading_settings():
 @app.route("/api/settings/trading", methods=["POST"])
 def update_trading_settings():
     global _trading_settings, _MARKET_HOURS_ONLY
+    limited = _rate_limited("trading_settings", limit=30, window_seconds=60)
+    if limited:
+        return limited
     blocked = _owner_freeze_block("trading settings update")
     if blocked:
         return blocked
     payload = request.json or {}
+    _record_anomaly("settings_update")
 
     # ── Paper ↔ Live switch — license-gated, fails safe to paper ──────────────
     if "trading_mode" in payload:
@@ -2635,6 +3082,16 @@ def update_trading_settings():
     _save_settings()
     # Push updated settings to all browser clients so UI stays in sync
     resp = _settings_response()
+    _audit_event(
+        "trading_settings_update",
+        {
+            "keys": sorted([k for k in payload.keys() if isinstance(k, str)]),
+            "requested_mode": resp.get("requested_mode"),
+            "effective_mode": resp.get("trading_mode"),
+            "market_hours_only": resp.get("market_hours_only"),
+        },
+        actor="dashboard_user",
+    )
     socketio.emit("trading_settings", resp)
     return jsonify(resp), 200
 
@@ -2665,6 +3122,16 @@ def save_live_keys():
     key_store.set_keys(alpaca_key=k, alpaca_secret=s, alpha=(av or None))
     global _alpaca_live
     _alpaca_live = None  # force rebuild with the new keys
+    _record_anomaly("settings_update")
+    _audit_event(
+        "live_keys_saved",
+        {
+            "alpaca_live_key_suffix": k[-4:] if len(k) >= 4 else "set",
+            "alpha_vantage_supplied": bool(av),
+            "account_status": status,
+        },
+        actor="dashboard_user",
+    )
     note = {"time": int(time.time()), "level": "info", "symbol": "",
             "message": "Live Alpaca keys saved and verified. You can switch to Live now."}
     _notifications.append(note)
@@ -2684,7 +3151,7 @@ def on_connect():
     emit("worker_status", _worker_status)
     emit("ai_trader_state", {"ai_trader_enabled": _ai_trader_enabled})
     emit("notifications_init", {"notifications": _notifications[-50:]})
-    emit("trading_settings", _trading_settings)
+    emit("trading_settings", _settings_response())
     emit("ladder_update", {"ladder": _ladder_top20})
 
 
@@ -3134,6 +3601,13 @@ else:
     print("[DASHBOARD] WARNING: DASHBOARD_PASSWORD is not set — the dashboard and "
           "its control endpoints are OPEN to anyone with the URL. Set DASHBOARD_PASSWORD "
           "in your Render env vars to lock it down.")
+
+if BACKUP_ENABLED:
+    _backup_thread = threading.Thread(
+        target=_backup_loop, daemon=True, name="StateBackup"
+    )
+    _backup_thread.start()
+    print(f"[BACKUP] Periodic snapshots enabled (every {BACKUP_INTERVAL_SECONDS}s, keep {BACKUP_RETENTION}).")
 
 if os.environ.get("DISABLE_ENGINE_AUTOSTART") != "1":
     # Independent watchdog: keeps last_heartbeat fresh even if supervisor crashes.

@@ -136,6 +136,19 @@ services:
         value: "5"
       - key: RISK_PER_TRADE_USD
         value: "0"
+      # Hard invariants: never exceed these protection caps.
+      - key: MAX_GROSS_EXPOSURE_PCT
+        value: "85.0"
+      - key: MIN_CASH_RESERVE_PCT
+        value: "10.0"
+      # Forecast policy: enforce forecast confirmation only when risk profile
+      # is high (capital-intensive, volatile, or low-liquidity symbols).
+      - key: FORECAST_REQUIRED_CAPITAL_PCT
+        value: "12.0"
+      - key: FORECAST_REQUIRED_VOLATILITY
+        value: "0.03"
+      - key: FORECAST_REQUIRED_MIN_VOLUME
+        value: "1000000"
       # -- Signal filters ---------------------------------------------------
       - key: RSI_BUY_MAX
         value: "50.0"
@@ -159,8 +172,41 @@ services:
         value: "5"
       - key: DASHBOARD_BASE_URL
         sync: false
+      # Strict by default: set explicit origins (comma-separated) like
+      # https://your-dashboard.example.com. Leaving this unset disables
+      # cross-origin API access (same-origin only).
       - key: ALLOWED_ORIGINS
-        value: "*"
+        sync: false
+      # Optional explicit admin token for sensitive ops endpoints
+      # (/api/audit/verify, /api/anomaly/status) when not using dashboard session.
+      - key: ADMIN_API_TOKEN
+        sync: false
+      # Fail-closed startup in production if baseline security env vars are missing.
+      - key: STRICT_PRODUCTION_GUARDS
+        value: "true"
+      # Lightweight disaster recovery snapshots of local state.
+      - key: BACKUP_ENABLED
+        value: "true"
+      - key: BACKUP_INTERVAL_SECONDS
+        value: "900"
+      - key: BACKUP_RETENTION
+        value: "96"
+      # Signed tamper-evident audit stream.
+      - key: AUDIT_SIGNING_KEY
+        sync: false
+      # Automatic attack/failure containment.
+      - key: AUTO_FREEZE_ON_ANOMALY
+        value: "true"
+      # Optional encrypted offsite replication to passive service.
+      - key: BACKUP_REPLICA_URL
+        sync: false
+      - key: BACKUP_REPLICA_TOKEN
+        sync: false
+      - key: BACKUP_ENCRYPTION_KEY
+        sync: false
+      # Token expected by passive node receive endpoint.
+      - key: REPLICA_RECEIVE_TOKEN
+        sync: false
       # -- Integrated engine (formerly worker-only settings) ----------------
       - key: RUN_SECONDS
         value: "21540"
@@ -189,3 +235,33 @@ services:
 # Built by Troy Walker of T-Dub's Apps -- 2026-04-28
 # 2026-06: Collapsed to single-service architecture. Worker service suspended on Render.
 #          Engine runs inside dashboard process. Saves ~$7/mo.
+
+# ── OPTIONAL PASSIVE FAILOVER NODE (uncomment to enable) ─────────────────────
+# This service receives encrypted backup replicas and keeps a warm standby app
+# process. Engine autostart is disabled so it stays passive until promoted.
+# To fail over, point your DNS/URL to this service and set DISABLE_ENGINE_AUTOSTART=0.
+#
+# - type: web
+#   name: alien-ai-trader-passive
+#   runtime: python
+#   autoDeploy: true
+#   healthCheckPath: /health
+#   buildCommand: pip install -r requirements.txt
+#   startCommand: gunicorn --worker-class gevent --workers 1 --bind 0.0.0.0:$PORT dashboard:app
+#   envVars:
+#     - key: PYTHON_VERSION
+#       value: 3.11.9
+#     - key: DISABLE_ENGINE_AUTOSTART
+#       value: "1"
+#     - key: BACKUP_ENABLED
+#       value: "false"
+#     - key: REPLICA_RECEIVE_TOKEN
+#       sync: false
+#     - key: DATA_DIR
+#       value: /var/data
+#     - key: FLASK_SECRET
+#       generateValue: true
+#   # disk:
+#   #   name: aat-passive-data
+#   #   mountPath: /var/data
+#   #   sizeGB: 1

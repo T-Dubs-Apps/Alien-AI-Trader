@@ -1,0 +1,228 @@
+#!/usr/bin/env python3
+"""
+owner_grant.py  --  LOCAL OWNER TOOL (private; never committed or pushed).
+
+Grant or revoke a complimentary Alien AI Trader license WITHOUT a Stripe purchase.
+Use it to comp yourself, testers, and friends.
+
+How it works: the app considers itself licensed when license.json has
+status == "active" and a future expiresAt (see dashboard.py _license_is_active).
+This tool simply writes/removes that file. No Stripe, no server, fully offline.
+
+This file is excluded via .git/info/exclude, so it stays on this machine only.
+
+Examples
+--------
+  # License THIS repo's app (annual, 365 days):
+  python owner_grant.py grant
+
+  # License the RUNNING install instead of the repo:
+  python owner_grant.py grant --out "C:\\Users\\Troy Walker\\Desktop\\Alien_AI_Trader\\license.json"
+
+  # Make a file to hand a tester (they drop it next to dashboard.py and restart):
+  python owner_grant.py grant --email tester@example.com --tier annual --out license_tester.json
+
+  # Check / revoke:
+  python owner_grant.py status
+  python owner_grant.py revoke
+"""
+import argparse
+import json
+import os
+import secrets
+import time
+from datetime import datetime, timezone
+import requests
+
+from license_signing import sign_license
+
+BASE = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_LICENSE = os.path.join(BASE, "license.json")
+
+
+def _fmt(ms: int) -> str:
+    try:
+        return datetime.fromtimestamp(int(ms) / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
+    except Exception:
+        return "?"
+
+
+def make_license(email: str, tier: str, days: int) -> dict:
+    now_ms = int(time.time() * 1000)
+    return {
+        "status": "active",
+        "appId": "alien-ai-trader",
+        "tier": tier,
+        "email": email,
+        "licenseKey": "COMP-" + secrets.token_hex(6).upper(),
+        "activatedAt": now_ms,
+        "expiresAt": now_ms + days * 24 * 60 * 60 * 1000,
+        "billingType": "comp",
+        "grantedBy": "owner",
+        "note": "Complimentary license - not a Stripe purchase",
+    }
+
+
+def cmd_grant(args):
+    out = args.out or DEFAULT_LICENSE
+    lic = make_license(args.email, args.tier, args.days)
+    lic = sign_license(lic)   # Ed25519 signature — only the owner key can mint this
+    with open(out, "w") as f:
+        json.dump(lic, f, indent=2)
+    print(f"Granted {args.tier} license to '{args.email}' until {_fmt(lic['expiresAt'])} (UTC).")
+    print(f"Wrote: {out}")
+    if os.path.abspath(out) != os.path.abspath(DEFAULT_LICENSE):
+        print("Hand this file to the tester; they place it next to dashboard.py and restart.")
+
+
+def cmd_emit_env(args):
+    """Print a signed license as a single-line value for the LICENSE_GRANT env
+    var. Paste it into the deployment's env vars (Render → Environment) so the
+    comp license auto-restores on every boot with no server or Stripe needed —
+    it survives any redeploy/restart/crash (see dashboard _recover_license_on_boot)."""
+    lic = sign_license(make_license(args.email, args.tier, args.days))
+    blob = json.dumps(lic, separators=(",", ":"))   # compact, one line
+    print(f"# LICENSE_GRANT for '{args.email}' ({args.tier}), expires {_fmt(lic['expiresAt'])} UTC")
+    print("# Render -> your service -> Environment -> Add: key = LICENSE_GRANT, value = the line below")
+    print()
+    if args.b64:
+        import base64
+        print(base64.b64encode(blob.encode("utf-8")).decode("ascii"))
+    else:
+        print(blob)
+
+
+def cmd_revoke(args):
+    out = args.out or DEFAULT_LICENSE
+    if os.path.exists(out):
+        os.remove(out)
+        print(f"Revoked - removed {out}. Restart the app; it falls back to free paper mode.")
+    else:
+        print(f"No license file at {out} - nothing to revoke.")
+
+
+def cmd_status(args):
+    out = args.out or DEFAULT_LICENSE
+    try:
+        with open(out) as f:
+            lic = json.load(f)
+    except Exception:
+        print(f"No license at {out} (app runs in free paper mode).")
+        return
+    active = lic.get("status") == "active" and int(lic.get("expiresAt", 0)) > int(time.time() * 1000)
+    print(f"License: tier={lic.get('tier')}  email={lic.get('email')}  "
+          f"expires={_fmt(lic.get('expiresAt', 0))}  active={active}")
+
+
+def _server_url(args) -> str:
+    return (args.server or os.environ.get("LICENSE_SERVER_URL") or "https://alien-ai-trader-dashboard.onrender.com").rstrip("/")
+
+
+def _server_secret(args) -> str:
+    return (args.secret or os.environ.get("LICENSE_SECRET") or "").strip()
+
+
+def cmd_server_grant(args):
+    """Grant through the central server so it is tracked and recoverable.
+
+    This path uses /api/license/admin/grant, which now also syncs comp-grant
+    metadata into Stripe for restart/deploy recovery.
+    """
+    base = _server_url(args)
+    secret = _server_secret(args)
+    if not secret:
+        raise SystemExit("Missing LICENSE_SECRET. Pass --secret or set env LICENSE_SECRET.")
+    body = {
+        "email": args.email,
+        "appId": args.app_id,
+        "tier": args.tier,
+    }
+    r = requests.post(
+        f"{base}/api/license/admin/grant",
+        json=body,
+        headers={"Authorization": f"Bearer {secret}"},
+        timeout=30,
+    )
+    try:
+        data = r.json()
+    except Exception:
+        data = {"raw": r.text}
+    if r.status_code >= 300:
+        raise SystemExit(f"Admin grant failed ({r.status_code}): {data}")
+    print("Server grant complete:")
+    print(json.dumps(data, indent=2))
+
+
+def cmd_server_revoke(args):
+    """Revoke through the central server (also clears Stripe comp metadata)."""
+    base = _server_url(args)
+    secret = _server_secret(args)
+    if not secret:
+        raise SystemExit("Missing LICENSE_SECRET. Pass --secret or set env LICENSE_SECRET.")
+    body = {
+        "email": args.email,
+        "appId": args.app_id,
+    }
+    r = requests.post(
+        f"{base}/api/license/admin/revoke",
+        json=body,
+        headers={"Authorization": f"Bearer {secret}"},
+        timeout=30,
+    )
+    try:
+        data = r.json()
+    except Exception:
+        data = {"raw": r.text}
+    if r.status_code >= 300:
+        raise SystemExit(f"Admin revoke failed ({r.status_code}): {data}")
+    print("Server revoke complete:")
+    print(json.dumps(data, indent=2))
+
+
+def main():
+    p = argparse.ArgumentParser(description="Owner-only comp license tool (local, private).")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    g = sub.add_parser("grant", help="Issue a comp license file.")
+    g.add_argument("--email", default="owner@local", help="Email to label the license.")
+    g.add_argument("--tier", default="annual", choices=["monthly", "annual", "pro_monthly", "pro_annual"])
+    g.add_argument("--days", type=int, default=365, help="Days until expiry.")
+    g.add_argument("--out", default=None, help="Output path (default: this folder's license.json).")
+    g.set_defaults(func=cmd_grant)
+
+    e = sub.add_parser("emit-env", help="Print a one-line LICENSE_GRANT env value to paste into Render.")
+    e.add_argument("--email", default="owner@local", help="Email to label the license.")
+    e.add_argument("--tier", default="annual", choices=["monthly", "annual", "pro_monthly", "pro_annual"])
+    e.add_argument("--days", type=int, default=365, help="Days until expiry.")
+    e.add_argument("--b64", action="store_true", help="Emit as paste-proof base64 (recommended).")
+    e.set_defaults(func=cmd_emit_env)
+
+    r = sub.add_parser("revoke", help="Remove a license file.")
+    r.add_argument("--out", default=None)
+    r.set_defaults(func=cmd_revoke)
+
+    s = sub.add_parser("status", help="Show a license file's state.")
+    s.add_argument("--out", default=None)
+    s.set_defaults(func=cmd_status)
+
+    sg = sub.add_parser("server-grant", help="Grant a user via central admin API (recommended).")
+    sg.add_argument("--email", required=True, help="Buyer email to grant.")
+    sg.add_argument("--tier", default="annual", choices=["monthly", "annual", "pro_monthly", "pro_annual"])
+    sg.add_argument("--app-id", default="alien-ai-trader")
+    sg.add_argument("--server", default=None, help="Base server URL (defaults to LICENSE_SERVER_URL env or production URL).")
+    sg.add_argument("--secret", default=None, help="Admin bearer secret (defaults to LICENSE_SECRET env).")
+    sg.set_defaults(func=cmd_server_grant)
+
+    sr = sub.add_parser("server-revoke", help="Revoke a user via central admin API.")
+    sr.add_argument("--email", required=True, help="Buyer email to revoke.")
+    sr.add_argument("--app-id", default="alien-ai-trader")
+    sr.add_argument("--server", default=None, help="Base server URL (defaults to LICENSE_SERVER_URL env or production URL).")
+    sr.add_argument("--secret", default=None, help="Admin bearer secret (defaults to LICENSE_SECRET env).")
+    sr.set_defaults(func=cmd_server_revoke)
+
+    args = p.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()

@@ -11,6 +11,7 @@ except Exception:
 import os
 import time
 import threading
+import statistics
 import requests
 import key_store
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -83,6 +84,11 @@ class TradingEngine:
 
         self.running = False
         self.lock = threading.Lock()
+        # Serializes order placement so concurrent scan threads cannot overspend
+        # capital or exceed max_positions during the same cycle.
+        self._buy_lock = threading.Lock()
+        self._start_lock = threading.Lock()
+        self._afterhours_started = False
 
         self.current_holdings: Dict[str, Dict[str, Any]] = {}
         self.trade_log: List[Dict[str, Any]] = []
@@ -127,6 +133,17 @@ class TradingEngine:
 
         # Max simultaneous open positions
         self.max_positions = int(os.environ.get("MAX_POSITIONS", "5"))
+
+        # Hard exposure guardrails (invariants): these are non-negotiable limits
+        # that prevent catastrophic over-allocation during fast market moves.
+        self.max_gross_exposure_pct = float(os.environ.get("MAX_GROSS_EXPOSURE_PCT", "85.0"))
+        self.min_cash_reserve_pct = float(os.environ.get("MIN_CASH_RESERVE_PCT", "10.0"))
+
+        # Forecast policy: mandatory only when a trade is high-risk to execute
+        # without forward confirmation (capital-intensive, volatile, illiquid).
+        self.forecast_required_capital_pct = float(os.environ.get("FORECAST_REQUIRED_CAPITAL_PCT", "12.0"))
+        self.forecast_required_volatility = float(os.environ.get("FORECAST_REQUIRED_VOLATILITY", "0.03"))
+        self.forecast_required_min_volume = float(os.environ.get("FORECAST_REQUIRED_MIN_VOLUME", "1000000"))
 
         # ── Position sizing / risk-per-trade controls ──────────────────────────
         #
@@ -355,15 +372,18 @@ class TradingEngine:
 
 
     def start(self):
-        self.running = True
-        # Seed holdings from the broker ONCE so the dashboard reflects the real
-        # account after every restart (runs once per engine instance/session).
-        if not self._reconciled:
-            self._reconcile_from_alpaca()
-            self._reconciled = True
-        # Start after-hours background watcher on its own daemon thread
-        t = threading.Thread(target=self._afterhours_loop, daemon=True, name="afterhours-watcher")
-        t.start()
+        with self._start_lock:
+            self.running = True
+            # Seed holdings from the broker ONCE so the dashboard reflects the real
+            # account after every restart (runs once per engine instance/session).
+            if not self._reconciled:
+                self._reconcile_from_alpaca()
+                self._reconciled = True
+            # Start after-hours background watcher exactly once.
+            if not self._afterhours_started:
+                t = threading.Thread(target=self._afterhours_loop, daemon=True, name="afterhours-watcher")
+                t.start()
+                self._afterhours_started = True
 
     def stop(self):
         self.running = False
@@ -1086,6 +1106,8 @@ class TradingEngine:
             "forecast_phase": "unknown",
             "predicted_price": None,
             "verdict": "HOLD",
+            "avg_volume_20": None,
+            "realized_vol_20d": None,
             "data_issue": None,
             "data_issue_detail": "",
         }
@@ -1117,6 +1139,14 @@ class TradingEngine:
         signal["boll_mid"] = round(boll_mid, 4) if boll_mid else None
         signal["boll_lower"] = round(boll_lower, 4) if boll_lower else None
         signal["vwap"] = round(vwap, 4) if vwap else None
+        try:
+            if "v" in df.columns and len(df["v"]) >= 20:
+                signal["avg_volume_20"] = round(float(df["v"].astype(float).tail(20).mean()), 2)
+            returns = closes.pct_change().dropna()
+            if len(returns) >= 20:
+                signal["realized_vol_20d"] = round(float(statistics.pstdev(returns.tail(20).tolist())), 6)
+        except Exception:
+            pass
 
         # ── Predictive forecast (linear regression + EMA stacking) ──
         try:
@@ -1173,6 +1203,33 @@ class TradingEngine:
 
         return signal
 
+    def _forecast_required_for_entry(self, signal: Dict[str, Any], price: float) -> Tuple[bool, List[str]]:
+        """Return whether forecast must be UP before entry, and the reasons.
+
+        Mandatory when trade is capital-intensive, volatile, or not highly liquid.
+        Optional confidence booster when liquid + low-volatility + small allocation.
+        """
+        reasons: List[str] = []
+        with self.lock:
+            invested = sum(h["qty"] * h["price"] for h in self.current_holdings.values())
+            total_capital = self._available_capital + invested
+            slots = max(1, max(self.max_positions, self.min_positions) - len(self.current_holdings))
+            est_alloc = self._available_capital / slots if self.initial_capital > 0 else price
+
+        alloc_pct = (est_alloc / total_capital * 100.0) if total_capital > 0 else 0.0
+        if alloc_pct >= self.forecast_required_capital_pct:
+            reasons.append("capital_intensive")
+
+        vol20 = signal.get("realized_vol_20d")
+        if vol20 is not None and float(vol20) >= self.forecast_required_volatility:
+            reasons.append("volatile")
+
+        avg_vol = signal.get("avg_volume_20")
+        if avg_vol is not None and float(avg_vol) < self.forecast_required_min_volume:
+            reasons.append("long_lead_or_illiquid")
+
+        return bool(reasons), reasons
+
     # -------------------------------
     # Decision logic
     # -------------------------------
@@ -1210,6 +1267,19 @@ class TradingEngine:
         if not holding:
             # Only enter if we have an open position slot
             if signal["verdict"] == "BUY" and len(self.current_holdings) < self.max_positions:
+                forecast_required, forecast_reasons = self._forecast_required_for_entry(signal, price)
+                if forecast_required and signal.get("forecast_direction") != "up":
+                    signal["verdict"] = "HOLD"
+                    signal["forecast_blocked"] = True
+                    signal["forecast_required"] = True
+                    signal["forecast_required_reasons"] = forecast_reasons
+                    self.send_alert(
+                        f"FORECAST BLOCK: {symbol} buy skipped (requires forecast UP for {', '.join(forecast_reasons)} asset profile).",
+                        level="warn",
+                        symbol=symbol,
+                    )
+                    return
+                signal["forecast_required"] = forecast_required
                 # Auto-trade master switch — if OFF, signal but don't execute
                 if not self.auto_trade:
                     signal["verdict"] = "BUY_BLOCKED"
@@ -1315,9 +1385,17 @@ class TradingEngine:
         return len(self._trade_timestamps) < self.max_trades_per_hour
 
     def buy(self, symbol: str, price: float, signal: Optional[Dict[str, Any]] = None):
-        if not self._throttle_trades():
-            self.send_alert(f"Trade throttled (max/hour). Skipped buy for {symbol}.", level="warn")
-            return
+        with self._buy_lock:
+            if not self._throttle_trades():
+                self.send_alert(f"Trade throttled (max/hour). Skipped buy for {symbol}.", level="warn")
+                return
+
+            with self.lock:
+                if symbol in self.current_holdings:
+                    return
+                if len(self.current_holdings) >= self.max_positions:
+                    self.send_alert(f"Position limit reached. Skipped buy for {symbol}.", level="warn", symbol=symbol)
+                    return
 
         # ── Position sizing ──────────────────────────────────────────────────
         #
@@ -1333,15 +1411,18 @@ class TradingEngine:
         #     → actual alloc = min($20, $2 * (price / stop_distance)) ≈ small slice
         #     → Result: several $2-$20 positions, never one $99 bet!
         #
-        if self.initial_capital > 0:
-            total_capital = self._available_capital + sum(
-                h["qty"] * h["price"] for h in self.current_holdings.values()
-            )
+            if self.initial_capital > 0:
+                with self.lock:
+                    total_capital = self._available_capital + sum(
+                        h["qty"] * h["price"] for h in self.current_holdings.values()
+                    )
 
             # Slot-based allocation: spread across max(max_positions, min_positions) slots
-            effective_slots = max(self.max_positions, self.min_positions)
-            open_slots      = max(1, effective_slots - len(self.current_holdings))
-            slot_alloc      = self._available_capital / open_slots
+                effective_slots = max(self.max_positions, self.min_positions)
+                with self.lock:
+                    open_slots = max(1, effective_slots - len(self.current_holdings))
+                    avail_now = self._available_capital
+                slot_alloc = avail_now / open_slots
 
             # --- Dynamic risk adjustment ---
             # 1. Streak-based risk adjustment
@@ -1366,77 +1447,100 @@ class TradingEngine:
                 risk_alloc = min(risk_alloc, self.risk_per_trade_usd)
 
             # Final allocation = most conservative of slot, risk, and max caps
-            alloc = min(slot_alloc, risk_alloc, max_alloc)
-            alloc = min(alloc, self._available_capital)   # never exceed what we have
+                alloc = min(slot_alloc, risk_alloc, max_alloc)
+                alloc = min(alloc, avail_now)   # never exceed what we have
 
-            qty  = max(1, int(alloc / price))
-            cost = qty * price
+                qty  = max(1, int(alloc / price))
+                cost = qty * price
 
             # Final safety: if even 1 share costs more than available capital, skip
-            if price > self._available_capital:
-                self.send_alert(
-                    f"Insufficient capital (${self._available_capital:.2f}) to buy even "
-                    f"1x {symbol} @ ${price:.2f} — skipping.",
-                    level="warn",
-                )
-                return
+                with self.lock:
+                    avail_now = self._available_capital
+                if price > avail_now:
+                    self.send_alert(
+                        f"Insufficient capital (${avail_now:.2f}) to buy even "
+                        f"1x {symbol} @ ${price:.2f} — skipping.",
+                        level="warn",
+                    )
+                    return
 
             # Clamp qty so cost never exceeds available capital
-            while cost > self._available_capital and qty > 1:
-                qty  -= 1
-                cost  = qty * price
+                while cost > avail_now and qty > 1:
+                    qty  -= 1
+                    cost  = qty * price
 
-            if qty < 1:
+                if qty < 1:
+                    self.send_alert(
+                        f"Position sizing produced qty=0 for {symbol} @ ${price:.2f} "
+                        f"(available: ${avail_now:.2f}, alloc: ${alloc:.2f}). Skipping.",
+                        level="warn",
+                    )
+                    return
+
+                # Hard invariants (never bypassed): exposure and reserve limits.
+                invested_now = max(0.0, total_capital - avail_now)
+                projected_invested = invested_now + cost
+                projected_cash = max(0.0, avail_now - cost)
+                exposure_pct = (projected_invested / total_capital * 100.0) if total_capital > 0 else 0.0
+                reserve_pct = (projected_cash / total_capital * 100.0) if total_capital > 0 else 0.0
+                if exposure_pct > self.max_gross_exposure_pct:
+                    self.send_alert(
+                        f"HARD GUARD: blocked {symbol} buy; projected exposure {exposure_pct:.1f}% exceeds max {self.max_gross_exposure_pct:.1f}%.",
+                        level="warn",
+                        symbol=symbol,
+                    )
+                    return
+                if reserve_pct < self.min_cash_reserve_pct:
+                    self.send_alert(
+                        f"HARD GUARD: blocked {symbol} buy; projected cash reserve {reserve_pct:.1f}% below minimum {self.min_cash_reserve_pct:.1f}%.",
+                        level="warn",
+                        symbol=symbol,
+                    )
+                    return
+
                 self.send_alert(
-                    f"Position sizing produced qty=0 for {symbol} @ ${price:.2f} "
-                    f"(available: ${self._available_capital:.2f}, alloc: ${alloc:.2f}). Skipping.",
-                    level="warn",
+                    f"SIZING: {symbol} @ ${price:.2f} | "
+                    f"slots={open_slots} slot_alloc=${slot_alloc:.2f} "
+                    f"risk_alloc=${risk_alloc:.2f} max_alloc=${max_alloc:.2f} "
+                    f"(streak_risk={streak_risk:.2f}%, vol_risk={vol_risk:.2f}%) "
+                    f"→ buying {qty}x (${cost:.2f})",
+                    level="info", symbol=symbol,
                 )
-                return
+            else:
+                qty  = int(os.environ.get("ORDER_QTY", "1"))
+                cost = qty * price
 
-            self.send_alert(
-                f"SIZING: {symbol} @ ${price:.2f} | "
-                f"slots={open_slots} slot_alloc=${slot_alloc:.2f} "
-                f"risk_alloc=${risk_alloc:.2f} max_alloc=${max_alloc:.2f} "
-                f"(streak_risk={streak_risk:.2f}%, vol_risk={vol_risk:.2f}%) "
-                f"→ buying {qty}x (${cost:.2f})",
-                level="info", symbol=symbol,
-            )
-        else:
-            qty  = int(os.environ.get("ORDER_QTY", "1"))
-            cost = qty * price
+            try:
+                self.api.submit_order(
+                    symbol=symbol,
+                    qty=qty,
+                    side="buy",
+                    type="market",
+                    time_in_force="day",
+                )
 
-        try:
-            self.api.submit_order(
-                symbol=symbol,
-                qty=qty,
-                side="buy",
-                type="market",
-                time_in_force="day",
-            )
+                with self.lock:
+                    if self.initial_capital > 0:
+                        self._available_capital -= cost
+                    self.current_holdings[symbol] = {
+                        "price": price, "qty": qty,
+                        "cost": cost, "time": time.time(),
+                    }
+                    self._peak_prices[symbol] = price       # start trailing peak at buy price
+                    self._trade_timestamps.append(time.time())
+                    self.trade_log.append({
+                        "action": "BUY", "symbol": symbol, "price": price,
+                        "qty": qty, "cost": cost, "time": time.time(),
+                        "rsi": signal.get("rsi") if signal else None,
+                    })
 
-            with self.lock:
-                if self.initial_capital > 0:
-                    self._available_capital -= cost
-                self.current_holdings[symbol] = {
-                    "price": price, "qty": qty,
-                    "cost": cost, "time": time.time(),
-                }
-                self._peak_prices[symbol] = price       # start trailing peak at buy price
-                self._trade_timestamps.append(time.time())
-                self.trade_log.append({
-                    "action": "BUY", "symbol": symbol, "price": price,
-                    "qty": qty, "cost": cost, "time": time.time(),
-                    "rsi": signal.get("rsi") if signal else None,
-                })
+                msg = f"BUY {qty}x {symbol} @ ${price:.2f} (cost ${cost:.2f})"
+                if signal:
+                    msg += f" | RSI={signal.get('rsi')} SMA20/50={signal.get('sma20')}/{signal.get('sma50')}"
+                self.send_alert(msg, level="info", symbol=symbol)
 
-            msg = f"BUY {qty}x {symbol} @ ${price:.2f} (cost ${cost:.2f})"
-            if signal:
-                msg += f" | RSI={signal.get('rsi')} SMA20/50={signal.get('sma20')}/{signal.get('sma50')}"
-            self.send_alert(msg, level="info", symbol=symbol)
-
-        except Exception as e:
-            self.send_alert(f"BUY ERROR {symbol}: {e}", level="alert", symbol=symbol)
+            except Exception as e:
+                self.send_alert(f"BUY ERROR {symbol}: {e}", level="alert", symbol=symbol)
 
     def sell(self, symbol: str, price: float, reason: str = "profit"):
         with self.lock:
