@@ -3319,7 +3319,14 @@ def _engine_session(session_num: int) -> None:
         "last_heartbeat": int(time.time()),
     })
     ladder_symbols = list(dict.fromkeys(stock_list + DEFAULT_PORTFOLIO))
-    _ladder = PortfolioLadderScanner(symbols=ladder_symbols, engine=_engine)
+    _ladder = PortfolioLadderScanner(
+        symbols=ladder_symbols,
+        engine=_engine,
+        top_tier_pct=float(os.environ.get("TOP_TIER_PCT", "0.30")),
+        bottom_tier_pct=float(os.environ.get("BOTTOM_TIER_PCT", "0.20")),
+        min_score_to_buy=float(os.environ.get("MIN_SCORE_TO_BUY", "40.0")),
+        rsi_buy_max=float(os.environ.get("LADDER_RSI_BUY_MAX", os.environ.get("RSI_BUY_MAX", "56.0"))),
+    )
     integrate_ladder_with_engine(_engine, _ladder)
     _engine.start()
     print(f"[ENGINE] Session #{session_num} started (mode={mode}, stocks={stock_list}).")

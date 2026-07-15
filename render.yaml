@@ -106,21 +106,23 @@ services:
         value: AAPL,GOOG,TSLA,MSFT,AMZN
       # -- Scan & execution -------------------------------------------------
       - key: POLL_SECONDS
-        value: "60"         # conservative default: lower API churn, steadier behavior
+        value: "15"         # balanced active default: faster scans for timely entries/exits
       - key: SCAN_WORKERS
         value: "6"
       - key: TRAILING_STOP_PCT
-        value: "3.0"
+        value: "2.5"
       - key: LOSS_THRESHOLD
-        value: "5.0"
+        value: "4.0"
       - key: MAX_POSITIONS
-        value: "5"
-      - key: SCAN_ALL_MARKET
-        value: "false"      # safer default for new users; enable manually after validation
-      - key: MARKET_SCAN_CANDIDATES
-        value: "12"
-      - key: MAX_TRADES_PER_HOUR
         value: "6"
+      - key: SCAN_ALL_MARKET
+        value: "true"       # active default: include full-market momentum candidates
+      - key: MARKET_SCAN_CANDIDATES
+        value: "20"
+      - key: MAX_TRADES_PER_HOUR
+        value: "12"
+      - key: MIN_HOLD_SECONDS
+        value: "3600"       # 1h minimum hold (emergency stops still fire immediately)
       - key: ORDER_QTY
         value: "1"
       # -- Capital & position sizing ----------------------------------------
@@ -151,18 +153,18 @@ services:
         value: "1000000"
       # -- Signal filters ---------------------------------------------------
       - key: RSI_BUY_MAX
-        value: "50.0"
+        value: "56.0"
       - key: RSI_SELL_MIN
-        value: "70.0"
+        value: "65.0"
       - key: SMA_SPREAD_MIN
-        value: "0.1"
+        value: "0.03"
       # -- Portfolio ladder -------------------------------------------------
       - key: LADDER_INTERVAL
         value: "120"        # rescore every 2 min — keeps AV calls well within free limit
       - key: MIN_SCORE_TO_BUY
-        value: "45.0"
+        value: "40.0"
       - key: TOP_TIER_PCT
-        value: "0.20"
+        value: "0.30"
       - key: BOTTOM_TIER_PCT
         value: "0.20"
       # -- Alerts & heartbeat -----------------------------------------------
