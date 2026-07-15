@@ -1119,6 +1119,7 @@
     let notifFilter   = 'all';
     let unreadAlerts  = 0;
     let marketDataSeen = false;
+    let engineTrackedSymbols = new Set();
     const lastFeedEmitTs = {}; // symbol -> epoch ms of last emitted feed tick
     const FEED_ROLL_INTERVAL_MS = 5000;
     const sparkCharts = {};  // symbol -> Chart instance
@@ -1161,6 +1162,9 @@
       (data.tickers || []).forEach(t => { quotes[t.symbol] = t; });
       renderWatchlistCards(quotes);
     });
+    socket.on('engine_activity', (evt) => {
+      addFeedActionLine(evt || {});
+    });
 
     let _notifications_cache = [];
 
@@ -1173,6 +1177,42 @@
     }
     function saveWatchlist(l) { localStorage.setItem(LS_KEY, JSON.stringify(l)); }
     function normalizeSymbol(s) { return String(s||"").trim().toUpperCase(); }
+    function isWatchlistSymbol(sym) {
+      const s = normalizeSymbol(sym);
+      if (!s) return false;
+      return loadWatchlist().includes(s);
+    }
+    function isEngineTrackedSymbol(sym) {
+      const s = normalizeSymbol(sym);
+      if (!s) return false;
+      return engineTrackedSymbols.has(s);
+    }
+    function inferSymbolFromFeedMessage(msg) {
+      const u = String(msg || '').toUpperCase();
+      const patterns = [
+        /\b(?:SCAN|BUY|SELL|STOP-LOSS|TRAILING STOP|FORECAST EXIT|DATA ISSUE|SIZING|PROTECTIVE GTC STOP)\s+([A-Z]{1,6})\b/,
+        /\b([A-Z]{1,6})\s*[:\-]\s*(?:BUY|SELL|HOLD|STOP|EXIT)\b/,
+      ];
+      for (const rx of patterns) {
+        const m = u.match(rx);
+        if (m && m[1]) return normalizeSymbol(m[1]);
+      }
+      return '';
+    }
+    function isActionableFeedEvent(action, level, msg) {
+      const a = String(action || '').toLowerCase();
+      const l = String(level || '').toLowerCase();
+      const u = String(msg || '').toUpperCase();
+      if (a === 'buy' || a === 'sell' || a.includes('stop') || a.includes('exit')) return true;
+      if (l === 'alert' || l === 'rocket') return true;
+      return (
+        u.includes(' BUY ') || u.startsWith('BUY ') ||
+        u.includes(' SELL ') || u.startsWith('SELL ') ||
+        u.includes('TRAILING STOP') || u.includes('STOP-LOSS') ||
+        u.includes('FORECAST EXIT') || u.includes('PROTECTIVE GTC STOP') ||
+        u.includes('ERROR') || u.includes('FAILED') || u.includes('ALERT')
+      );
+    }
     function upsertWatchlistSymbols(symbols) {
       const list = loadWatchlist();
       let changed = false;
@@ -1375,11 +1415,8 @@
           card.classList.add(dir);
         }
 
-        // Feed behavior: log first-seen, changed, or periodic ticks so live mode
-        // always shows a rolling ticker stream (not only when price changes).
-        if (shouldLogFeedTick(sym, price, prevPrice)) {
-          addFeedLine(sym, price, prevPrice, change);
-        }
+        // Watchlist prices are shown on cards only; Live Feed is reserved for
+        // trader actions and system events.
 
         // Update sparkline AFTER card is in DOM
         if (price != null) updateSparkline(sym, price);
@@ -1533,6 +1570,32 @@
       el.appendChild(line);
       while (el.children.length > 200) el.removeChild(el.firstChild);
     }
+    function addFeedActionLine(evt) {
+      clearWaitingFeedPlaceholder();
+      const el = document.getElementById('liveFeed');
+      const line = document.createElement('div');
+      const action = String(evt.action || '').toLowerCase();
+      const level = String(evt.level || '').toLowerCase();
+      const sym = normalizeSymbol(evt.symbol || '') || inferSymbolFromFeedMessage(evt.message || '');
+      const msg = String(evt.message || '').trim();
+
+      // Keep watchlist symbols out of passive chatter in Live Feed.
+      // Show them only for actionable trader events.
+      if (sym && (isWatchlistSymbol(sym) || isEngineTrackedSymbol(sym))) {
+        if (!isActionableFeedEvent(action, level, msg)) return;
+      }
+
+      let klass = 'feed-line';
+      if (level === 'warn' || level === 'alert' || action.includes('stop') || action === 'sell') {
+        klass += ' warn-line';
+      } else if (action === 'buy' || action === 'scan' || action === 'hold') {
+        klass += ' up-line';
+      }
+      line.className = klass;
+      line.innerHTML = `<span class="ts">${tsNow()}</span>${sym ? `<span class="sym">${escHtml(sym)}</span>` : ''}<span class="msg">${escHtml(msg || 'Engine activity')}</span>`;
+      el.appendChild(line);
+      while (el.children.length > 200) el.removeChild(el.firstChild);
+    }
     function clearWaitingFeedPlaceholder() {
       const el = document.getElementById('liveFeed');
       if (!el || !el.children || !el.children.length) return;
@@ -1607,15 +1670,23 @@
       badge.style.display = '';
       badge.textContent = unreadAlerts > 99 ? '99+' : unreadAlerts;
 
-      // Mirror actual trade executions into the Live Feed and auto-track symbol.
+      // Mirror trader/system notifications into the Live Feed.
       try {
         const sym = normalizeSymbol(note?.symbol || '');
-        const msg = String(note?.message || '');
+        const msg = String(note?.message || '').trim();
+        if (msg) {
+          addFeedActionLine({
+            action: 'notification',
+            level: String(note?.level || 'info'),
+            symbol: sym,
+            message: `${sym && !msg.startsWith(sym) ? sym + ' ' : ''}${msg}`
+          });
+        }
+
         const upper = msg.toUpperCase();
         const isTradeEvent = upper.includes(' BUY ') || upper.startsWith('BUY ') || upper.includes(' SELL ') || upper.includes(': SELL ');
         if (sym && isTradeEvent) {
           const changed = upsertWatchlistSymbols([sym]);
-          addFeedSysLine(`${sym} ${msg}`);
           if (changed) refreshQuotesNow();
         }
       } catch {}
@@ -1692,6 +1763,10 @@
       const staleEl = document.getElementById('workerStaleInfo');
       const pnlEl   = document.getElementById('statPnL');
 
+      if (Array.isArray(d.stocks)) {
+        engineTrackedSymbols = new Set(d.stocks.map(normalizeSymbol).filter(Boolean));
+      }
+
       // Three states: trading (green) / paused (yellow, market closed) / offline (red)
       const state = d.state || (d.running ? 'trading' : 'offline');
       if (state === 'trading') {
@@ -1730,10 +1805,18 @@
 
       // Capital pool display
       const cap = d.capital;
+      const acct = d.account;
       const capEl  = document.getElementById('statCapital');
       const capSub = document.getElementById('statCapitalSub');
-      if (cap && capEl) {
-        if (cap.mode === 'pool') {
+      if (capEl) {
+        if (acct && acct.available) {
+          const cash = +acct.cash;
+          const equity = +acct.equity;
+          const bp = +acct.buying_power;
+          capEl.textContent = fmtMoney(cash);
+          capEl.className = 'stat-value ' + ((equity >= cash) ? 'up' : 'down');
+          capSub.textContent = `Equity: ${fmtMoney(equity)} • Buying Power: ${fmtMoney(bp)}`;
+        } else if (cap && cap.mode === 'pool') {
           capEl.textContent = fmtMoney(cap.available);
           capEl.className   = 'stat-value ' + (cap.available >= (cap.initial || 0) ? 'up' : 'down');
           capSub.textContent = 'Total: ' + fmtMoney(cap.total);

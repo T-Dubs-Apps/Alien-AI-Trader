@@ -77,10 +77,11 @@ class TradingEngine:
     - Heartbeats are posted to your dashboard web service with per-symbol signal data.
     """
 
-    def __init__(self, stock_list: List[str], mode: str = "AI", alert_callback=None):
+    def __init__(self, stock_list: List[str], mode: str = "AI", alert_callback=None, activity_callback=None):
         self.stock_list = [s.strip().upper() for s in stock_list if s and s.strip()]
         self.mode = mode
         self.alert_callback = alert_callback
+        self.activity_callback = activity_callback
 
         self.running = False
         self.lock = threading.Lock()
@@ -548,8 +549,35 @@ class TradingEngine:
                 "price_unavailable",
                 "Skipping this scan because no live price was returned.",
             )
+            self.emit_activity(
+                action="scan_skip",
+                message=f"SCAN {symbol}: skipped (no live price).",
+                symbol=symbol,
+                level="warn",
+            )
             return
         self.evaluate(symbol, price)
+
+        # Emit one live-feed action for every completed symbol scan.
+        try:
+            with self.lock:
+                snap = dict(self._symbol_signals.get(symbol) or {})
+            verdict = str(snap.get("verdict") or "HOLD").upper()
+            if verdict == "BUY_BLOCKED":
+                msg = f"SCAN {symbol}: BUY signal blocked (auto-trade OFF) @ ${price:.2f}"
+                action = "hold"
+            elif verdict == "BUY":
+                msg = f"SCAN {symbol}: BUY signal @ ${price:.2f}"
+                action = "scan"
+            elif verdict == "SELL":
+                msg = f"SCAN {symbol}: SELL signal @ ${price:.2f}"
+                action = "scan"
+            else:
+                msg = f"SCAN {symbol}: HOLD @ ${price:.2f}"
+                action = "hold"
+            self.emit_activity(action=action, message=msg, symbol=symbol, level="info")
+        except Exception:
+            pass
 
     def _alert_data_issue(self, symbol: str, issue: str, detail: str) -> None:
         """Emit a throttled warning for data issues so users can diagnose skips."""
@@ -1662,6 +1690,16 @@ class TradingEngine:
                 )
             except Exception:
                 pass
+
+    def emit_activity(self, action: str, message: str, symbol: str = "", level: str = "info") -> None:
+        """Emit lightweight activity events (scan/hold/etc.) for the live feed."""
+        cb = self.activity_callback
+        if not cb:
+            return
+        try:
+            cb(action=action, message=message, symbol=symbol, level=level)
+        except Exception:
+            pass
 
     # -------------------------------
     # Heartbeat to dashboard

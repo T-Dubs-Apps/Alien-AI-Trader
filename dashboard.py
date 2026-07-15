@@ -3177,11 +3177,38 @@ def _engine_alert(message: str, level: str = "info", symbol: str = "") -> None:
         pass
 
 
+def _engine_activity(action: str, message: str, symbol: str = "", level: str = "info") -> None:
+    """Push lightweight engine actions to the live feed without creating notifications."""
+    evt = {
+        "time": int(time.time()),
+        "action": str(action or "info"),
+        "level": str(level or "info"),
+        "symbol": str(symbol or ""),
+        "message": str(message or ""),
+    }
+    try:
+        socketio.emit("engine_activity", evt)
+    except Exception:
+        pass
+
+
 def _internal_heartbeat(eng: TradingEngine, lad: PortfolioLadderScanner) -> None:
     """Update _worker_status and _ladder_top20 in-process (no HTTP round-trip)."""
     global _worker_status, _ladder_top20
+    account_snapshot: Dict[str, Any] = {"available": False}
+    next_account_refresh = 0.0
+
+    def _to_float(v: Any, default: float = 0.0) -> float:
+        try:
+            if v is None:
+                return default
+            return float(v)
+        except Exception:
+            return default
+
     while getattr(eng, "running", True):
         try:
+            now_ts = time.time()
             with eng.lock:
                 positions = {
                     sym: {"price": h["price"], "qty": h["qty"]}
@@ -3189,6 +3216,27 @@ def _internal_heartbeat(eng: TradingEngine, lad: PortfolioLadderScanner) -> None
                 }
                 signals_snapshot = dict(eng._symbol_signals)
                 invested = sum(h["qty"] * h["price"] for h in eng.current_holdings.values())
+
+            if now_ts >= next_account_refresh:
+                next_account_refresh = now_ts + 20
+                try:
+                    acct = eng.api.get_account()
+                    account_snapshot = {
+                        "available": True,
+                        "status": str(getattr(acct, "status", "") or ""),
+                        "equity": round(_to_float(getattr(acct, "equity", 0)), 2),
+                        "cash": round(_to_float(getattr(acct, "cash", 0)), 2),
+                        "buying_power": round(_to_float(getattr(acct, "buying_power", 0)), 2),
+                        "portfolio_value": round(_to_float(getattr(acct, "portfolio_value", 0)), 2),
+                        "daytrade_count": str(getattr(acct, "daytrade_count", "") or ""),
+                        "pattern_day_trader": bool(getattr(acct, "pattern_day_trader", False)),
+                        "fetched_at": int(now_ts),
+                    }
+                except Exception as acct_err:
+                    if not account_snapshot.get("available"):
+                        account_snapshot = {"available": False}
+                    account_snapshot["error"] = str(acct_err)[:200]
+                    account_snapshot["fetched_at"] = int(now_ts)
 
             top20: list = []
             try:
@@ -3206,6 +3254,7 @@ def _internal_heartbeat(eng: TradingEngine, lad: PortfolioLadderScanner) -> None
                 "signals":              signals_snapshot,
                 "message":              "alive",
                 "trade_count":          len(eng.trade_log),
+                "account":              account_snapshot,
                 "capital": {
                     "initial":   round(eng.initial_capital, 2),
                     "available": round(eng._available_capital, 2),
@@ -3257,7 +3306,12 @@ def _engine_session(session_num: int) -> None:
     ]
     mode = os.environ.get("ENGINE_MODE", "AI")
 
-    _engine = TradingEngine(stock_list=stock_list, mode=mode, alert_callback=_engine_alert)
+    _engine = TradingEngine(
+        stock_list=stock_list,
+        mode=mode,
+        alert_callback=_engine_alert,
+        activity_callback=_engine_activity,
+    )
     _worker_status.update({
         "running": True,
         "state": "starting",
