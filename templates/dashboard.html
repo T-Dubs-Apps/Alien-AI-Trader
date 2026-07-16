@@ -1997,12 +1997,32 @@
     async function onTradingModeChange(fromKeySave) {
       const sel  = document.getElementById('tradingModeSelect');
       const want = sel ? sel.value : 'paper';
+      let consentAck = false;
+
+      if (want === 'live' && !fromKeySave) {
+        const msg = [
+          'Enable LIVE trading with real money?',
+          '',
+          'This can place real buy/sell orders in your live Alpaca account.',
+          'Click OK to continue, or Cancel to stay in Paper mode.'
+        ].join('\n');
+        consentAck = window.confirm(msg);
+        if (!consentAck) {
+          if (sel) sel.value = 'paper';
+          _setModeBanner('paper', true, 'Stayed in paper mode.', !!document.getElementById('marketHoursOnlyToggle')?.checked);
+          return;
+        }
+      }
 
       try {
         const r = await fetch('/api/settings/trading', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ trading_mode: want })
+          body: JSON.stringify({
+            trading_mode: want,
+            live_consent_ack: (want === 'live') ? (fromKeySave ? true : consentAck) : false,
+            live_consent_source: (want === 'live') ? (fromKeySave ? 'live_keys_flow' : 'mode_select_confirm') : ''
+          })
         });
         const d = await r.json();
         if (!r.ok) {

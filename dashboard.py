@@ -3018,6 +3018,11 @@ def update_trading_settings():
     payload = request.json or {}
     _record_anomaly("settings_update")
 
+    consent_meta = {
+        "ack": bool(payload.get("live_consent_ack", False)),
+        "source": str(payload.get("live_consent_source", "")).strip()[:32],
+    }
+
     # ── Paper ↔ Live switch — license-gated, fails safe to paper ──────────────
     if "trading_mode" in payload:
         want = str(payload.get("trading_mode", "")).lower()
@@ -3025,6 +3030,13 @@ def update_trading_settings():
             return jsonify({"status": "error",
                             "message": "trading_mode must be 'paper' or 'live'."}), 400
         if want == "live":
+            if "live_consent_ack" in payload and not consent_meta["ack"]:
+                return jsonify({
+                    "status": "error",
+                    "message": "Live mode switch canceled: consent was not acknowledged.",
+                    "trading_mode": _effective_mode(),
+                    "requested_mode": _requested_mode(),
+                }), 400
             ok, reason = _live_allowed()
             if not ok:
                 # Refuse to go live; leave the stored mode untouched (paper).
@@ -3089,6 +3101,8 @@ def update_trading_settings():
             "requested_mode": resp.get("requested_mode"),
             "effective_mode": resp.get("trading_mode"),
             "market_hours_only": resp.get("market_hours_only"),
+            "live_consent_ack": consent_meta["ack"],
+            "live_consent_source": consent_meta["source"],
         },
         actor="dashboard_user",
     )
