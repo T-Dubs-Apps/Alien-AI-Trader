@@ -289,6 +289,8 @@ class TradingEngine:
         # market data feed is unavailable for multiple scan cycles.
         self.data_issue_alert_cooldown = int(os.environ.get("DATA_ISSUE_ALERT_COOLDOWN", "300"))
         self._last_data_issue_alert: Dict[str, float] = {}
+        self.data_issue_skip_seconds = int(os.environ.get("DATA_ISSUE_SKIP_SECONDS", "3600"))
+        self._symbol_skip_until: Dict[str, float] = {}
 
         # ── Portfolio Safety Shield ─────────────────────────────────────────────
         # If the total portfolio value drops to/below this threshold,
@@ -583,6 +585,15 @@ class TradingEngine:
         """Emit a throttled warning for data issues so users can diagnose skips."""
         key = f"{symbol}:{issue}"
         now = time.time()
+        issue_lc = str(issue or "").lower()
+
+        # Keep problematic symbols out of market-candidate rotation for a while
+        # so they do not keep reappearing every scan cycle.
+        if issue_lc in ("bars_unavailable", "price_unavailable"):
+            self._symbol_skip_until[str(symbol or "").upper()] = now + max(60, self.data_issue_skip_seconds)
+            # Invalidate market-candidate cache so skip list applies immediately.
+            self._market_candidates_cache = ([], 0.0)
+
         last = self._last_data_issue_alert.get(key, 0.0)
         if now - last < self.data_issue_alert_cooldown:
             return
@@ -746,6 +757,9 @@ class TradingEngine:
             try:
                 snaps = self.api.get_snapshots(batch)
                 for sym, snap in snaps.items():
+                    skip_until = self._symbol_skip_until.get(sym, 0.0)
+                    if skip_until > time.time():
+                        continue
                     if snap is None or sym in already_held or sym in watchlist:
                         continue
                     lt    = getattr(snap, "latest_trade", None)
