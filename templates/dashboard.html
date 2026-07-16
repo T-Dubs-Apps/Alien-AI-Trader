@@ -379,7 +379,7 @@
           </div>
           <div class="d-flex gap-2 align-items-center flex-wrap">
             <span class="small-muted" id="lastUpdated"></span>
-            <select class="form-select form-select-sm" id="refreshSeconds" style="width:130px;">
+            <select class="form-select form-select-sm" id="refreshSeconds" style="width:130px;" title="Refresh interval" aria-label="Refresh interval">
               <option value="1">Every 1s</option>
               <option value="2">Every 2s</option>
               <option value="3">Every 3s</option>
@@ -480,7 +480,7 @@
                 </div>
                 <div class="col-6">
                   <label class="form-label">Order Type</label>
-                  <select class="form-select" id="orderType">
+                  <select class="form-select" id="orderType" title="Order type" aria-label="Order type">
                     <option value="market">Market Order</option>
                     <option value="limit">Limit Order</option>
                     <option value="stop">Stop Order</option>
@@ -493,7 +493,7 @@
                 </div>
                 <div class="col-6">
                   <label class="form-label">Time in Force</label>
-                  <select class="form-select" id="orderTIF">
+                  <select class="form-select" id="orderTIF" title="Time in force" aria-label="Time in force">
                     <option value="day">Day</option>
                     <option value="gtc">GTC</option>
                     <option value="ioc">IOC</option>
@@ -502,7 +502,7 @@
                 </div>
                 <div class="col-6">
                   <label class="form-label">Side</label>
-                  <select class="form-select" id="orderSide">
+                  <select class="form-select" id="orderSide" title="Order side" aria-label="Order side">
                     <option value="buy">Buy</option>
                     <option value="sell">Sell</option>
                   </select>
@@ -973,14 +973,14 @@
               <div class="row g-3 align-items-end">
                 <div class="col-md-4">
                   <label class="form-label">Mode <span class="small-muted">(Paper ↔ Live)</span></label>
-                  <select class="form-select" id="tradingModeSelect" onchange="onTradingModeChange()">
+                  <select class="form-select" id="tradingModeSelect" onchange="onTradingModeChange()" title="Trading mode" aria-label="Trading mode">
                     <option value="paper" selected>Paper Trading (Safe — no real money)</option>
                     <option value="live">Live Trading (Real money — use with care)</option>
                   </select>
                 </div>
                 <div class="col-md-4">
                   <label class="form-label">Engine Strategy</label>
-                  <select class="form-select" id="engineModeSelect">
+                  <select class="form-select" id="engineModeSelect" title="Engine strategy" aria-label="Engine strategy">
                     <option value="AI" selected>AI Autopilot</option>
                     <option value="SMA">SMA Crossover</option>
                     <option value="manual">Manual Only</option>
@@ -988,7 +988,7 @@
                 </div>
                 <div class="col-md-4">
                   <label class="form-label">Poll Interval</label>
-                  <select class="form-select" id="pollSelect">
+                  <select class="form-select" id="pollSelect" title="Poll interval" aria-label="Poll interval">
                     <option value="30">Every 30s</option>
                     <option value="60" selected>Every 60s</option>
                     <option value="120">Every 2min</option>
