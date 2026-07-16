@@ -104,78 +104,110 @@ services:
       # -- Stock list -------------------------------------------------------
       - key: STOCK_LIST
         value: AAPL,GOOG,TSLA,MSFT,AMZN
+        sync: false
       # -- Scan & execution -------------------------------------------------
       - key: POLL_SECONDS
         value: "10"         # aggressive default: faster scans for higher turnover
+        sync: false
       - key: SCAN_WORKERS
         value: "10"
+        sync: false
       - key: TRAILING_STOP_PCT
         value: "2.2"
+        sync: false
       - key: LOSS_THRESHOLD
         value: "4.0"
+        sync: false
       - key: MAX_POSITIONS
         value: "8"
+        sync: false
       - key: SCAN_ALL_MARKET
         value: "true"       # active default: include full-market momentum candidates
+        sync: false
       - key: MARKET_SCAN_CANDIDATES
         value: "40"
+        sync: false
       - key: MARKET_MIN_PRICE
         value: "0.50"       # include sub-$1 names while avoiding extreme microcap noise
+        sync: false
       - key: MARKET_MAX_PRICE
         value: "5000"
+        sync: false
       - key: MAX_TRADES_PER_HOUR
         value: "20"
+        sync: false
       - key: MIN_HOLD_SECONDS
         value: "900"        # 15m minimum hold (emergency stops still fire immediately)
+        sync: false
       - key: ORDER_QTY
         value: "1"
+        sync: false
       # -- Capital & position sizing ----------------------------------------
       # 0 = AUTO: size every trade to the account's real balance (recommended).
       # Any >0 value pins the pool to that many dollars instead.
       - key: INITIAL_CAPITAL
         value: "0"
+        sync: false
       - key: RISK_PER_TRADE_PCT
         value: "2.0"
+        sync: false
       - key: MAX_POSITION_PCT
         value: "20.0"
+        sync: false
       - key: MIN_POSITIONS
         value: "5"
+        sync: false
       - key: RISK_PER_TRADE_USD
         value: "0"
+        sync: false
       # Hard invariants: never exceed these protection caps.
       - key: MAX_GROSS_EXPOSURE_PCT
         value: "85.0"
+        sync: false
       - key: MIN_CASH_RESERVE_PCT
         value: "10.0"
+        sync: false
       # Forecast policy: enforce forecast confirmation only when risk profile
       # is high (capital-intensive, volatile, or low-liquidity symbols).
       - key: FORECAST_REQUIRED_CAPITAL_PCT
         value: "12.0"
+        sync: false
       - key: FORECAST_REQUIRED_VOLATILITY
         value: "0.03"
+        sync: false
       - key: FORECAST_REQUIRED_MIN_VOLUME
         value: "1000000"
+        sync: false
       # -- Signal filters ---------------------------------------------------
       - key: RSI_BUY_MAX
         value: "60.0"
+        sync: false
       - key: RSI_SELL_MIN
         value: "62.0"
+        sync: false
       - key: SMA_SPREAD_MIN
         value: "0.0"
+        sync: false
       # -- Portfolio ladder -------------------------------------------------
       - key: LADDER_INTERVAL
         value: "120"        # rescore every 2 min — keeps AV calls well within free limit
+        sync: false
       - key: MIN_SCORE_TO_BUY
         value: "35.0"
+        sync: false
       - key: TOP_TIER_PCT
         value: "0.40"
+        sync: false
       - key: BOTTOM_TIER_PCT
         value: "0.20"
+        sync: false
       # -- Alerts & heartbeat -----------------------------------------------
       - key: AFTERHOURS_DROP_PCT
         value: "3"
+        sync: false
       - key: ROCKET_ALERT_PCT
         value: "5"
+        sync: false
       - key: DASHBOARD_BASE_URL
         sync: false
       # Strict by default: set explicit origins (comma-separated) like
@@ -216,11 +248,14 @@ services:
       # -- Integrated engine (formerly worker-only settings) ----------------
       - key: RUN_SECONDS
         value: "21540"
+        sync: false
       - key: HEARTBEAT_EVERY_SECONDS
         value: "10"
+        sync: false
       # -- Market hours only: engine pauses outside 9:30-16:00 ET Mon-Fri ------
       - key: MARKET_HOURS_ONLY
         value: "true"
+        sync: false
 
     # ── OPTIONAL: full-state persistence (the "Both" / recommended setup) ─────
     # Uncomment this disk AND set DATA_DIR=/var/data above to make EVERYTHING

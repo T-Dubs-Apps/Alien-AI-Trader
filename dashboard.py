@@ -1080,12 +1080,15 @@ _trading_settings: dict = {
     # via GET /api/settings/trading, which downgrades to paper unless live is
     # currently allowed. Always defaults to paper — real money is opt-in.
     "trading_mode":          os.environ.get("TRADING_MODE", "paper").lower(),
+    # Runtime schedule mode is persisted with the rest of dashboard-managed
+    # settings so a deploy/restart does not silently fall back to blueprint env.
+    "market_hours_only":     os.environ.get("MARKET_HOURS_ONLY", "true").lower() == "true",
 }
 
 
 def _load_saved_settings() -> None:
     """Merge persisted settings from trading_settings.json into _trading_settings."""
-    global _trading_settings
+    global _trading_settings, _MARKET_HOURS_ONLY
     if not os.path.exists(SETTINGS_FILE):
         return
     try:
@@ -1093,6 +1096,8 @@ def _load_saved_settings() -> None:
             saved = json.load(f)
         if isinstance(saved, dict):
             _trading_settings.update(saved)
+            if "market_hours_only" in saved:
+                _MARKET_HOURS_ONLY = bool(saved.get("market_hours_only"))
     except Exception:
         pass  # corrupted file — keep defaults
 
@@ -1100,6 +1105,7 @@ def _load_saved_settings() -> None:
 def _save_settings() -> None:
     """Write current _trading_settings to disk so they survive restarts."""
     try:
+        _trading_settings["market_hours_only"] = bool(_MARKET_HOURS_ONLY)
         with open(SETTINGS_FILE, "w") as f:
             json.dump(_trading_settings, f, indent=2)
     except Exception:
