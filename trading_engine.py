@@ -300,6 +300,10 @@ class TradingEngine:
         self._last_data_issue_alert: Dict[str, float] = {}
         self.data_issue_skip_seconds = int(os.environ.get("DATA_ISSUE_SKIP_SECONDS", "3600"))
         self._symbol_skip_until: Dict[str, float] = {}
+        # Aggregate suppressed candidate-only data issues into periodic summary
+        # alerts so operators can verify scanner health without per-symbol spam.
+        self._suppressed_data_issue_counts: Dict[str, int] = {}
+        self._last_suppressed_data_issue_summary = 0.0
 
         # ── Portfolio Safety Shield ─────────────────────────────────────────────
         # If the total portfolio value drops to/below this threshold,
@@ -612,6 +616,22 @@ class TradingEngine:
             tracked = sym_u in set(self.stock_list)
             held = sym_u in set(self.current_holdings.keys())
             if self.scan_all_market and not tracked and not held:
+                with self.lock:
+                    self._suppressed_data_issue_counts[issue_lc] = self._suppressed_data_issue_counts.get(issue_lc, 0) + 1
+                    should_summarize = (now - self._last_suppressed_data_issue_summary) >= max(60, self.data_issue_alert_cooldown)
+                    summary_count = self._suppressed_data_issue_counts.get(issue_lc, 0)
+                    if should_summarize:
+                        self._suppressed_data_issue_counts[issue_lc] = 0
+                        self._last_suppressed_data_issue_summary = now
+                if should_summarize and summary_count > 0:
+                    self.send_alert(
+                        (
+                            f"DATA ISSUE SUMMARY: suppressed {summary_count} non-tracked "
+                            f"price-unavailable market-candidate alert(s) in the last "
+                            f"~{max(60, self.data_issue_alert_cooldown)}s."
+                        ),
+                        level="info",
+                    )
                 return
 
         last = self._last_data_issue_alert.get(key, 0.0)
@@ -1287,15 +1307,18 @@ class TradingEngine:
             price_below_upper = price < boll_upper
             price_near_vwap = abs(price - vwap) / vwap <= 0.02
             forecast_up = signal.get("forecast_direction") == "up"
+            signal["forecast_confirmed"] = bool(forecast_up)
 
-            # BUY: all must be true — forecast confirms upward momentum
+            # BUY: all core confluence checks must be true.
+            # Forecast is enforced later only when entry is high-risk
+            # (capital-intensive / volatile / illiquid) so the bot can still
+            # take valid low-risk entries instead of over-filtering.
             if (
                 golden_cross and
                 rsi < self.rsi_buy_max and
                 macd > macd_signal and
                 price_above_lower and price_below_upper and
-                price_near_vwap and
-                forecast_up
+                price_near_vwap
             ):
                 signal["verdict"] = "BUY"
                 signal["spread_pct"] = round(spread_pct, 3)
