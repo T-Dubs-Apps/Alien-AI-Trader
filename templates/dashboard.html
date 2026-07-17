@@ -469,15 +469,32 @@
         <!-- Cards -->
         <div class="watchlist-grid" id="watchlistGrid"></div>
 
-        <div class="glass-card mt-3">
-          <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
-            <div>
-              <h6 class="mb-0 fw-bold">Last 10 Buy Attempts</h6>
-              <div class="small-muted" style="font-size:.76rem;">Shows only executed buys or explicit buy blocks/errors (hides passive HOLD evaluations)</div>
+        <div class="row g-3 mt-1">
+          <div class="col-lg-6">
+            <div class="glass-card h-100">
+              <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
+                <div>
+                  <h6 class="mb-0 fw-bold">Last 10 Executed Buys</h6>
+                  <div class="small-muted" style="font-size:.76rem;">Only successful BUY_EXECUTED events</div>
+                </div>
+              </div>
+              <div id="buyExecutedList" class="decision-list">
+                <div class="small-muted">Waiting for executed buys…</div>
+              </div>
             </div>
           </div>
-          <div id="buyDecisionList" class="decision-list">
-            <div class="small-muted">Waiting for engine decisions…</div>
+          <div class="col-lg-6">
+            <div class="glass-card h-100">
+              <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
+                <div>
+                  <h6 class="mb-0 fw-bold">Last 10 Blocked Buy Attempts</h6>
+                  <div class="small-muted" style="font-size:.76rem;">BUY_BLOCKED and BUY_ERROR reasons</div>
+                </div>
+              </div>
+              <div id="buyBlockedList" class="decision-list">
+                <div class="small-muted">Waiting for blocked/error attempts…</div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -1938,20 +1955,24 @@
     }
 
     function renderBuyDecisions(items) {
-      const box = document.getElementById('buyDecisionList');
-      if (!box) return;
-      const arr = (Array.isArray(items) ? items : [])
+      const execBox = document.getElementById('buyExecutedList');
+      const blockBox = document.getElementById('buyBlockedList');
+      if (!execBox || !blockBox) return;
+
+      const all = Array.isArray(items) ? items : [];
+      const executed = all
+        .filter(it => String(it?.verdict || '').toUpperCase() === 'BUY_EXECUTED')
+        .slice()
+        .reverse();
+      const blocked = all
         .filter(it => {
-          const verdict = String(it?.verdict || '').toUpperCase();
-          return verdict === 'BUY_EXECUTED' || verdict === 'BUY_BLOCKED' || verdict === 'BUY_ERROR';
+          const v = String(it?.verdict || '').toUpperCase();
+          return v === 'BUY_BLOCKED' || v === 'BUY_ERROR';
         })
         .slice()
         .reverse();
-      if (!arr.length) {
-        box.innerHTML = '<div class="small-muted">No buy attempts yet. This panel updates when a buy is executed, blocked, or errors.</div>';
-        return;
-      }
-      box.innerHTML = arr.map(it => {
+
+      const toHtml = (arr) => arr.map(it => {
         const verdict = String(it.verdict || '').toUpperCase();
         const reason = escHtml(String(it.reason || '').replace(/_/g, ' '));
         const detail = escHtml(it.detail || '');
@@ -1967,6 +1988,13 @@
           <div class="meta">${t}</div>
         </div>`;
       }).join('');
+
+      execBox.innerHTML = executed.length
+        ? toHtml(executed)
+        : '<div class="small-muted">No executed buys yet in the recent decision stream.</div>';
+      blockBox.innerHTML = blocked.length
+        ? toHtml(blocked)
+        : '<div class="small-muted">No blocked/error buy attempts in the recent decision stream.</div>';
     }
 
     function updateTradeHealthBanner(status) {
