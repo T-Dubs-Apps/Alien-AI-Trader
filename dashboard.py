@@ -13,6 +13,7 @@ import threading
 import time
 import zipfile
 import requests
+from datetime import datetime, timedelta, timezone
 from threading import Lock
 from typing import Dict, Any, List
 from audit_stream import AuditStream
@@ -2579,13 +2580,18 @@ def _bars_diag_symbol(sym: str, active_client, feed_order: List[str], limit: int
         },
     }
 
+    history_start = datetime.now(timezone.utc) - timedelta(days=max(180, int(limit) * 3))
+    min_indicator_bars = 50
+
     def _alpaca_bars(timeframe: str) -> bool:
         for feed in feed_order:
             try:
                 try:
-                    bars = active_client.get_bars(sym, timeframe, limit=limit, feed=feed)
+                    bars = active_client.get_bars(
+                        sym, timeframe, start=history_start, limit=limit, feed=feed
+                    )
                 except TypeError:
-                    bars = active_client.get_bars(sym, timeframe, limit=limit)
+                    bars = active_client.get_bars(sym, timeframe, start=history_start, limit=limit)
                 bar_list = list(bars) if bars else []
                 close_px = _safe_float(getattr(bar_list[-1], "c", None)) if bar_list else None
                 diag["attempts"].append({
@@ -2595,8 +2601,9 @@ def _bars_diag_symbol(sym: str, active_client, feed_order: List[str], limit: int
                     "ok": True,
                     "bars": len(bar_list),
                     "latest_close": close_px,
+                    "sufficient_for_indicators": len(bar_list) >= min_indicator_bars,
                 })
-                if bar_list:
+                if len(bar_list) >= min_indicator_bars:
                     diag["result"] = {
                         "provider": "alpaca",
                         "timeframe": timeframe,

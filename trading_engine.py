@@ -14,6 +14,7 @@ import threading
 import statistics
 import requests
 import key_store
+from datetime import datetime, timedelta, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, Any, List, Optional, Tuple
 
@@ -1112,6 +1113,10 @@ class TradingEngine:
                 return cached_df
 
         df = None
+        # Alpaca can return only the current daily candle when no start date is
+        # supplied. Indicators require historical context (SMA-50 needs 50 bars).
+        history_start = datetime.now(timezone.utc) - timedelta(days=max(180, int(limit) * 3))
+        min_indicator_bars = 50
 
         def _df_from_alpha_daily() -> Optional[pd.DataFrame]:
             """Fallback historical bars from Alpha Vantage daily endpoint."""
@@ -1142,16 +1147,20 @@ class TradingEngine:
                 return None
         try:
             try:
-                bars = self.api.get_bars(symbol, TimeFrame.Day, limit=limit, feed=self.alpaca_data_feed)
+                bars = self.api.get_bars(
+                    symbol, TimeFrame.Day, start=history_start, limit=limit, feed=self.alpaca_data_feed
+                )
             except TypeError:
-                bars = self.api.get_bars(symbol, TimeFrame.Day, limit=limit)
+                bars = self.api.get_bars(symbol, TimeFrame.Day, start=history_start, limit=limit)
             except Exception:
                 if self.alpaca_data_feed != "iex":
-                    bars = self.api.get_bars(symbol, TimeFrame.Day, limit=limit, feed="iex")
+                    bars = self.api.get_bars(
+                        symbol, TimeFrame.Day, start=history_start, limit=limit, feed="iex"
+                    )
                 else:
                     raise
             bar_list = list(bars) if bars else []
-            if bar_list:
+            if len(bar_list) >= min_indicator_bars:
                 df = pd.DataFrame([{
                     "c": float(b.c),
                     "v": float(b.v),
@@ -1163,16 +1172,20 @@ class TradingEngine:
                 # Fallback: try hourly bars if daily returns nothing
                 # (can happen for thinly traded or recently listed symbols)
                 try:
-                    bars_h = self.api.get_bars(symbol, TimeFrame.Hour, limit=limit, feed=self.alpaca_data_feed)
+                    bars_h = self.api.get_bars(
+                        symbol, TimeFrame.Hour, start=history_start, limit=limit, feed=self.alpaca_data_feed
+                    )
                 except TypeError:
-                    bars_h = self.api.get_bars(symbol, TimeFrame.Hour, limit=limit)
+                    bars_h = self.api.get_bars(symbol, TimeFrame.Hour, start=history_start, limit=limit)
                 except Exception:
                     if self.alpaca_data_feed != "iex":
-                        bars_h = self.api.get_bars(symbol, TimeFrame.Hour, limit=limit, feed="iex")
+                        bars_h = self.api.get_bars(
+                            symbol, TimeFrame.Hour, start=history_start, limit=limit, feed="iex"
+                        )
                     else:
                         raise
                 bar_list_h = list(bars_h) if bars_h else []
-                if bar_list_h:
+                if len(bar_list_h) >= min_indicator_bars:
                     df = pd.DataFrame([{
                         "c": float(b.c),
                         "v": float(b.v),
