@@ -1257,7 +1257,9 @@
 
     try {
       const saved = parseInt(localStorage.getItem(LAST_BUY_EXEC_TS_KEY) || '0', 10);
-      if (!isNaN(saved) && saved > 0) lastBuyExecutedTs = saved;
+      const nowSec = Math.floor(Date.now() / 1000);
+      // Guard against stale/corrupt future timestamps that can suppress banner forever.
+      if (!isNaN(saved) && saved > 0 && saved <= (nowSec + 300)) lastBuyExecutedTs = saved;
     } catch {}
 
     function normalizeTradeHealthThresholdMinutes(value) {
@@ -2003,9 +2005,15 @@
 
       const state = String(status?.state || '').toLowerCase();
       const running = !!status?.running;
-      if (!running || state !== 'trading') {
+      if (!running || state === 'offline') {
         el.style.display = 'none';
         return;
+      }
+
+      // Pull the latest threshold directly from UI each refresh so changes apply instantly.
+      const th = document.getElementById('tradeHealthThreshold');
+      if (th) {
+        tradeHealthThresholdMinutes = normalizeTradeHealthThresholdMinutes(th.value);
       }
 
       const decisions = Array.isArray(status?.buy_decisions) ? status.buy_decisions : [];
@@ -2022,6 +2030,11 @@
       }
 
       const nowSec = Math.floor(Date.now() / 1000);
+      if (lastBuyExecutedTs > (nowSec + 300)) {
+        // Reset impossible future timestamps so the warning can recover.
+        lastBuyExecutedTs = 0;
+        try { localStorage.removeItem(LAST_BUY_EXEC_TS_KEY); } catch {}
+      }
       if (lastBuyExecutedTs <= 0) {
         const minsSinceLoad = (nowSec - pageLoadedTs) / 60.0;
         if (minsSinceLoad < tradeHealthThresholdMinutes) {
