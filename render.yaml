@@ -59,6 +59,7 @@ services:
       # Use IEX by default so data keeps flowing on plans without SIP access.
       - key: ALPACA_DATA_FEED
         value: iex
+        sync: false
       # LIVE account keys (real money). Optional — set these to enable the
       # in-app Paper→Live toggle. Live still only activates with a valid license.
       - key: ALPACA_LIVE_KEY
@@ -187,6 +188,25 @@ services:
         sync: false
       - key: SMA_SPREAD_MIN
         value: "0.0"
+        sync: false
+      # Rocket breakout mode: optional momentum-chase entries for explosive movers.
+      - key: ROCKET_BREAKOUT_ENABLED
+        value: "true"
+        sync: false
+      - key: ROCKET_BREAKOUT_MIN_DAY_CHANGE_PCT
+        value: "12.0"
+        sync: false
+      - key: ROCKET_BREAKOUT_VOLUME_MULT
+        value: "1.5"
+        sync: false
+      - key: ROCKET_BREAKOUT_MIN_AVG_VOLUME
+        value: "150000"
+        sync: false
+      - key: ROCKET_BREAKOUT_MAX_ABOVE_SMA20_PCT
+        value: "35.0"
+        sync: false
+      - key: ROCKET_BREAKOUT_LOOKBACK_BARS
+        value: "20"
         sync: false
       # -- Portfolio ladder -------------------------------------------------
       - key: LADDER_INTERVAL

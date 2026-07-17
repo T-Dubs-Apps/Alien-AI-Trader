@@ -133,6 +133,28 @@
     .stock-name    { font-size: 0.75rem; color: var(--muted); margin-top: 2px; }
     .stock-price   { font-size: 1.4rem; font-weight: 800; color: #fff; }
     .stock-change  { font-size: 0.82rem; font-weight: 700; }
+    .data-source-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: .63rem;
+      font-weight: 700;
+      letter-spacing: .02em;
+      padding: 2px 7px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,.03);
+      color: var(--muted);
+      margin-top: 5px;
+      max-width: 100%;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .data-source-chip.alpaca { color: var(--up); border-color: rgba(34,197,94,.4); background: rgba(34,197,94,.08); }
+    .data-source-chip.fallback { color: var(--warn); border-color: rgba(245,158,11,.45); background: rgba(245,158,11,.12); }
+    .data-source-chip.partial { color: #93c5fd; border-color: rgba(59,130,246,.45); background: rgba(59,130,246,.12); }
+    .data-source-chip.missing { color: var(--down); border-color: rgba(239,68,68,.45); background: rgba(239,68,68,.12); }
     .up   { color: var(--up); }
     .down { color: var(--down); }
     .flat { color: var(--flat); }
@@ -633,6 +655,40 @@
                   <input class="form-control" type="number" id="smaSpreadMin" value="0.1" min="0" max="5" step="0.05">
                   <div class="small-muted mt-1" style="font-size:.68rem;">0.1% filters noise crossovers</div>
                 </div>
+                <div class="col-12">
+                  <div class="form-check form-switch mt-1">
+                    <input class="form-check-input" type="checkbox" id="rocketBreakoutEnabled" checked>
+                    <label class="form-check-label" for="rocketBreakoutEnabled">
+                      <strong>Rocket Breakout Mode</strong>
+                      <span class="small-muted ms-1" style="font-size:.72rem;">— allows momentum entries on explosive breakouts that fail dip-buy filters</span>
+                    </label>
+                  </div>
+                </div>
+                <div class="col-4">
+                  <label class="form-label" title="Minimum one-bar % gain required to qualify as a breakout.">Min Day Change %</label>
+                  <input class="form-control" type="number" id="rocketBreakoutMinDayChange" value="12" min="1" max="500" step="0.5">
+                  <div class="small-muted mt-1" style="font-size:.68rem;">Higher = fewer breakouts</div>
+                </div>
+                <div class="col-4">
+                  <label class="form-label" title="Latest volume must be this multiple of average volume.">Volume Surge Multiplier</label>
+                  <input class="form-control" type="number" id="rocketBreakoutVolumeMult" value="1.5" min="1" max="20" step="0.1">
+                  <div class="small-muted mt-1" style="font-size:.68rem;">1.5 = 150% of average volume</div>
+                </div>
+                <div class="col-4">
+                  <label class="form-label" title="Minimum 20-bar average volume for breakout entries.">Min Avg Volume</label>
+                  <input class="form-control" type="number" id="rocketBreakoutMinAvgVolume" value="150000" min="0" step="10000">
+                  <div class="small-muted mt-1" style="font-size:.68rem;">Liquidity floor</div>
+                </div>
+                <div class="col-6">
+                  <label class="form-label" title="Block breakouts that are too far above SMA20 to avoid extreme overextension.">Max % Above SMA20</label>
+                  <input class="form-control" type="number" id="rocketBreakoutMaxAboveSma20" value="35" min="1" max="200" step="1">
+                  <div class="small-muted mt-1" style="font-size:.68rem;">Prevents vertical blow-off chases</div>
+                </div>
+                <div class="col-6">
+                  <label class="form-label" title="Bars used to define prior breakout high.">Breakout Lookback Bars</label>
+                  <input class="form-control" type="number" id="rocketBreakoutLookbackBars" value="20" min="5" max="200" step="1">
+                  <div class="small-muted mt-1" style="font-size:.68rem;">Recent high window</div>
+                </div>
               </div>
 
               <!-- Alert & Protection Settings -->
@@ -1119,6 +1175,9 @@
     let notifFilter   = 'all';
     let unreadAlerts  = 0;
     let marketDataSeen = false;
+    const barsDiagBySymbol = {}; // symbol -> bars diag result from /api/bars/diag
+    const BARS_DIAG_TTL_MS = 30000;
+    let lastBarsDiagFetchMs = 0;
     let engineTrackedSymbols = new Set();
     const lastFeedEmitTs = {}; // symbol -> epoch ms of last emitted feed tick
     const FEED_ROLL_INTERVAL_MS = 5000;
@@ -1272,6 +1331,37 @@
       return '';
     }
 
+    function dataSourceChipHtml(sym, quote) {
+      const diag = barsDiagBySymbol[sym] || {};
+      const provider = String(diag.provider || '').toLowerCase();
+      const tf = String(diag.timeframe || '').toUpperCase();
+      const feed = String(diag.feed || '').toUpperCase();
+      const bars = Number(diag.bars || 0);
+
+      let klass = 'partial';
+      let label = 'PRICE ONLY';
+
+      if (provider === 'alpaca') {
+        klass = 'alpaca';
+        label = `BARS ALPACA${feed ? ' ' + feed : ''}${tf ? ' ' + tf : ''}`;
+      } else if (provider === 'alpha_vantage') {
+        klass = 'fallback';
+        label = `BARS AV${tf ? ' ' + tf : ''}`;
+      } else if (quote && quote.price == null) {
+        klass = 'missing';
+        label = 'NO MARKET DATA';
+      }
+
+      const detail = [
+        provider ? `provider=${provider}` : 'provider=none',
+        tf ? `timeframe=${tf}` : '',
+        feed ? `feed=${feed}` : '',
+        `bars=${bars}`,
+      ].filter(Boolean).join(' | ');
+
+      return `<span class="data-source-chip ${klass}" title="${escHtml(detail)}">${escHtml(label)}</span>`;
+    }
+
     // ═══════════════════════════════════════════
     //  SPARKLINE CHARTS
     // ═══════════════════════════════════════════
@@ -1364,6 +1454,7 @@
             <div>
               <div class="stock-ticker">${sym}</div>
               <div class="stock-name">${escHtml(q.name || sym)}</div>
+              ${dataSourceChipHtml(sym, q)}
             </div>
             <div class="text-end">
               <div class="stock-price">${fmtMoney(price)}</div>
@@ -1441,11 +1532,34 @@
       return res.json();
     }
 
+    async function refreshBarsDiagIfNeeded(symbols) {
+      const now = Date.now();
+      const hasAll = symbols.every(sym => !!barsDiagBySymbol[sym]);
+      if (hasAll && (now - lastBarsDiagFetchMs) < BARS_DIAG_TTL_MS) return;
+
+      const res = await fetch('/api/bars/diag?symbols=' + encodeURIComponent(symbols.join(',')));
+      if (!res.ok) throw new Error('bars diag fetch failed');
+      const payload = await res.json();
+
+      (payload.results || []).forEach(item => {
+        const sym = normalizeSymbol(item.symbol || '');
+        if (!sym) return;
+        barsDiagBySymbol[sym] = {
+          provider: (item.result || {}).provider || null,
+          timeframe: (item.result || {}).timeframe || null,
+          feed: (item.result || {}).feed || null,
+          bars: (item.result || {}).bars || 0,
+        };
+      });
+      lastBarsDiagFetchMs = Date.now();
+    }
+
     async function refreshQuotesNow() {
       const list = loadWatchlist();
       if (!list.length) { renderWatchlistCards({}); return; }
       try {
         const quotes = await fetchQuotes(list);
+        try { await refreshBarsDiagIfNeeded(list); } catch(_) {}
         const gotAnyPrice = list.some(sym => quotes[sym]?.price != null);
         if (gotAnyPrice && !marketDataSeen) {
           marketDataSeen = true;
@@ -2293,6 +2407,13 @@
         rsi_buy_max:        parseFloat(document.getElementById('rsiBuyMax').value)        || 50,
         rsi_sell_min:       parseFloat(document.getElementById('rsiSellMin').value)       || 70,
         sma_spread_min:     parseFloat(document.getElementById('smaSpreadMin').value)     || 0.1,
+        // ── Rocket breakout mode ─────────────────────────────────────────────
+        rocket_breakout_enabled:              document.getElementById('rocketBreakoutEnabled').checked,
+        rocket_breakout_min_day_change_pct:   parseFloat(document.getElementById('rocketBreakoutMinDayChange').value) || 12,
+        rocket_breakout_volume_mult:          parseFloat(document.getElementById('rocketBreakoutVolumeMult').value) || 1.5,
+        rocket_breakout_min_avg_volume:       parseFloat(document.getElementById('rocketBreakoutMinAvgVolume').value) || 150000,
+        rocket_breakout_max_above_sma20_pct:  parseFloat(document.getElementById('rocketBreakoutMaxAboveSma20').value) || 35,
+        rocket_breakout_lookback_bars:        parseInt(document.getElementById('rocketBreakoutLookbackBars').value) || 20,
         // ── Alert settings (saved locally only — sensitive) ──────────────────
         _pushover_user:     document.getElementById('pushoverUser').value,
         _twilio_to:         document.getElementById('twilioTo').value,
@@ -2319,6 +2440,12 @@
         rsi_buy_max:         settings.rsi_buy_max,
         rsi_sell_min:        settings.rsi_sell_min,
         sma_spread_min:      settings.sma_spread_min,
+        rocket_breakout_enabled:             settings.rocket_breakout_enabled,
+        rocket_breakout_min_day_change_pct:  settings.rocket_breakout_min_day_change_pct,
+        rocket_breakout_volume_mult:         settings.rocket_breakout_volume_mult,
+        rocket_breakout_min_avg_volume:      settings.rocket_breakout_min_avg_volume,
+        rocket_breakout_max_above_sma20_pct: settings.rocket_breakout_max_above_sma20_pct,
+        rocket_breakout_lookback_bars:       settings.rocket_breakout_lookback_bars,
         market_hours_only:   document.getElementById('marketHoursOnlyToggle').checked,
       };
       fetch('/api/settings/trading', {
@@ -2355,6 +2482,12 @@
         if (s.rsi_buy_max        != null) document.getElementById('rsiBuyMax').value       = s.rsi_buy_max;
         if (s.rsi_sell_min       != null) document.getElementById('rsiSellMin').value      = s.rsi_sell_min;
         if (s.sma_spread_min     != null) document.getElementById('smaSpreadMin').value    = s.sma_spread_min;
+        if (s.rocket_breakout_enabled != null) document.getElementById('rocketBreakoutEnabled').checked = !!s.rocket_breakout_enabled;
+        if (s.rocket_breakout_min_day_change_pct != null) document.getElementById('rocketBreakoutMinDayChange').value = s.rocket_breakout_min_day_change_pct;
+        if (s.rocket_breakout_volume_mult != null) document.getElementById('rocketBreakoutVolumeMult').value = s.rocket_breakout_volume_mult;
+        if (s.rocket_breakout_min_avg_volume != null) document.getElementById('rocketBreakoutMinAvgVolume').value = s.rocket_breakout_min_avg_volume;
+        if (s.rocket_breakout_max_above_sma20_pct != null) document.getElementById('rocketBreakoutMaxAboveSma20').value = s.rocket_breakout_max_above_sma20_pct;
+        if (s.rocket_breakout_lookback_bars != null) document.getElementById('rocketBreakoutLookbackBars').value = s.rocket_breakout_lookback_bars;
         // Alert / notification fields (local only)
         if (s._pushover_user)             document.getElementById('pushoverUser').value       = s._pushover_user;
         if (s._twilio_to)                 document.getElementById('twilioTo').value           = s._twilio_to;
@@ -2383,6 +2516,12 @@
       if (s.rsi_buy_max        != null) document.getElementById('rsiBuyMax').value       = s.rsi_buy_max;
       if (s.rsi_sell_min       != null) document.getElementById('rsiSellMin').value      = s.rsi_sell_min;
       if (s.sma_spread_min     != null) document.getElementById('smaSpreadMin').value    = s.sma_spread_min;
+      if (s.rocket_breakout_enabled != null) document.getElementById('rocketBreakoutEnabled').checked = !!s.rocket_breakout_enabled;
+      if (s.rocket_breakout_min_day_change_pct != null) document.getElementById('rocketBreakoutMinDayChange').value = s.rocket_breakout_min_day_change_pct;
+      if (s.rocket_breakout_volume_mult != null) document.getElementById('rocketBreakoutVolumeMult').value = s.rocket_breakout_volume_mult;
+      if (s.rocket_breakout_min_avg_volume != null) document.getElementById('rocketBreakoutMinAvgVolume').value = s.rocket_breakout_min_avg_volume;
+      if (s.rocket_breakout_max_above_sma20_pct != null) document.getElementById('rocketBreakoutMaxAboveSma20').value = s.rocket_breakout_max_above_sma20_pct;
+      if (s.rocket_breakout_lookback_bars != null) document.getElementById('rocketBreakoutLookbackBars').value = s.rocket_breakout_lookback_bars;
       if (s.market_hours_only  != null) document.getElementById('marketHoursOnlyToggle').checked = !!s.market_hours_only;
     });
 

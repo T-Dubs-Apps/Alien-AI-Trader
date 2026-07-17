@@ -178,6 +178,15 @@ class TradingEngine:
         # Minimum SMA20/SMA50 spread % before a golden cross is "real enough"
         self.sma_spread_min = float(os.environ.get("SMA_SPREAD_MIN", "0.1"))   # 0.1% spread required
 
+        # Optional momentum-chase mode for explosive movers that would fail the
+        # dip-buy filter stack (e.g., large same-day breakouts).
+        self.rocket_breakout_enabled = os.environ.get("ROCKET_BREAKOUT_ENABLED", "true").lower() == "true"
+        self.rocket_breakout_min_day_change_pct = float(os.environ.get("ROCKET_BREAKOUT_MIN_DAY_CHANGE_PCT", "12.0"))
+        self.rocket_breakout_volume_mult = float(os.environ.get("ROCKET_BREAKOUT_VOLUME_MULT", "1.5"))
+        self.rocket_breakout_min_avg_volume = float(os.environ.get("ROCKET_BREAKOUT_MIN_AVG_VOLUME", "150000"))
+        self.rocket_breakout_max_above_sma20_pct = float(os.environ.get("ROCKET_BREAKOUT_MAX_ABOVE_SMA20_PCT", "35.0"))
+        self.rocket_breakout_lookback_bars = int(os.environ.get("ROCKET_BREAKOUT_LOOKBACK_BARS", "20"))
+
         # ── Full-market scan ──
         self.scan_all_market         = os.environ.get("SCAN_ALL_MARKET", "false").lower() == "true"
         self._market_scan_candidates = int(os.environ.get("MARKET_SCAN_CANDIDATES", "30"))
@@ -689,6 +698,12 @@ class TradingEngine:
             if "rsi_buy_max"         in s: self.rsi_buy_max          = max(20.0, float(s["rsi_buy_max"]))
             if "rsi_sell_min"        in s: self.rsi_sell_min         = max(50.0, float(s["rsi_sell_min"]))
             if "sma_spread_min"      in s: self.sma_spread_min       = max(0.0,  float(s["sma_spread_min"]))
+            if "rocket_breakout_enabled" in s: self.rocket_breakout_enabled = bool(s["rocket_breakout_enabled"])
+            if "rocket_breakout_min_day_change_pct" in s: self.rocket_breakout_min_day_change_pct = max(1.0, float(s["rocket_breakout_min_day_change_pct"]))
+            if "rocket_breakout_volume_mult" in s: self.rocket_breakout_volume_mult = max(1.0, float(s["rocket_breakout_volume_mult"]))
+            if "rocket_breakout_min_avg_volume" in s: self.rocket_breakout_min_avg_volume = max(0.0, float(s["rocket_breakout_min_avg_volume"]))
+            if "rocket_breakout_max_above_sma20_pct" in s: self.rocket_breakout_max_above_sma20_pct = max(1.0, float(s["rocket_breakout_max_above_sma20_pct"]))
+            if "rocket_breakout_lookback_bars" in s: self.rocket_breakout_lookback_bars = max(5, int(s["rocket_breakout_lookback_bars"]))
             if "forecast_exit_enabled" in s: self.forecast_exit_enabled = bool(s["forecast_exit_enabled"])
             # Safety Shield live settings
             if "portfolio_stop_loss"   in s: self.portfolio_stop_loss   = max(0.0, float(s["portfolio_stop_loss"]))
@@ -1060,6 +1075,34 @@ class TradingEngine:
             return cached[0]
 
         df = None
+
+        def _df_from_alpha_daily() -> Optional[pd.DataFrame]:
+            """Fallback historical bars from Alpha Vantage daily endpoint."""
+            try:
+                data, _ = self.ts.get_daily_adjusted(symbol=symbol, outputsize="compact")
+                ts = data.get("Time Series (Daily)", {}) if isinstance(data, dict) else {}
+                if not ts:
+                    return None
+                rows = []
+                for _, bar in ts.items():
+                    rows.append({
+                        "o": float(bar.get("1. open", 0) or 0),
+                        "h": float(bar.get("2. high", 0) or 0),
+                        "l": float(bar.get("3. low", 0) or 0),
+                        "c": float(bar.get("4. close", 0) or 0),
+                        "v": float(bar.get("6. volume", 0) or 0),
+                    })
+                if not rows:
+                    return None
+                out = pd.DataFrame(rows)
+                out = out[(out["c"] > 0) & (out["o"] >= 0) & (out["h"] >= 0) & (out["l"] >= 0)]
+                if out.empty:
+                    return None
+                # Keep most recent rows and preserve oldest->newest order for rolling indicators.
+                out = out.head(max(10, int(limit)))
+                return out.iloc[::-1].reset_index(drop=True)
+            except Exception:
+                return None
         try:
             try:
                 bars = self.api.get_bars(symbol, TimeFrame.Day, limit=limit, feed=self.alpaca_data_feed)
@@ -1100,8 +1143,13 @@ class TradingEngine:
                         "l": float(b.l),
                         "o": float(b.o),
                     } for b in bar_list_h])
+                else:
+                    # Last-resort fallback to Alpha Vantage daily bars.
+                    df = _df_from_alpha_daily()
         except Exception as e:
             print(f"[ENGINE] _get_bars_df({symbol}) error: {e}")
+            if df is None:
+                df = _df_from_alpha_daily()
 
         self._bars_cache[symbol] = (df, time.time())
         return df
@@ -1154,6 +1202,7 @@ class TradingEngine:
             "forecast_phase": "unknown",
             "predicted_price": None,
             "verdict": "HOLD",
+            "rocket_breakout_triggered": False,
             "avg_volume_20": None,
             "realized_vol_20d": None,
             "data_issue": None,
@@ -1248,6 +1297,59 @@ class TradingEngine:
             ):
                 signal["verdict"] = "SELL"
                 signal["spread_pct"] = round(spread_pct, 3)
+
+        # Optional breakout mode: lets the engine participate in genuine rocket
+        # moves that fail dip-buy rules but clear momentum + liquidity checks.
+        if signal.get("verdict") == "HOLD" and self.rocket_breakout_enabled:
+            try:
+                latest_close = float(closes.iloc[-1]) if len(closes) else float(price)
+                prev_close = float(closes.iloc[-2]) if len(closes) >= 2 else None
+                latest_vol = float(df["v"].astype(float).iloc[-1]) if ("v" in df.columns and len(df["v"])) else 0.0
+
+                avg_vol = signal.get("avg_volume_20")
+                if avg_vol is None and "v" in df.columns and len(df["v"]) > 0:
+                    avg_vol = float(df["v"].astype(float).tail(min(20, len(df["v"]))).mean())
+
+                day_change_pct = None
+                if prev_close and prev_close > 0:
+                    day_change_pct = (latest_close - prev_close) / prev_close * 100.0
+
+                prev_high = None
+                if "h" in df.columns and len(df["h"]) >= 2:
+                    lb = max(5, int(self.rocket_breakout_lookback_bars))
+                    highs = df["h"].astype(float).tail(min(lb, len(df["h"])))
+                    if len(highs) >= 2:
+                        prev_high = float(highs.iloc[:-1].max())
+
+                broke_recent_high = (prev_high is not None and latest_close > prev_high)
+                liquid_enough = (avg_vol is not None and float(avg_vol) >= self.rocket_breakout_min_avg_volume)
+                volume_surge = (avg_vol is not None and float(avg_vol) > 0 and latest_vol >= float(avg_vol) * self.rocket_breakout_volume_mult)
+                strong_day = (day_change_pct is not None and day_change_pct >= self.rocket_breakout_min_day_change_pct)
+                sma20_gap_pct = ((price - sma20) / sma20 * 100.0) if (sma20 and sma20 > 0) else 0.0
+                not_overextended = (sma20 is None or sma20_gap_pct <= self.rocket_breakout_max_above_sma20_pct)
+                momentum_ok = (macd is None or macd_signal is None or macd >= macd_signal)
+                forecast_ok = signal.get("forecast_direction") in ("up", "neutral")
+
+                if (
+                    strong_day and
+                    broke_recent_high and
+                    liquid_enough and
+                    volume_surge and
+                    not_overextended and
+                    momentum_ok and
+                    forecast_ok
+                ):
+                    signal["verdict"] = "BUY"
+                    signal["rocket_breakout_triggered"] = True
+                    signal["rocket_breakout_detail"] = {
+                        "day_change_pct": round(float(day_change_pct), 3),
+                        "latest_volume": round(float(latest_vol), 2),
+                        "avg_volume_20": round(float(avg_vol), 2) if avg_vol is not None else None,
+                        "recent_high": round(float(prev_high), 4) if prev_high is not None else None,
+                        "above_sma20_pct": round(float(sma20_gap_pct), 3),
+                    }
+            except Exception:
+                pass
 
         return signal
 
@@ -1770,6 +1872,12 @@ class TradingEngine:
                 "rsi_buy_max":        self.rsi_buy_max,
                 "rsi_sell_min":       self.rsi_sell_min,
                 "sma_spread_min":     self.sma_spread_min,
+                "rocket_breakout_enabled": self.rocket_breakout_enabled,
+                "rocket_breakout_min_day_change_pct": self.rocket_breakout_min_day_change_pct,
+                "rocket_breakout_volume_mult": self.rocket_breakout_volume_mult,
+                "rocket_breakout_min_avg_volume": self.rocket_breakout_min_avg_volume,
+                "rocket_breakout_max_above_sma20_pct": self.rocket_breakout_max_above_sma20_pct,
+                "rocket_breakout_lookback_bars": self.rocket_breakout_lookback_bars,
                 "forecast_exit_enabled": self.forecast_exit_enabled,
             },
             "live_trading_enabled": self.live_enabled,

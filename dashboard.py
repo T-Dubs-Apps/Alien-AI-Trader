@@ -1067,6 +1067,13 @@ _trading_settings: dict = {
     "rsi_buy_max":         float(os.environ.get("RSI_BUY_MAX",    "50.0")),
     "rsi_sell_min":        float(os.environ.get("RSI_SELL_MIN",   "70.0")),
     "sma_spread_min":      float(os.environ.get("SMA_SPREAD_MIN", "0.1")),
+    # ── Rocket breakout mode (momentum chase for explosive movers) ─────────
+    "rocket_breakout_enabled":              os.environ.get("ROCKET_BREAKOUT_ENABLED", "true").lower() == "true",
+    "rocket_breakout_min_day_change_pct":  float(os.environ.get("ROCKET_BREAKOUT_MIN_DAY_CHANGE_PCT", "12.0")),
+    "rocket_breakout_volume_mult":         float(os.environ.get("ROCKET_BREAKOUT_VOLUME_MULT", "1.5")),
+    "rocket_breakout_min_avg_volume":      float(os.environ.get("ROCKET_BREAKOUT_MIN_AVG_VOLUME", "150000")),
+    "rocket_breakout_max_above_sma20_pct": float(os.environ.get("ROCKET_BREAKOUT_MAX_ABOVE_SMA20_PCT", "35.0")),
+    "rocket_breakout_lookback_bars":       int(os.environ.get("ROCKET_BREAKOUT_LOOKBACK_BARS", "20")),
     # ── Forecast exit (sell before climb peaks) ──────────────────────────────
     "forecast_exit_enabled": True,
     # ── Portfolio Safety Shield ─────────────────────────────────────────
@@ -1737,6 +1744,12 @@ def support_payload():
         "symbols": quote_symbols,
         "results": [],
     }
+    bars_diag = {
+        "configured_feed": ALPACA_DATA_FEED,
+        "effective_mode": _effective_mode(),
+        "symbols": quote_symbols,
+        "results": [],
+    }
     try:
         active_client = _active_alpaca()
         feed_order = [ALPACA_DATA_FEED]
@@ -1753,6 +1766,25 @@ def support_payload():
             })
     except Exception as e:
         quote_diag["error"] = str(e)
+
+    try:
+        active_client = _active_alpaca()
+        feed_order = [ALPACA_DATA_FEED]
+        if ALPACA_DATA_FEED != "iex":
+            feed_order.append("iex")
+        for sym in quote_symbols:
+            d = _bars_diag_symbol(sym, active_client, feed_order, limit=100)
+            bars_diag["results"].append({
+                "symbol": d.get("symbol"),
+                "provider": (d.get("result") or {}).get("provider"),
+                "timeframe": (d.get("result") or {}).get("timeframe"),
+                "feed": (d.get("result") or {}).get("feed"),
+                "bars": (d.get("result") or {}).get("bars"),
+                "latest_close": (d.get("result") or {}).get("latest_close"),
+                "attempts": d.get("attempts", []),
+            })
+    except Exception as e:
+        bars_diag["error"] = str(e)
 
     payload = {
         "timestamp": int(time.time()),
@@ -1810,6 +1842,7 @@ def support_payload():
             "max_positions": _trading_settings.get("max_positions"),
             "max_trades_per_hour": _trading_settings.get("max_trades_per_hour"),
             "auto_trade": bool(_trading_settings.get("auto_trade", True)),
+            "rocket_breakout_enabled": bool(_trading_settings.get("rocket_breakout_enabled", False)),
         },
         "mode_transparency": {
             "engine_logic_same": True,
@@ -1822,10 +1855,12 @@ def support_payload():
             ],
         },
         "quotes_diag": quote_diag,
+        "bars_diag": bars_diag,
         "notes": [
             "No secrets are included in this payload.",
             "Share this JSON with support to diagnose offline/live issues quickly.",
             "quotes_diag shows per-symbol quote provider/feed attempts.",
+            "bars_diag shows per-symbol indicator bar provider/feed attempts.",
         ],
     }
     return jsonify(payload), 200
@@ -2520,6 +2555,97 @@ def _quote_diag_symbol(sym: str, active_client, feed_order: List[str]) -> Dict[s
     return diag
 
 
+def _bars_diag_symbol(sym: str, active_client, feed_order: List[str], limit: int = 100) -> Dict[str, Any]:
+    """Best-effort diagnostics for historical bars used by indicators."""
+    diag: Dict[str, Any] = {
+        "symbol": sym,
+        "name": _symbol_name(sym),
+        "attempts": [],
+        "result": {
+            "provider": None,
+            "timeframe": None,
+            "feed": None,
+            "bars": 0,
+            "latest_close": None,
+        },
+    }
+
+    def _alpaca_bars(timeframe: str) -> bool:
+        for feed in feed_order:
+            try:
+                try:
+                    bars = active_client.get_bars(sym, timeframe, limit=limit, feed=feed)
+                except TypeError:
+                    bars = active_client.get_bars(sym, timeframe, limit=limit)
+                bar_list = list(bars) if bars else []
+                close_px = _safe_float(getattr(bar_list[-1], "c", None)) if bar_list else None
+                diag["attempts"].append({
+                    "step": "alpaca_get_bars",
+                    "timeframe": timeframe,
+                    "feed": feed,
+                    "ok": True,
+                    "bars": len(bar_list),
+                    "latest_close": close_px,
+                })
+                if bar_list:
+                    diag["result"] = {
+                        "provider": "alpaca",
+                        "timeframe": timeframe,
+                        "feed": feed,
+                        "bars": len(bar_list),
+                        "latest_close": close_px,
+                    }
+                    return True
+            except Exception as e:
+                diag["attempts"].append({
+                    "step": "alpaca_get_bars",
+                    "timeframe": timeframe,
+                    "feed": feed,
+                    "ok": False,
+                    "error": str(e)[:180],
+                })
+        return False
+
+    if active_client:
+        if _alpaca_bars("1Day"):
+            return diag
+        if _alpaca_bars("1Hour"):
+            return diag
+
+    if _alpha:
+        try:
+            data, _ = _alpha.get_daily_adjusted(symbol=sym, outputsize="compact")
+            ts = data.get("Time Series (Daily)", {}) if isinstance(data, dict) else {}
+            closes = []
+            for _, row in ts.items():
+                c = _safe_float((row or {}).get("4. close"))
+                if c is not None:
+                    closes.append(c)
+            latest_close = closes[0] if closes else None
+            diag["attempts"].append({
+                "step": "alpha_vantage_daily_adjusted",
+                "ok": True,
+                "bars": len(closes),
+                "latest_close": latest_close,
+            })
+            if closes:
+                diag["result"] = {
+                    "provider": "alpha_vantage",
+                    "timeframe": "1Day",
+                    "feed": None,
+                    "bars": len(closes),
+                    "latest_close": latest_close,
+                }
+        except Exception as e:
+            diag["attempts"].append({
+                "step": "alpha_vantage_daily_adjusted",
+                "ok": False,
+                "error": str(e)[:180],
+            })
+
+    return diag
+
+
 def _fetch_quotes_uncached(symbols: List[str]) -> Dict[str, Any]:
     """Internal: hits Alpaca then Alpha Vantage without cache."""
     out: Dict[str, Any] = {}
@@ -2712,6 +2838,43 @@ def api_quotes_diag():
     results = []
     for sym in symbols:
         results.append(_quote_diag_symbol(sym, active_client, feed_order))
+
+    return jsonify({
+        "timestamp": int(time.time()),
+        "effective_mode": _effective_mode(),
+        "requested_mode": _requested_mode(),
+        "alpaca_client_present": bool(active_client),
+        "alpha_vantage_present": bool(_alpha),
+        "configured_feed": ALPACA_DATA_FEED,
+        "feed_probe_order": feed_order,
+        "symbols": symbols,
+        "results": results,
+        "note": "No secrets are included in this diagnostic payload.",
+    }), 200
+
+
+@app.route("/api/bars/diag", methods=["GET"])
+def api_bars_diag():
+    """Diagnostic bars probe for indicator data availability."""
+    symbols_raw = (request.args.get("symbols", "") or "").strip()
+    if symbols_raw:
+        symbols = list(dict.fromkeys(
+            s.strip().upper() for s in symbols_raw.split(",") if s.strip()
+        ))
+    else:
+        from_worker = list(_worker_status.get("stocks") or [])
+        from_positions = list((_worker_status.get("positions") or {}).keys())
+        symbols = list(dict.fromkeys([*(s.upper() for s in from_worker), *(s.upper() for s in from_positions)]))
+        symbols = symbols[:10]
+
+    active_client = _active_alpaca()
+    feed_order = [ALPACA_DATA_FEED]
+    if ALPACA_DATA_FEED != "iex":
+        feed_order.append("iex")
+
+    results = []
+    for sym in symbols:
+        results.append(_bars_diag_symbol(sym, active_client, feed_order, limit=100))
 
     return jsonify({
         "timestamp": int(time.time()),
@@ -3069,6 +3232,10 @@ def update_trading_settings():
         "risk_per_trade_pct", "max_position_pct", "min_positions", "risk_per_trade_usd",
         # Signal quality filters
         "rsi_buy_max", "rsi_sell_min", "sma_spread_min",
+        # Rocket breakout mode
+        "rocket_breakout_enabled", "rocket_breakout_min_day_change_pct",
+        "rocket_breakout_volume_mult", "rocket_breakout_min_avg_volume",
+        "rocket_breakout_max_above_sma20_pct", "rocket_breakout_lookback_bars",
         # Forecast-based exit
         "forecast_exit_enabled",
         # Portfolio Safety Shield
