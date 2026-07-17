@@ -472,8 +472,8 @@
         <div class="glass-card mt-3">
           <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
             <div>
-              <h6 class="mb-0 fw-bold">Last 10 BUY Decisions</h6>
-              <div class="small-muted" style="font-size:.76rem;">Why entries executed, blocked, or held</div>
+              <h6 class="mb-0 fw-bold">Last 10 Buy Attempts</h6>
+              <div class="small-muted" style="font-size:.76rem;">Shows only executed buys or explicit buy blocks/errors (hides passive HOLD evaluations)</div>
             </div>
           </div>
           <div id="buyDecisionList" class="decision-list">
@@ -1940,9 +1940,15 @@
     function renderBuyDecisions(items) {
       const box = document.getElementById('buyDecisionList');
       if (!box) return;
-      const arr = Array.isArray(items) ? items.slice().reverse() : [];
+      const arr = (Array.isArray(items) ? items : [])
+        .filter(it => {
+          const verdict = String(it?.verdict || '').toUpperCase();
+          return verdict === 'BUY_EXECUTED' || verdict === 'BUY_BLOCKED' || verdict === 'BUY_ERROR';
+        })
+        .slice()
+        .reverse();
       if (!arr.length) {
-        box.innerHTML = '<div class="small-muted">No buy decisions recorded yet. The engine will populate this as it evaluates entries.</div>';
+        box.innerHTML = '<div class="small-muted">No buy attempts yet. This panel updates when a buy is executed, blocked, or errors.</div>';
         return;
       }
       box.innerHTML = arr.map(it => {
