@@ -627,6 +627,11 @@
                   <div class="small-muted mt-1" style="font-size:.68rem;">How often to scan</div>
                 </div>
                 <div class="col-6">
+                  <label class="form-label">No-Buy Warning Threshold (min)</label>
+                  <input class="form-control" type="number" id="tradeHealthThreshold" value="20" min="5" max="240" step="1">
+                  <div class="small-muted mt-1" style="font-size:.68rem;">Show red banner after this many minutes without BUY_EXECUTED</div>
+                </div>
+                <div class="col-6">
                   <label class="form-label">Max Trades/Hour</label>
                   <input class="form-control" type="number" id="maxTrades" value="30" min="1" max="200">
                 </div>
@@ -1224,9 +1229,11 @@
     const BARS_DIAG_TTL_MS = 30000;
     let lastBarsDiagFetchMs = 0;
     let engineTrackedSymbols = new Set();
-    const TRADE_HEALTH_THRESHOLD_MINUTES = 20;
+    const DEFAULT_TRADE_HEALTH_THRESHOLD_MINUTES = 20;
+    let tradeHealthThresholdMinutes = DEFAULT_TRADE_HEALTH_THRESHOLD_MINUTES;
     const LAST_BUY_EXEC_TS_KEY = 'alien_last_buy_executed_ts_v1';
     let lastBuyExecutedTs = 0;
+    const pageLoadedTs = Math.floor(Date.now() / 1000);
     const lastFeedEmitTs = {}; // symbol -> epoch ms of last emitted feed tick
     const FEED_ROLL_INTERVAL_MS = 5000;
     const sparkCharts = {};  // symbol -> Chart instance
@@ -1235,6 +1242,12 @@
       const saved = parseInt(localStorage.getItem(LAST_BUY_EXEC_TS_KEY) || '0', 10);
       if (!isNaN(saved) && saved > 0) lastBuyExecutedTs = saved;
     } catch {}
+
+    function normalizeTradeHealthThresholdMinutes(value) {
+      const n = parseInt(value, 10);
+      if (isNaN(n)) return DEFAULT_TRADE_HEALTH_THRESHOLD_MINUTES;
+      return Math.max(5, Math.min(240, n));
+    }
 
     // ═══════════════════════════════════════════
     //  SOCKET.IO  — real-time push from server
@@ -1976,6 +1989,11 @@
 
       const nowSec = Math.floor(Date.now() / 1000);
       if (lastBuyExecutedTs <= 0) {
+        const minsSinceLoad = (nowSec - pageLoadedTs) / 60.0;
+        if (minsSinceLoad < tradeHealthThresholdMinutes) {
+          el.style.display = 'none';
+          return;
+        }
         // No known executed buy yet in this browser session/history.
         const blockCounts = {};
         for (const d of decisions) {
@@ -1992,7 +2010,7 @@
       }
 
       const minsSince = (nowSec - lastBuyExecutedTs) / 60.0;
-      if (minsSince < TRADE_HEALTH_THRESHOLD_MINUTES) {
+      if (minsSince < tradeHealthThresholdMinutes) {
         el.style.display = 'none';
         return;
       }
@@ -2232,6 +2250,7 @@
     async function initTradingMode() {
       const sel = document.getElementById('tradingModeSelect');
       const mh = document.getElementById('marketHoursOnlyToggle');
+      const th = document.getElementById('tradeHealthThreshold');
       try {
         const r = await fetch('/api/settings/trading');
         const s = await r.json();
@@ -2239,6 +2258,10 @@
         if (sel) sel.value = effective;
         const mhOn = (s.market_hours_only !== false);
         if (mh) mh.checked = mhOn;
+        if (s.trade_health_threshold_minutes != null) {
+          tradeHealthThresholdMinutes = normalizeTradeHealthThresholdMinutes(s.trade_health_threshold_minutes);
+          if (th) th.value = tradeHealthThresholdMinutes;
+        }
         _setModeBanner(effective, !!s.live_allowed, s.live_block_reason || '', mhOn);
         // Annotate the Live option so the user sees why it may be unavailable.
         if (sel) {
@@ -2529,6 +2552,9 @@
     }
 
     function saveRiskSettings() {
+      const thresholdMinutes = normalizeTradeHealthThresholdMinutes(document.getElementById('tradeHealthThreshold').value);
+      document.getElementById('tradeHealthThreshold').value = thresholdMinutes;
+      tradeHealthThresholdMinutes = thresholdMinutes;
       const settings = {
         // ── Core execution ──────────────────────────────────────────────────
         trailing_stop_pct:  parseFloat(document.getElementById('trailingStop').value)    || 3,
@@ -2538,6 +2564,7 @@
         initial_capital:    parseFloat(document.getElementById('initialCapital').value)   || 0,
         max_positions:      parseInt(document.getElementById('maxPositions').value)       || 5,
         scan_all_market:    document.getElementById('scanAllMarket').checked,
+        trade_health_threshold_minutes: thresholdMinutes,
         qty:                document.getElementById('defaultQty').value,
         stocks:             document.getElementById('stockList').value,
         // ── Position sizing / risk controls ─────────────────────────────────
@@ -2575,6 +2602,7 @@
         initial_capital:     settings.initial_capital,
         max_positions:       settings.max_positions,
         scan_all_market:     settings.scan_all_market,
+        trade_health_threshold_minutes: settings.trade_health_threshold_minutes,
         risk_per_trade_pct:  settings.risk_per_trade_pct,
         max_position_pct:    settings.max_position_pct,
         min_positions:       settings.min_positions,
@@ -2613,6 +2641,10 @@
         if (s.initial_capital    != null) document.getElementById('initialCapital').value  = s.initial_capital;
         if (s.max_positions      != null) document.getElementById('maxPositions').value    = s.max_positions;
         if (s.scan_all_market    != null) document.getElementById('scanAllMarket').checked = s.scan_all_market;
+        if (s.trade_health_threshold_minutes != null) {
+          tradeHealthThresholdMinutes = normalizeTradeHealthThresholdMinutes(s.trade_health_threshold_minutes);
+          document.getElementById('tradeHealthThreshold').value = tradeHealthThresholdMinutes;
+        }
         if (s.qty)                        document.getElementById('defaultQty').value      = s.qty;
         if (s.stocks)                     document.getElementById('stockList').value       = s.stocks;
         // Position sizing / risk controls
@@ -2649,6 +2681,10 @@
       if (s.initial_capital    != null) document.getElementById('initialCapital').value  = s.initial_capital;
       if (s.max_positions      != null) document.getElementById('maxPositions').value    = s.max_positions;
       if (s.scan_all_market    != null) document.getElementById('scanAllMarket').checked = s.scan_all_market;
+      if (s.trade_health_threshold_minutes != null) {
+        tradeHealthThresholdMinutes = normalizeTradeHealthThresholdMinutes(s.trade_health_threshold_minutes);
+        document.getElementById('tradeHealthThreshold').value = tradeHealthThresholdMinutes;
+      }
       // Position sizing / risk
       if (s.risk_per_trade_pct != null) document.getElementById('riskPerTradePct').value = s.risk_per_trade_pct;
       if (s.max_position_pct   != null) document.getElementById('maxPositionPct').value  = s.max_position_pct;

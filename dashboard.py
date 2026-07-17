@@ -1090,6 +1090,8 @@ _trading_settings: dict = {
     # Runtime schedule mode is persisted with the rest of dashboard-managed
     # settings so a deploy/restart does not silently fall back to blueprint env.
     "market_hours_only":     os.environ.get("MARKET_HOURS_ONLY", "true").lower() == "true",
+    # Minutes without BUY_EXECUTED before showing red trade-health banner.
+    "trade_health_threshold_minutes": int(os.environ.get("TRADE_HEALTH_THRESHOLD_MINUTES", "20")),
 }
 
 
@@ -1103,6 +1105,12 @@ def _load_saved_settings() -> None:
             saved = json.load(f)
         if isinstance(saved, dict):
             _trading_settings.update(saved)
+            # Enforce safe bounds even if older settings file has bad values.
+            try:
+                v = int(_trading_settings.get("trade_health_threshold_minutes", 20))
+            except Exception:
+                v = 20
+            _trading_settings["trade_health_threshold_minutes"] = max(5, min(240, v))
             if "market_hours_only" in saved:
                 _MARKET_HOURS_ONLY = bool(saved.get("market_hours_only"))
     except Exception:
@@ -3245,6 +3253,8 @@ def update_trading_settings():
         "min_hold_seconds",
         # Runtime schedule mode (true=market hours only, false=24/7 loop)
         "market_hours_only",
+        # UI warning threshold for no-buy trade health banner
+        "trade_health_threshold_minutes",
     }
     for k, v in payload.items():
         if k in allowed:
@@ -3262,6 +3272,12 @@ def update_trading_settings():
                 }
                 _notifications.append(note)
                 socketio.emit("notification", note)
+            elif k == "trade_health_threshold_minutes":
+                try:
+                    minutes = int(v)
+                except Exception:
+                    continue
+                _trading_settings[k] = max(5, min(240, minutes))
             else:
                 _trading_settings[k] = v
     # Persist to disk so settings survive restarts
