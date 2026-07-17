@@ -198,6 +198,23 @@
     .notif-item.alert { border-left-color: var(--down); }
     .notif-time { color: var(--muted); font-size: 0.72rem; white-space: nowrap; margin-top: 1px; }
 
+    .decision-list { max-height: 240px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+    .decision-item {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+      background: rgba(255,255,255,.02);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 8px 10px;
+      font-size: .78rem;
+    }
+    .decision-item .meta { color: var(--muted); font-size: .7rem; }
+    .decision-item.exec { border-left: 3px solid var(--up); }
+    .decision-item.block { border-left: 3px solid var(--warn); }
+    .decision-item.err  { border-left: 3px solid var(--down); }
+
     /* ── SETTINGS / CONTROLS ── */
     .form-control, .form-select {
       background: var(--card2) !important; color: var(--text) !important;
@@ -435,6 +452,18 @@
 
         <!-- Cards -->
         <div class="watchlist-grid" id="watchlistGrid"></div>
+
+        <div class="glass-card mt-3">
+          <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
+            <div>
+              <h6 class="mb-0 fw-bold">Last 10 BUY Decisions</h6>
+              <div class="small-muted" style="font-size:.76rem;">Why entries executed, blocked, or held</div>
+            </div>
+          </div>
+          <div id="buyDecisionList" class="decision-list">
+            <div class="small-muted">Waiting for engine decisions…</div>
+          </div>
+        </div>
       </div>
 
       <!-- ══ LIVE FEED TAB ══ -->
@@ -1871,6 +1900,32 @@
       } catch {}
     }
 
+    function renderBuyDecisions(items) {
+      const box = document.getElementById('buyDecisionList');
+      if (!box) return;
+      const arr = Array.isArray(items) ? items.slice().reverse() : [];
+      if (!arr.length) {
+        box.innerHTML = '<div class="small-muted">No buy decisions recorded yet. The engine will populate this as it evaluates entries.</div>';
+        return;
+      }
+      box.innerHTML = arr.map(it => {
+        const verdict = String(it.verdict || '').toUpperCase();
+        const reason = escHtml(String(it.reason || '').replace(/_/g, ' '));
+        const detail = escHtml(it.detail || '');
+        const symbol = escHtml(it.symbol || '');
+        const px = (it.price == null || isNaN(+it.price)) ? '--' : fmtMoney(+it.price);
+        const t = it.time ? new Date(it.time * 1000).toLocaleTimeString() : '--:--:--';
+        const klass = verdict.includes('EXECUTED') ? 'exec' : (verdict.includes('ERROR') ? 'err' : 'block');
+        return `<div class="decision-item ${klass}">
+          <div>
+            <div><strong>${symbol}</strong> · <strong>${verdict || 'HOLD'}</strong> · ${reason}</div>
+            <div class="meta">${detail || 'No extra detail'} · px ${px}</div>
+          </div>
+          <div class="meta">${t}</div>
+        </div>`;
+      }).join('');
+    }
+
     function renderWorkerStatus(d) {
       const pill    = document.getElementById('workerStatusPill');
       const navPill = document.getElementById('workerNavPill');
@@ -1980,6 +2035,7 @@
       // Update goal tracker with live capital total
       if (d.capital && d.capital.total) updateGoalFromCapital(d.capital.total);
       updateFeeDisplay();
+      renderBuyDecisions(d.buy_decisions || []);
 
       document.getElementById('engineStatus').textContent = JSON.stringify(d, null, 2);
     }

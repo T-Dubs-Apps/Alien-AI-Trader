@@ -305,6 +305,10 @@ class TradingEngine:
         self._suppressed_data_issue_counts: Dict[str, int] = {}
         self._last_suppressed_data_issue_summary = 0.0
 
+        # Rolling visibility into why entries were executed or blocked.
+        self._buy_decision_log: List[Dict[str, Any]] = []
+        self._buy_decision_log_limit = 100
+
         # ── Portfolio Safety Shield ─────────────────────────────────────────────
         # If the total portfolio value drops to/below this threshold,
         # the engine pauses ALL new buys and fires an alert.
@@ -1414,6 +1418,39 @@ class TradingEngine:
 
         return bool(reasons), reasons
 
+    def _signal_compact(self, signal: Dict[str, Any]) -> str:
+        """Compact signal snapshot for buy decision transparency."""
+        try:
+            return (
+                f"RSI={signal.get('rsi')} SMA20/50={signal.get('sma20')}/{signal.get('sma50')} "
+                f"MACD={signal.get('macd')}/{signal.get('macd_signal')} "
+                f"forecast={signal.get('forecast_direction', 'unknown')}"
+            )
+        except Exception:
+            return "signal metrics unavailable"
+
+    def _record_buy_decision(
+        self,
+        symbol: str,
+        verdict: str,
+        reason: str,
+        detail: str = "",
+        price: Optional[float] = None,
+    ) -> None:
+        """Append a bounded buy-decision log for dashboard diagnostics."""
+        rec = {
+            "time": int(time.time()),
+            "symbol": str(symbol or "").upper(),
+            "verdict": str(verdict or "").upper(),
+            "reason": str(reason or ""),
+            "detail": str(detail or "")[:300],
+            "price": round(float(price), 4) if price is not None else None,
+        }
+        with self.lock:
+            self._buy_decision_log.append(rec)
+            if len(self._buy_decision_log) > self._buy_decision_log_limit:
+                self._buy_decision_log = self._buy_decision_log[-self._buy_decision_log_limit:]
+
     # -------------------------------
     # Decision logic
     # -------------------------------
@@ -1449,6 +1486,7 @@ class TradingEngine:
             return
 
         if not holding:
+            tracked_symbol = str(symbol or "").upper() in set(self.stock_list)
             # Only enter if we have an open position slot
             if signal["verdict"] == "BUY" and len(self.current_holdings) < self.max_positions:
                 forecast_required, forecast_reasons = self._forecast_required_for_entry(signal, price)
@@ -1457,6 +1495,13 @@ class TradingEngine:
                     signal["forecast_blocked"] = True
                     signal["forecast_required"] = True
                     signal["forecast_required_reasons"] = forecast_reasons
+                    self._record_buy_decision(
+                        symbol,
+                        "BUY_BLOCKED",
+                        "forecast_required",
+                        f"requires forecast UP for {', '.join(forecast_reasons)} | {self._signal_compact(signal)}",
+                        price,
+                    )
                     self.send_alert(
                         f"FORECAST BLOCK: {symbol} buy skipped (requires forecast UP for {', '.join(forecast_reasons)} asset profile).",
                         level="warn",
@@ -1467,6 +1512,13 @@ class TradingEngine:
                 # Auto-trade master switch — if OFF, signal but don't execute
                 if not self.auto_trade:
                     signal["verdict"] = "BUY_BLOCKED"
+                    self._record_buy_decision(
+                        symbol,
+                        "BUY_BLOCKED",
+                        "auto_trade_disabled",
+                        self._signal_compact(signal),
+                        price,
+                    )
                     print(f"[ENGINE] {symbol} BUY signal — auto-trade is OFF, skipping.")
                     return
                 # Check ladder approval if scanner is attached
@@ -1481,6 +1533,13 @@ class TradingEngine:
                     signal["ladder_blocked"] = True
                     signal["ladder_tier"]    = tier
                     signal["ladder_score"]   = sc
+                    self._record_buy_decision(
+                        symbol,
+                        "BUY_BLOCKED",
+                        "ladder_not_top_tier",
+                        f"tier={tier} score={round(float(sc), 2)} | {self._signal_compact(signal)}",
+                        price,
+                    )
                     return  # Skip buy -- not in top ladder tier
 
                 if self.initial_capital > 0:
@@ -1488,6 +1547,26 @@ class TradingEngine:
                         self.buy(symbol, price, signal=signal)
                 else:
                     self.buy(symbol, price, signal=signal)
+            else:
+                # Surface why tracked symbols did not enter, without flooding on
+                # full-market transient candidates.
+                if tracked_symbol:
+                    reason = "no_buy_signal"
+                    if signal.get("data_issue"):
+                        reason = str(signal.get("data_issue"))
+                    elif signal.get("sentiment_blocked"):
+                        reason = "sentiment_negative"
+                    elif signal.get("verdict") == "SELL":
+                        reason = "sell_signal_active"
+                    elif len(self.current_holdings) >= self.max_positions:
+                        reason = "position_limit_reached"
+                    self._record_buy_decision(
+                        symbol,
+                        "HOLD",
+                        reason,
+                        self._signal_compact(signal),
+                        price,
+                    )
         else:
             bought_price    = holding["price"]
             change_from_buy = (price - bought_price) / bought_price
@@ -1571,13 +1650,16 @@ class TradingEngine:
     def buy(self, symbol: str, price: float, signal: Optional[Dict[str, Any]] = None):
         with self._buy_lock:
             if not self._throttle_trades():
+                self._record_buy_decision(symbol, "BUY_BLOCKED", "trade_throttled", "max trades/hour reached", price)
                 self.send_alert(f"Trade throttled (max/hour). Skipped buy for {symbol}.", level="warn")
                 return
 
             with self.lock:
                 if symbol in self.current_holdings:
+                    self._record_buy_decision(symbol, "BUY_BLOCKED", "already_holding", "symbol already in holdings", price)
                     return
                 if len(self.current_holdings) >= self.max_positions:
+                    self._record_buy_decision(symbol, "BUY_BLOCKED", "position_limit_reached", f"max_positions={self.max_positions}", price)
                     self.send_alert(f"Position limit reached. Skipped buy for {symbol}.", level="warn", symbol=symbol)
                     return
 
@@ -1641,6 +1723,7 @@ class TradingEngine:
                 with self.lock:
                     avail_now = self._available_capital
                 if price > avail_now:
+                    self._record_buy_decision(symbol, "BUY_BLOCKED", "insufficient_capital", f"available=${avail_now:.2f} price=${price:.2f}", price)
                     self.send_alert(
                         f"Insufficient capital (${avail_now:.2f}) to buy even "
                         f"1x {symbol} @ ${price:.2f} — skipping.",
@@ -1654,6 +1737,7 @@ class TradingEngine:
                     cost  = qty * price
 
                 if qty < 1:
+                    self._record_buy_decision(symbol, "BUY_BLOCKED", "qty_zero_after_sizing", f"available=${avail_now:.2f} alloc=${alloc:.2f}", price)
                     self.send_alert(
                         f"Position sizing produced qty=0 for {symbol} @ ${price:.2f} "
                         f"(available: ${avail_now:.2f}, alloc: ${alloc:.2f}). Skipping.",
@@ -1668,6 +1752,7 @@ class TradingEngine:
                 exposure_pct = (projected_invested / total_capital * 100.0) if total_capital > 0 else 0.0
                 reserve_pct = (projected_cash / total_capital * 100.0) if total_capital > 0 else 0.0
                 if exposure_pct > self.max_gross_exposure_pct:
+                    self._record_buy_decision(symbol, "BUY_BLOCKED", "hard_guard_exposure", f"projected_exposure={exposure_pct:.1f}% limit={self.max_gross_exposure_pct:.1f}%", price)
                     self.send_alert(
                         f"HARD GUARD: blocked {symbol} buy; projected exposure {exposure_pct:.1f}% exceeds max {self.max_gross_exposure_pct:.1f}%.",
                         level="warn",
@@ -1675,6 +1760,7 @@ class TradingEngine:
                     )
                     return
                 if reserve_pct < self.min_cash_reserve_pct:
+                    self._record_buy_decision(symbol, "BUY_BLOCKED", "hard_guard_reserve", f"projected_reserve={reserve_pct:.1f}% min={self.min_cash_reserve_pct:.1f}%", price)
                     self.send_alert(
                         f"HARD GUARD: blocked {symbol} buy; projected cash reserve {reserve_pct:.1f}% below minimum {self.min_cash_reserve_pct:.1f}%.",
                         level="warn",
@@ -1718,12 +1804,21 @@ class TradingEngine:
                         "rsi": signal.get("rsi") if signal else None,
                     })
 
+                self._record_buy_decision(
+                    symbol,
+                    "BUY_EXECUTED",
+                    "order_submitted",
+                    f"qty={qty} cost=${cost:.2f} | {self._signal_compact(signal or {})}",
+                    price,
+                )
+
                 msg = f"BUY {qty}x {symbol} @ ${price:.2f} (cost ${cost:.2f})"
                 if signal:
                     msg += f" | RSI={signal.get('rsi')} SMA20/50={signal.get('sma20')}/{signal.get('sma50')}"
                 self.send_alert(msg, level="info", symbol=symbol)
 
             except Exception as e:
+                self._record_buy_decision(symbol, "BUY_ERROR", "broker_submit_failed", str(e), price)
                 self.send_alert(f"BUY ERROR {symbol}: {e}", level="alert", symbol=symbol)
 
     def sell(self, symbol: str, price: float, reason: str = "profit"):
@@ -1878,6 +1973,7 @@ class TradingEngine:
                 for sym, h in self.current_holdings.items()
             }
             signals_snapshot = dict(self._symbol_signals)
+            buy_decisions = list(self._buy_decision_log[-10:])
             invested = sum(h["qty"] * h["price"] for h in self.current_holdings.values())
 
         payload = {
@@ -1887,6 +1983,7 @@ class TradingEngine:
             "profit":       round(self.profit, 4),
             "positions":    positions,
             "signals":      signals_snapshot,
+            "buy_decisions": buy_decisions,
             "message":      message,
             "poll_seconds": self.poll_seconds,
             "trade_count":  len(self.trade_log),

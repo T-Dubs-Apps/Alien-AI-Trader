@@ -2248,6 +2248,7 @@ def worker_heartbeat():
             "profit":       payload.get("profit",      _worker_status.get("profit")),
             "positions":    payload.get("positions",   _worker_status.get("positions")),
             "signals":      payload.get("signals",     _worker_status.get("signals")),
+            "buy_decisions":payload.get("buy_decisions", _worker_status.get("buy_decisions", [])),
             "trade_count":  payload.get("trade_count", _worker_status.get("trade_count")),
             "capital":      payload.get("capital",     _worker_status.get("capital")),
             "trailing_stop_pct":    payload.get("trailing_stop_pct",    _worker_status.get("trailing_stop_pct")),
@@ -3402,6 +3403,7 @@ def _internal_heartbeat(eng: TradingEngine, lad: PortfolioLadderScanner) -> None
                     for sym, h in eng.current_holdings.items()
                 }
                 signals_snapshot = dict(eng._symbol_signals)
+                buy_decisions_snapshot = list(getattr(eng, "_buy_decision_log", [])[-10:])
                 invested = sum(h["qty"] * h["price"] for h in eng.current_holdings.values())
 
             if now_ts >= next_account_refresh:
@@ -3439,6 +3441,7 @@ def _internal_heartbeat(eng: TradingEngine, lad: PortfolioLadderScanner) -> None
                 "profit":               round(eng.profit, 4),
                 "positions":            positions,
                 "signals":              signals_snapshot,
+                "buy_decisions":        buy_decisions_snapshot,
                 "message":              "alive",
                 "trade_count":          len(eng.trade_log),
                 "account":              account_snapshot,
