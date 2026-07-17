@@ -2580,7 +2580,9 @@ def _bars_diag_symbol(sym: str, active_client, feed_order: List[str], limit: int
         },
     }
 
-    history_start = datetime.now(timezone.utc) - timedelta(days=max(180, int(limit) * 3))
+    history_start = (datetime.now(timezone.utc) - timedelta(
+        days=max(180, int(limit) * 3)
+    )).strftime("%Y-%m-%d")
     min_indicator_bars = 50
 
     def _alpaca_bars(timeframe: str) -> bool:

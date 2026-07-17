@@ -1115,7 +1115,9 @@ class TradingEngine:
         df = None
         # Alpaca can return only the current daily candle when no start date is
         # supplied. Indicators require historical context (SMA-50 needs 50 bars).
-        history_start = datetime.now(timezone.utc) - timedelta(days=max(180, int(limit) * 3))
+        history_start = (datetime.now(timezone.utc) - timedelta(
+            days=max(180, int(limit) * 3)
+        )).strftime("%Y-%m-%d")
         min_indicator_bars = 50
 
         def _df_from_alpha_daily() -> Optional[pd.DataFrame]:
