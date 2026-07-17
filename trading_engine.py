@@ -1107,7 +1107,9 @@ class TradingEngine:
         # Serve from cache if fresh
         cached = self._bars_cache.get(symbol)
         if cached and (time.time() - cached[1]) < self._bars_cache_ttl:
-            return cached[0]
+            cached_df = cached[0]
+            if cached_df is not None and not getattr(cached_df, "empty", True):
+                return cached_df
 
         df = None
 
@@ -1186,7 +1188,12 @@ class TradingEngine:
             if df is None:
                 df = _df_from_alpha_daily()
 
-        self._bars_cache[symbol] = (df, time.time())
+        # Cache only usable bar frames; failed fetches should retry next cycle
+        # instead of pinning a symbol to None indicators for 30 minutes.
+        if df is not None and not df.empty:
+            self._bars_cache[symbol] = (df, time.time())
+        else:
+            self._bars_cache.pop(symbol, None)
         return df
 
     # -------------------------------
@@ -1713,69 +1720,69 @@ class TradingEngine:
                 risk_alloc = min(risk_alloc, self.risk_per_trade_usd)
 
             # Final allocation = most conservative of slot, risk, and max caps
-                alloc = min(slot_alloc, risk_alloc, max_alloc)
-                alloc = min(alloc, avail_now)   # never exceed what we have
+            alloc = min(slot_alloc, risk_alloc, max_alloc)
+            alloc = min(alloc, avail_now)   # never exceed what we have
 
-                qty  = max(1, int(alloc / price))
-                cost = qty * price
+            qty  = max(1, int(alloc / price))
+            cost = qty * price
 
             # Final safety: if even 1 share costs more than available capital, skip
-                with self.lock:
-                    avail_now = self._available_capital
-                if price > avail_now:
-                    self._record_buy_decision(symbol, "BUY_BLOCKED", "insufficient_capital", f"available=${avail_now:.2f} price=${price:.2f}", price)
-                    self.send_alert(
-                        f"Insufficient capital (${avail_now:.2f}) to buy even "
-                        f"1x {symbol} @ ${price:.2f} — skipping.",
-                        level="warn",
-                    )
-                    return
+            with self.lock:
+                avail_now = self._available_capital
+            if price > avail_now:
+                self._record_buy_decision(symbol, "BUY_BLOCKED", "insufficient_capital", f"available=${avail_now:.2f} price=${price:.2f}", price)
+                self.send_alert(
+                    f"Insufficient capital (${avail_now:.2f}) to buy even "
+                    f"1x {symbol} @ ${price:.2f} — skipping.",
+                    level="warn",
+                )
+                return
 
             # Clamp qty so cost never exceeds available capital
-                while cost > avail_now and qty > 1:
-                    qty  -= 1
-                    cost  = qty * price
+            while cost > avail_now and qty > 1:
+                qty  -= 1
+                cost  = qty * price
 
-                if qty < 1:
-                    self._record_buy_decision(symbol, "BUY_BLOCKED", "qty_zero_after_sizing", f"available=${avail_now:.2f} alloc=${alloc:.2f}", price)
-                    self.send_alert(
-                        f"Position sizing produced qty=0 for {symbol} @ ${price:.2f} "
-                        f"(available: ${avail_now:.2f}, alloc: ${alloc:.2f}). Skipping.",
-                        level="warn",
-                    )
-                    return
-
-                # Hard invariants (never bypassed): exposure and reserve limits.
-                invested_now = max(0.0, total_capital - avail_now)
-                projected_invested = invested_now + cost
-                projected_cash = max(0.0, avail_now - cost)
-                exposure_pct = (projected_invested / total_capital * 100.0) if total_capital > 0 else 0.0
-                reserve_pct = (projected_cash / total_capital * 100.0) if total_capital > 0 else 0.0
-                if exposure_pct > self.max_gross_exposure_pct:
-                    self._record_buy_decision(symbol, "BUY_BLOCKED", "hard_guard_exposure", f"projected_exposure={exposure_pct:.1f}% limit={self.max_gross_exposure_pct:.1f}%", price)
-                    self.send_alert(
-                        f"HARD GUARD: blocked {symbol} buy; projected exposure {exposure_pct:.1f}% exceeds max {self.max_gross_exposure_pct:.1f}%.",
-                        level="warn",
-                        symbol=symbol,
-                    )
-                    return
-                if reserve_pct < self.min_cash_reserve_pct:
-                    self._record_buy_decision(symbol, "BUY_BLOCKED", "hard_guard_reserve", f"projected_reserve={reserve_pct:.1f}% min={self.min_cash_reserve_pct:.1f}%", price)
-                    self.send_alert(
-                        f"HARD GUARD: blocked {symbol} buy; projected cash reserve {reserve_pct:.1f}% below minimum {self.min_cash_reserve_pct:.1f}%.",
-                        level="warn",
-                        symbol=symbol,
-                    )
-                    return
-
+            if qty < 1:
+                self._record_buy_decision(symbol, "BUY_BLOCKED", "qty_zero_after_sizing", f"available=${avail_now:.2f} alloc=${alloc:.2f}", price)
                 self.send_alert(
-                    f"SIZING: {symbol} @ ${price:.2f} | "
-                    f"slots={open_slots} slot_alloc=${slot_alloc:.2f} "
-                    f"risk_alloc=${risk_alloc:.2f} max_alloc=${max_alloc:.2f} "
-                    f"(streak_risk={streak_risk:.2f}%, vol_risk={vol_risk:.2f}%) "
-                    f"→ buying {qty}x (${cost:.2f})",
-                    level="info", symbol=symbol,
+                    f"Position sizing produced qty=0 for {symbol} @ ${price:.2f} "
+                    f"(available: ${avail_now:.2f}, alloc: ${alloc:.2f}). Skipping.",
+                    level="warn",
                 )
+                return
+
+            # Hard invariants (never bypassed): exposure and reserve limits.
+            invested_now = max(0.0, total_capital - avail_now)
+            projected_invested = invested_now + cost
+            projected_cash = max(0.0, avail_now - cost)
+            exposure_pct = (projected_invested / total_capital * 100.0) if total_capital > 0 else 0.0
+            reserve_pct = (projected_cash / total_capital * 100.0) if total_capital > 0 else 0.0
+            if exposure_pct > self.max_gross_exposure_pct:
+                self._record_buy_decision(symbol, "BUY_BLOCKED", "hard_guard_exposure", f"projected_exposure={exposure_pct:.1f}% limit={self.max_gross_exposure_pct:.1f}%", price)
+                self.send_alert(
+                    f"HARD GUARD: blocked {symbol} buy; projected exposure {exposure_pct:.1f}% exceeds max {self.max_gross_exposure_pct:.1f}%.",
+                    level="warn",
+                    symbol=symbol,
+                )
+                return
+            if reserve_pct < self.min_cash_reserve_pct:
+                self._record_buy_decision(symbol, "BUY_BLOCKED", "hard_guard_reserve", f"projected_reserve={reserve_pct:.1f}% min={self.min_cash_reserve_pct:.1f}%", price)
+                self.send_alert(
+                    f"HARD GUARD: blocked {symbol} buy; projected cash reserve {reserve_pct:.1f}% below minimum {self.min_cash_reserve_pct:.1f}%.",
+                    level="warn",
+                    symbol=symbol,
+                )
+                return
+
+            self.send_alert(
+                f"SIZING: {symbol} @ ${price:.2f} | "
+                f"slots={open_slots} slot_alloc=${slot_alloc:.2f} "
+                f"risk_alloc=${risk_alloc:.2f} max_alloc=${max_alloc:.2f} "
+                f"(streak_risk={streak_risk:.2f}%, vol_risk={vol_risk:.2f}%) "
+                f"→ buying {qty}x (${cost:.2f})",
+                level="info", symbol=symbol,
+            )
             else:
                 qty  = int(os.environ.get("ORDER_QTY", "1"))
                 cost = qty * price
