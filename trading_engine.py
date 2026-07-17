@@ -1802,7 +1802,10 @@ class TradingEngine:
             except Exception as e:
                 print(f"[Pushover] send failed: {e}")
 
-        if self.dashboard_base_url:
+        # In integrated mode, dashboard.py injects alert_callback which already
+        # writes to the same notifications stream. Skip HTTP mirror to avoid
+        # duplicate alert rows in the Alerts tab.
+        if self.dashboard_base_url and not self.alert_callback:
             try:
                 requests.post(
                     f"{self.dashboard_base_url}/api/notifications",
