@@ -615,9 +615,9 @@ class TradingEngine:
 
         # Full-market scans include many transient candidates. For symbols that
         # are not explicitly tracked by the user (watchlist) and not currently
-        # held, suppress noisy "price unavailable" alerts while still applying
-        # skip-until to keep scan quality high.
-        if issue_lc == "price_unavailable":
+        # held, aggregate missing-price and missing-bars alerts rather than
+        # sending a notification for every transient candidate.
+        if issue_lc in ("bars_unavailable", "price_unavailable"):
             tracked = sym_u in set(self.stock_list)
             held = sym_u in set(self.current_holdings.keys())
             if self.scan_all_market and not tracked and not held:
@@ -632,7 +632,7 @@ class TradingEngine:
                     self.send_alert(
                         (
                             f"DATA ISSUE SUMMARY: suppressed {summary_count} non-tracked "
-                            f"price-unavailable market-candidate alert(s) in the last "
+                            f"{issue_lc.replace('_', '-') } market-candidate alert(s) in the last "
                             f"~{max(60, self.data_issue_alert_cooldown)}s."
                         ),
                         level="info",
