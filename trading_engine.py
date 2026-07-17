@@ -595,6 +595,7 @@ class TradingEngine:
         key = f"{symbol}:{issue}"
         now = time.time()
         issue_lc = str(issue or "").lower()
+        sym_u = str(symbol or "").upper()
 
         # Keep problematic symbols out of market-candidate rotation for a while
         # so they do not keep reappearing every scan cycle.
@@ -602,6 +603,16 @@ class TradingEngine:
             self._symbol_skip_until[str(symbol or "").upper()] = now + max(60, self.data_issue_skip_seconds)
             # Invalidate market-candidate cache so skip list applies immediately.
             self._market_candidates_cache = ([], 0.0)
+
+        # Full-market scans include many transient candidates. For symbols that
+        # are not explicitly tracked by the user (watchlist) and not currently
+        # held, suppress noisy "price unavailable" alerts while still applying
+        # skip-until to keep scan quality high.
+        if issue_lc == "price_unavailable":
+            tracked = sym_u in set(self.stock_list)
+            held = sym_u in set(self.current_holdings.keys())
+            if self.scan_all_market and not tracked and not held:
+                return
 
         last = self._last_data_issue_alert.get(key, 0.0)
         if now - last < self.data_issue_alert_cooldown:
