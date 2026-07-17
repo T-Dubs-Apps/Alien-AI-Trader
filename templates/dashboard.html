@@ -215,6 +215,20 @@
     .decision-item.block { border-left: 3px solid var(--warn); }
     .decision-item.err  { border-left: 3px solid var(--down); }
 
+    .trade-health-banner {
+      display: none;
+      margin-bottom: 12px;
+      border: 1px solid rgba(239,68,68,.45);
+      background: rgba(239,68,68,.12);
+      border-left: 4px solid var(--down);
+      color: #fecaca;
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-size: .82rem;
+      line-height: 1.35;
+    }
+    .trade-health-banner strong { color: #fff; }
+
     /* ── SETTINGS / CONTROLS ── */
     .form-control, .form-select {
       background: var(--card2) !important; color: var(--text) !important;
@@ -411,6 +425,8 @@
 
       <!-- ══ WATCHLIST TAB ══ -->
       <div class="tab-pane fade show active" id="tabWatchlist">
+        <div id="tradeHealthBanner" class="trade-health-banner"></div>
+
         <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
           <div>
             <h5 class="mb-0 fw-bold">Live Watchlist</h5>
@@ -1208,9 +1224,17 @@
     const BARS_DIAG_TTL_MS = 30000;
     let lastBarsDiagFetchMs = 0;
     let engineTrackedSymbols = new Set();
+    const TRADE_HEALTH_THRESHOLD_MINUTES = 20;
+    const LAST_BUY_EXEC_TS_KEY = 'alien_last_buy_executed_ts_v1';
+    let lastBuyExecutedTs = 0;
     const lastFeedEmitTs = {}; // symbol -> epoch ms of last emitted feed tick
     const FEED_ROLL_INTERVAL_MS = 5000;
     const sparkCharts = {};  // symbol -> Chart instance
+
+    try {
+      const saved = parseInt(localStorage.getItem(LAST_BUY_EXEC_TS_KEY) || '0', 10);
+      if (!isNaN(saved) && saved > 0) lastBuyExecutedTs = saved;
+    } catch {}
 
     // ═══════════════════════════════════════════
     //  SOCKET.IO  — real-time push from server
@@ -1926,6 +1950,67 @@
       }).join('');
     }
 
+    function updateTradeHealthBanner(status) {
+      const el = document.getElementById('tradeHealthBanner');
+      if (!el) return;
+
+      const state = String(status?.state || '').toLowerCase();
+      const running = !!status?.running;
+      if (!running || state !== 'trading') {
+        el.style.display = 'none';
+        return;
+      }
+
+      const decisions = Array.isArray(status?.buy_decisions) ? status.buy_decisions : [];
+      let newestExec = 0;
+      for (const d of decisions) {
+        if (String(d?.verdict || '').toUpperCase() === 'BUY_EXECUTED') {
+          const ts = Number(d?.time || 0);
+          if (ts > newestExec) newestExec = ts;
+        }
+      }
+      if (newestExec > lastBuyExecutedTs) {
+        lastBuyExecutedTs = newestExec;
+        try { localStorage.setItem(LAST_BUY_EXEC_TS_KEY, String(lastBuyExecutedTs)); } catch {}
+      }
+
+      const nowSec = Math.floor(Date.now() / 1000);
+      if (lastBuyExecutedTs <= 0) {
+        // No known executed buy yet in this browser session/history.
+        const blockCounts = {};
+        for (const d of decisions) {
+          const v = String(d?.verdict || '').toUpperCase();
+          if (v !== 'BUY_BLOCKED' && v !== 'HOLD' && v !== 'BUY_ERROR') continue;
+          const r = String(d?.reason || 'unknown').replace(/_/g, ' ');
+          blockCounts[r] = (blockCounts[r] || 0) + 1;
+        }
+        const top = Object.entries(blockCounts).sort((a,b) => b[1]-a[1])[0];
+        const topReason = top ? `${top[0]} (${top[1]})` : 'insufficient decision history yet';
+        el.innerHTML = `<strong>No BUY_EXECUTED observed yet.</strong> Engine is running but has not confirmed a submitted buy order in this browser session. Top current block reason: <strong>${escHtml(topReason)}</strong>.`;
+        el.style.display = '';
+        return;
+      }
+
+      const minsSince = (nowSec - lastBuyExecutedTs) / 60.0;
+      if (minsSince < TRADE_HEALTH_THRESHOLD_MINUTES) {
+        el.style.display = 'none';
+        return;
+      }
+
+      const reasonCounts = {};
+      for (const d of decisions) {
+        const verdict = String(d?.verdict || '').toUpperCase();
+        if (verdict !== 'BUY_BLOCKED' && verdict !== 'HOLD' && verdict !== 'BUY_ERROR') continue;
+        const reason = String(d?.reason || 'unknown').replace(/_/g, ' ');
+        reasonCounts[reason] = (reasonCounts[reason] || 0) + 1;
+      }
+      const top = Object.entries(reasonCounts).sort((a,b) => b[1]-a[1])[0];
+      const topReason = top ? `${top[0]} (${top[1]})` : 'no recent block reasons available';
+
+      el.innerHTML = `<strong>Trade Health Warning:</strong> no BUY_EXECUTED in ${Math.floor(minsSince)} min while engine state is trading. Top current block reason: <strong>${escHtml(topReason)}</strong>.`;
+      el.style.display = '';
+    }
+
     function renderWorkerStatus(d) {
       const pill    = document.getElementById('workerStatusPill');
       const navPill = document.getElementById('workerNavPill');
@@ -2036,6 +2121,7 @@
       if (d.capital && d.capital.total) updateGoalFromCapital(d.capital.total);
       updateFeeDisplay();
       renderBuyDecisions(d.buy_decisions || []);
+      updateTradeHealthBanner(d);
 
       document.getElementById('engineStatus').textContent = JSON.stringify(d, null, 2);
     }
