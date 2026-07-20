@@ -29,12 +29,13 @@ def send_crash_notification(message: str):
     tw_to = os.environ.get("TWILIO_TO_NUMBER", "")
     if all([tw_sid, tw_token, tw_from, tw_to]):
         try:
+            from xml.sax.saxutils import escape
             from twilio.rest import Client
             client = Client(tw_sid, tw_token)
             client.calls.create(
                 to=tw_to,
                 from_=tw_from,
-                twiml=f'<Response><Say>{message}</Say></Response>'
+                twiml=f'<Response><Say>{escape(message)}</Say></Response>'
             )
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[twilio-call] crash-notify call failed: {e}")
