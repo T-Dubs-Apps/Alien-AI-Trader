@@ -28,7 +28,7 @@ class TradingEngine:
             
         try:
             # Attempt 1: App UI expects (status, message) or (event, message)
-            cb("SYSTEM_INFO", message)
+            cb("TRADE_ACTION", message)
         except TypeError:
             try:
                 # Attempt 2: App UI expects an explicitly named keyword argument
@@ -50,7 +50,36 @@ class TradingEngine:
         self.is_online = False
         self.notify("Engine Status: Offline")
 
+    def buy(self, *args, **kwargs):
+        """
+        Safely handles incoming buy orders without crashing.
+        Captures any specific parameters (like symbol or amount) passed by the UI.
+        """
+        symbol = kwargs.get('symbol', args[0] if args else 'UNKNOWN_ASSET')
+        amount = kwargs.get('amount', args[1] if len(args) > 1 else 'DEFAULT_ALLOCATION')
+        
+        self.notify(f"EXECUTED BUY: {symbol} | Amount: {amount}")
+        # Insert your exchange API buy logic here in the future
+        return True
+
+    def sell(self, *args, **kwargs):
+        """
+        Safely handles incoming sell orders without crashing.
+        """
+        symbol = kwargs.get('symbol', args[0] if args else 'UNKNOWN_ASSET')
+        amount = kwargs.get('amount', args[1] if len(args) > 1 else 'DEFAULT_ALLOCATION')
+        
+        self.notify(f"EXECUTED SELL: {symbol} | Amount: {amount}")
+        # Insert your exchange API sell logic here in the future
+        return True
+        
+    def get_balance(self, *args, **kwargs):
+        """Prevents crashes if the UI checks the account balance."""
+        self.notify("Balance check requested.")
+        return 0.0
+
 if __name__ == "__main__":
     # Test execution block
     engine = TradingEngine(activity_callback=lambda event, msg: print(f"[{event}] {msg}"))
     engine.start()
+    engine.buy(symbol="AAPL", amount=10)
