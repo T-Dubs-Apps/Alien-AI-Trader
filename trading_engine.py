@@ -118,7 +118,7 @@ class TradingEngine:
         self.poll_seconds = int(os.environ.get("POLL_SECONDS", "15"))
 
         # Max parallel workers
-        self.max_workers = int(os.environ.get("SCAN_WORKERS", "8"))
+        self.max_workers = max(1, int(os.environ.get("SCAN_WORKERS", "4")))
 
         # ── Capital pool (compound reinvestment mode) ──
         # INITIAL_CAPITAL=0 (default) → AUTO: size every trade to the broker
@@ -191,6 +191,16 @@ class TradingEngine:
         # ── Full-market scan ──
         self.scan_all_market         = os.environ.get("SCAN_ALL_MARKET", "false").lower() == "true"
         self._market_scan_candidates = int(os.environ.get("MARKET_SCAN_CANDIDATES", "30"))
+        # Keep full-market snapshot scans small enough for stable Render/Alpaca operation.
+        self.market_scan_universe_limit = max(
+            50, int(os.environ.get("MARKET_SCAN_UNIVERSE_LIMIT", "500"))
+        )
+        self.market_snapshot_batch_size = min(
+            100, max(10, int(os.environ.get("MARKET_SNAPSHOT_BATCH_SIZE", "50")))
+        )
+        self.market_snapshot_pause_seconds = max(
+            0.0, float(os.environ.get("MARKET_SNAPSHOT_PAUSE_SECONDS", "0.25"))
+        )
 
         # Trailing-stop high-water marks: {symbol: highest_price_since_buy}
         self._peak_prices: Dict[str, float] = {}
@@ -802,9 +812,14 @@ class TradingEngine:
             min_price = min_price_env
         max_price = min(max_price, max_price_env)
 
-        BATCH = 500
-        for i in range(0, min(len(tradable), 5000), BATCH):
-            batch = tradable[i : i + BATCH]
+        universe_limit = min(len(tradable), self.market_scan_universe_limit)
+        batch_size = self.market_snapshot_batch_size
+        print(
+            f"[MARKET_SCAN] universe={universe_limit}/{len(tradable)} "
+            f"batch_size={batch_size} target_candidates={max_candidates}"
+        )
+        for i in range(0, universe_limit, batch_size):
+            batch = tradable[i : i + batch_size]
             try:
                 snaps = self.api.get_snapshots(batch)
                 for sym, snap in snaps.items():
@@ -828,8 +843,13 @@ class TradingEngine:
                     day_chg = (price - prev_close) / prev_close * 100
                     if day_chg >= 0.5:
                         candidates.append((sym, day_chg))
-            except Exception:
-                pass
+            except Exception as exc:
+                print(
+                    f"[MARKET_SCAN_ERROR] batch={i // batch_size + 1} "
+                    f"symbols={len(batch)} error={type(exc).__name__}: {exc}"
+                )
+            if self.market_snapshot_pause_seconds > 0:
+                time.sleep(self.market_snapshot_pause_seconds)
 
         candidates.sort(key=lambda x: x[1], reverse=True)
         result = [sym for sym, _ in candidates[:max_candidates]]
@@ -1475,6 +1495,11 @@ class TradingEngine:
             if len(self._buy_decision_log) > self._buy_decision_log_limit:
                 self._buy_decision_log = self._buy_decision_log[-self._buy_decision_log_limit:]
 
+        print(
+            f"[BUY_DECISION] symbol={rec['symbol']} verdict={rec['verdict']} "
+            f"reason={rec['reason']} price={rec['price']} detail={rec['detail']}"
+        )
+
     # -------------------------------
     # Decision logic
     # -------------------------------
@@ -1805,12 +1830,22 @@ class TradingEngine:
                 cost = qty * price
 
             try:
-                self.api.submit_order(
+                print(
+                    f"[BUY_SUBMIT] mode={self.trading_mode.upper()} symbol={symbol} "
+                    f"qty={qty} estimated_price=${price:.4f} estimated_cost=${cost:.2f}"
+                )
+                order = self.api.submit_order(
                     symbol=symbol,
                     qty=qty,
                     side="buy",
                     type="market",
                     time_in_force="day",
+                )
+                order_id = str(getattr(order, "id", "unknown"))
+                order_status = str(getattr(order, "status", "submitted"))
+                print(
+                    f"[BUY_ACCEPTED] mode={self.trading_mode.upper()} symbol={symbol} "
+                    f"qty={qty} order_id={order_id} status={order_status}"
                 )
 
                 with self.lock:
@@ -1832,7 +1867,7 @@ class TradingEngine:
                     symbol,
                     "BUY_EXECUTED",
                     "order_submitted",
-                    f"qty={qty} cost=${cost:.2f} | {self._signal_compact(signal or {})}",
+                    f"qty={qty} cost=${cost:.2f} order_id={order_id} status={order_status} | {self._signal_compact(signal or {})}",
                     price,
                 )
 
@@ -1842,8 +1877,13 @@ class TradingEngine:
                 self.send_alert(msg, level="info", symbol=symbol)
 
             except Exception as e:
-                self._record_buy_decision(symbol, "BUY_ERROR", "broker_submit_failed", str(e), price)
-                self.send_alert(f"BUY ERROR {symbol}: {e}", level="alert", symbol=symbol)
+                error_detail = f"{type(e).__name__}: {e}"
+                print(
+                    f"[BUY_REJECTED] mode={self.trading_mode.upper()} symbol={symbol} "
+                    f"qty={qty} error={error_detail}"
+                )
+                self._record_buy_decision(symbol, "BUY_ERROR", "broker_submit_failed", error_detail, price)
+                self.send_alert(f"BUY ERROR {symbol}: {error_detail}", level="alert", symbol=symbol)
 
     def sell(self, symbol: str, price: float, reason: str = "profit"):
         with self.lock:
