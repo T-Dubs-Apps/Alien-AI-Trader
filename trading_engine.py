@@ -18,6 +18,8 @@ from datetime import datetime, timedelta, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, Any, List, Optional, Tuple
 
+MARKET_DATA_PATCH_VERSION = "2026-07-20-v2"
+
 import pandas as pd
 from alpaca_trade_api.rest import REST, TimeFrame
 from alpha_vantage.timeseries import TimeSeries
@@ -118,7 +120,7 @@ class TradingEngine:
         self.poll_seconds = int(os.environ.get("POLL_SECONDS", "15"))
 
         # Max parallel workers
-        self.max_workers = max(1, int(os.environ.get("SCAN_WORKERS", "4")))
+        self.max_workers = int(os.environ.get("SCAN_WORKERS", "8"))
 
         # ── Capital pool (compound reinvestment mode) ──
         # INITIAL_CAPITAL=0 (default) → AUTO: size every trade to the broker
@@ -191,16 +193,6 @@ class TradingEngine:
         # ── Full-market scan ──
         self.scan_all_market         = os.environ.get("SCAN_ALL_MARKET", "false").lower() == "true"
         self._market_scan_candidates = int(os.environ.get("MARKET_SCAN_CANDIDATES", "30"))
-        # Keep full-market snapshot scans small enough for stable Render/Alpaca operation.
-        self.market_scan_universe_limit = max(
-            50, int(os.environ.get("MARKET_SCAN_UNIVERSE_LIMIT", "500"))
-        )
-        self.market_snapshot_batch_size = min(
-            100, max(10, int(os.environ.get("MARKET_SNAPSHOT_BATCH_SIZE", "50")))
-        )
-        self.market_snapshot_pause_seconds = max(
-            0.0, float(os.environ.get("MARKET_SNAPSHOT_PAUSE_SECONDS", "0.25"))
-        )
 
         # Trailing-stop high-water marks: {symbol: highest_price_since_buy}
         self._peak_prices: Dict[str, float] = {}
@@ -242,6 +234,7 @@ class TradingEngine:
         # receiving quotes/bars even when SIP entitlement is absent.
         feed = str(os.environ.get("ALPACA_DATA_FEED", "iex") or "iex").strip().lower()
         self.alpaca_data_feed = feed if feed in ("iex", "sip") else "iex"
+        print(f"[ENGINE] market-data patch {MARKET_DATA_PATCH_VERSION}; feed={self.alpaca_data_feed}")
 
         self.ts = TimeSeries(key=alpha_vantage_key, output_format="json")
 
@@ -294,6 +287,9 @@ class TradingEngine:
         # Price cache: {symbol: (price, fetched_at_epoch)}
         self._price_cache: Dict[str, Tuple[Optional[float], float]] = {}
         self._cache_ttl = int(os.environ.get("PRICE_CACHE_TTL", "8"))   # seconds
+        # Briefly cache failed market-data lookups so a temporary Alpaca outage or
+        # rate limit does not trigger a retry storm across every worker thread.
+        self._price_failure_ttl = int(os.environ.get("PRICE_FAILURE_TTL", "45"))
 
         # Daily bars cache: {symbol: (DataFrame, fetched_at_epoch)}
         # Daily bars don't change meaningfully within a session — 30-min TTL
@@ -812,14 +808,9 @@ class TradingEngine:
             min_price = min_price_env
         max_price = min(max_price, max_price_env)
 
-        universe_limit = min(len(tradable), self.market_scan_universe_limit)
-        batch_size = self.market_snapshot_batch_size
-        print(
-            f"[MARKET_SCAN] universe={universe_limit}/{len(tradable)} "
-            f"batch_size={batch_size} target_candidates={max_candidates}"
-        )
-        for i in range(0, universe_limit, batch_size):
-            batch = tradable[i : i + batch_size]
+        BATCH = 500
+        for i in range(0, min(len(tradable), 5000), BATCH):
+            batch = tradable[i : i + BATCH]
             try:
                 snaps = self.api.get_snapshots(batch)
                 for sym, snap in snaps.items():
@@ -843,13 +834,8 @@ class TradingEngine:
                     day_chg = (price - prev_close) / prev_close * 100
                     if day_chg >= 0.5:
                         candidates.append((sym, day_chg))
-            except Exception as exc:
-                print(
-                    f"[MARKET_SCAN_ERROR] batch={i // batch_size + 1} "
-                    f"symbols={len(batch)} error={type(exc).__name__}: {exc}"
-                )
-            if self.market_snapshot_pause_seconds > 0:
-                time.sleep(self.market_snapshot_pause_seconds)
+            except Exception:
+                pass
 
         candidates.sort(key=lambda x: x[1], reverse=True)
         result = [sym for sym, _ in candidates[:max_candidates]]
@@ -1050,63 +1036,129 @@ class TradingEngine:
     # Market data  (with price cache)
     # -------------------------------
 
-    def get_live_price(self, symbol: str) -> Optional[float]:
-        # Serve from cache if fresh enough
-        cached = self._price_cache.get(symbol)
-        if cached and (time.time() - cached[1]) < self._cache_ttl:
-            return cached[0]
-
-        price = None
-        try:
+    @staticmethod
+    def _market_value(obj: Any, *names: str) -> Optional[float]:
+        """Read a positive numeric market-data value across Alpaca SDK versions."""
+        if obj is None:
+            return None
+        for name in names:
             try:
-                t = self.api.get_latest_trade(symbol, feed=self.alpaca_data_feed)
-            except TypeError:
-                # Older alpaca_trade_api versions do not support feed=...
-                t = self.api.get_latest_trade(symbol)
-            price = float(getattr(t, "price", 0) or 0)
-            if price <= 0:
-                price = None
-        except Exception:
-            # Feed entitlement mismatches are common in live mode; retry with IEX.
-            if self.alpaca_data_feed != "iex":
+                if isinstance(obj, dict):
+                    value = obj.get(name)
+                else:
+                    value = getattr(obj, name, None)
+                if value is None:
+                    continue
+                number = float(value)
+                if number > 0:
+                    return number
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    def get_live_price(self, symbol: str) -> Optional[float]:
+        symbol = str(symbol or "").strip().upper()
+        if not symbol:
+            return None
+
+        cached = self._price_cache.get(symbol)
+        if cached:
+            cached_price, cached_at = cached
+            ttl = self._cache_ttl if cached_price is not None else self._price_failure_ttl
+            if (time.time() - cached_at) < ttl:
+                return cached_price
+
+        price: Optional[float] = None
+        errors: List[str] = []
+        feeds = list(dict.fromkeys([self.alpaca_data_feed, "iex"]))
+
+        # 1) Latest trade. Attribute names differ between Alpaca SDK generations.
+        for feed_try in feeds:
+            try:
                 try:
-                    t = self.api.get_latest_trade(symbol, feed="iex")
-                    price = float(getattr(t, "price", 0) or 0)
-                    if price <= 0:
-                        price = None
+                    trade = self.api.get_latest_trade(symbol, feed=feed_try)
+                except TypeError:
+                    trade = self.api.get_latest_trade(symbol)
+                price = self._market_value(trade, "price", "p")
+                if price is not None:
+                    break
+            except Exception as exc:
+                errors.append(f"trade/{feed_try}: {exc}")
+
+        # 2) Quote midpoint. Support bidprice/askprice, bid_price/ask_price, and bp/ap.
+        if price is None:
+            for feed_try in feeds:
+                try:
+                    try:
+                        quote = self.api.get_latest_quote(symbol, feed=feed_try)
+                    except TypeError:
+                        quote = self.api.get_latest_quote(symbol)
+                    bid = self._market_value(quote, "bid_price", "bidprice", "bp")
+                    ask = self._market_value(quote, "ask_price", "askprice", "ap")
+                    if bid is not None and ask is not None:
+                        price = (bid + ask) / 2.0
+                    else:
+                        price = ask or bid
+                    if price is not None:
+                        break
+                except Exception as exc:
+                    errors.append(f"quote/{feed_try}: {exc}")
+
+        # 3) Snapshot fallback: latest trade, minute close, daily close, then quote.
+        if price is None:
+            try:
+                snap = self.api.get_snapshot(symbol)
+                latest_trade = getattr(snap, "latest_trade", None)
+                minute_bar = getattr(snap, "minute_bar", None)
+                daily_bar = getattr(snap, "daily_bar", None)
+                latest_quote = getattr(snap, "latest_quote", None)
+                price = (
+                    self._market_value(latest_trade, "price", "p")
+                    or self._market_value(minute_bar, "close", "c")
+                    or self._market_value(daily_bar, "close", "c")
+                )
+                if price is None:
+                    bid = self._market_value(latest_quote, "bid_price", "bidprice", "bp")
+                    ask = self._market_value(latest_quote, "ask_price", "askprice", "ap")
+                    price = ((bid + ask) / 2.0) if bid and ask else (ask or bid)
+            except Exception as exc:
+                errors.append(f"snapshot: {exc}")
+
+        # 4) Latest bar fallback. Some Alpaca accounts return bars even when the
+        # latest-trade and latest-quote endpoints temporarily return no payload.
+        if price is None:
+            for feed_try in feeds:
+                try:
+                    try:
+                        latest_bar = self.api.get_latest_bar(symbol, feed=feed_try)
+                    except TypeError:
+                        latest_bar = self.api.get_latest_bar(symbol)
+                    price = self._market_value(latest_bar, "close", "c")
+                    if price is not None:
+                        break
+                except Exception as exc:
+                    errors.append(f"latest-bar/{feed_try}: {exc}")
+
+        # 5) Last known cached bar close is preferable to declaring a liquid symbol dead.
+        if price is None:
+            bars = self._bars_cache.get(symbol)
+            if bars and bars[0] is not None and not bars[0].empty:
+                try:
+                    last_close = float(bars[0]["c"].iloc[-1])
+                    price = last_close if last_close > 0 else None
                 except Exception:
                     pass
 
-        # Fallback to quote midpoint when latest trade is unavailable.
+        # 6) External fallback. Alpha Vantage may be delayed/rate-limited, so use last.
         if price is None:
-            for feed_try in [self.alpaca_data_feed, "iex"]:
-                try:
-                    try:
-                        q = self.api.get_latest_quote(symbol, feed=feed_try)
-                    except TypeError:
-                        q = self.api.get_latest_quote(symbol)
-                    bid = float(getattr(q, "bidprice", 0) or 0)
-                    ask = float(getattr(q, "askprice", 0) or 0)
-                    if bid > 0 and ask > 0:
-                        price = (bid + ask) / 2.0
-                        break
-                    if ask > 0:
-                        price = ask
-                        break
-                    if bid > 0:
-                        price = bid
-                        break
-                except Exception:
-                    continue
-
-        if price is None:
-            # Last-resort fallback to Alpha Vantage.
             try:
                 data, _ = self.ts.get_quote_endpoint(symbol)
-                px = float(data.get("05. price", 0) or 0)
-                price = px if px > 0 else None
-            except Exception:
-                pass
+                price = self._market_value(data, "05. price")
+            except Exception as exc:
+                errors.append(f"alpha-vantage: {exc}")
+
+        if price is None and errors:
+            print(f"[ENGINE] price lookup failed for {symbol}: " + " | ".join(errors[-4:]))
 
         self._price_cache[symbol] = (price, time.time())
         return price
@@ -1495,11 +1547,6 @@ class TradingEngine:
             if len(self._buy_decision_log) > self._buy_decision_log_limit:
                 self._buy_decision_log = self._buy_decision_log[-self._buy_decision_log_limit:]
 
-        print(
-            f"[BUY_DECISION] symbol={rec['symbol']} verdict={rec['verdict']} "
-            f"reason={rec['reason']} price={rec['price']} detail={rec['detail']}"
-        )
-
     # -------------------------------
     # Decision logic
     # -------------------------------
@@ -1830,22 +1877,12 @@ class TradingEngine:
                 cost = qty * price
 
             try:
-                print(
-                    f"[BUY_SUBMIT] mode={self.trading_mode.upper()} symbol={symbol} "
-                    f"qty={qty} estimated_price=${price:.4f} estimated_cost=${cost:.2f}"
-                )
-                order = self.api.submit_order(
+                self.api.submit_order(
                     symbol=symbol,
                     qty=qty,
                     side="buy",
                     type="market",
                     time_in_force="day",
-                )
-                order_id = str(getattr(order, "id", "unknown"))
-                order_status = str(getattr(order, "status", "submitted"))
-                print(
-                    f"[BUY_ACCEPTED] mode={self.trading_mode.upper()} symbol={symbol} "
-                    f"qty={qty} order_id={order_id} status={order_status}"
                 )
 
                 with self.lock:
@@ -1867,7 +1904,7 @@ class TradingEngine:
                     symbol,
                     "BUY_EXECUTED",
                     "order_submitted",
-                    f"qty={qty} cost=${cost:.2f} order_id={order_id} status={order_status} | {self._signal_compact(signal or {})}",
+                    f"qty={qty} cost=${cost:.2f} | {self._signal_compact(signal or {})}",
                     price,
                 )
 
@@ -1877,13 +1914,8 @@ class TradingEngine:
                 self.send_alert(msg, level="info", symbol=symbol)
 
             except Exception as e:
-                error_detail = f"{type(e).__name__}: {e}"
-                print(
-                    f"[BUY_REJECTED] mode={self.trading_mode.upper()} symbol={symbol} "
-                    f"qty={qty} error={error_detail}"
-                )
-                self._record_buy_decision(symbol, "BUY_ERROR", "broker_submit_failed", error_detail, price)
-                self.send_alert(f"BUY ERROR {symbol}: {error_detail}", level="alert", symbol=symbol)
+                self._record_buy_decision(symbol, "BUY_ERROR", "broker_submit_failed", str(e), price)
+                self.send_alert(f"BUY ERROR {symbol}: {e}", level="alert", symbol=symbol)
 
     def sell(self, symbol: str, price: float, reason: str = "profit"):
         with self.lock:
