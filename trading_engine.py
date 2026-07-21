@@ -1,3 +1,6 @@
+
+
+
 from news_sentiment import get_symbol_sentiment
 from ai_model import ai_predict_signal
 from dynamic_position import calc_volatility, adjust_risk_for_streak, adjust_risk_for_volatility
@@ -2179,3 +2182,4 @@ class TradingEngine:
             "rsi_sell_min":        self.rsi_sell_min,
         }
 
+# Built by Troy Walker of T-Dub's Apps — 2026-04-22
