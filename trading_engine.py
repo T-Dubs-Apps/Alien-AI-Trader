@@ -135,8 +135,14 @@ class TradingEngine:
         # we auto-size to the live account balance each session.
         self._capital_is_auto   = self.initial_capital <= 0
 
-        # Max simultaneous open positions
+        # Max simultaneous open positions requested by the dashboard/operator.
         self.max_positions = int(os.environ.get("MAX_POSITIONS", "5"))
+        # Existing Alpaca positions are reconciled on startup.  Previously, an
+        # account that already held more positions than MAX_POSITIONS could never
+        # buy again (for example 24 reconciled positions vs a limit of 5).  Keep a
+        # small configurable number of NEW slots above the reconciled baseline.
+        self.reconciled_position_buffer = max(0, int(os.environ.get("RECONCILED_POSITION_BUFFER", "5")))
+        self._reconciled_position_floor = 0
 
         # Hard exposure guardrails (invariants): these are non-negotiable limits
         # that prevent catastrophic over-allocation during fast market moves.
@@ -518,10 +524,25 @@ class TradingEngine:
                     continue
 
         if seeded:
+            # Preserve room for new entries even when the broker already holds more
+            # positions than the dashboard's configured maximum. Exposure, cash
+            # reserve, and sizing guards still apply to every attempted buy.
+            self._reconciled_position_floor = seeded + self.reconciled_position_buffer
+            old_max = self.max_positions
+            self.max_positions = max(self.max_positions, self._reconciled_position_floor)
             self.send_alert(
-                f"Reconciled {seeded} open position(s) from Alpaca on startup.",
+                f"Reconciled {seeded} open position(s) from Alpaca on startup. "
+                f"Effective position cap: {self.max_positions} "
+                f"({self.reconciled_position_buffer} new slot(s) reserved).",
                 level="info",
             )
+            if self.max_positions != old_max:
+                self.send_alert(
+                    f"POSITION CAP AUTO-ADJUSTED: configured max was {old_max}, "
+                    f"but {seeded} positions already exist. Raised effective max to "
+                    f"{self.max_positions} so valid BUY signals are not permanently blocked.",
+                    level="warn",
+                )
 
     def run_forever(self):
         """
@@ -718,7 +739,11 @@ class TradingEngine:
             if "loss_threshold"      in s: self.loss_threshold       = max(0.001, float(s["loss_threshold"])    / 100.0)
             if "max_trades_per_hour" in s: self.max_trades_per_hour  = max(1, int(s["max_trades_per_hour"]))
             if "scan_all_market"     in s: self.scan_all_market      = bool(s["scan_all_market"])
-            if "max_positions"       in s: self.max_positions        = max(1, int(s["max_positions"]))
+            if "max_positions"       in s:
+                requested_max = max(1, int(s["max_positions"]))
+                # Do not let the dashboard's old/default value re-lock an account
+                # that started with many broker positions.
+                self.max_positions = max(requested_max, self._reconciled_position_floor)
             # Live-updatable position sizing / risk knobs from dashboard settings box
             if "initial_capital"     in s:
                 new_cap = max(0.0, float(s["initial_capital"]))
@@ -2153,6 +2178,4 @@ class TradingEngine:
             "rsi_buy_max":         self.rsi_buy_max,
             "rsi_sell_min":        self.rsi_sell_min,
         }
-
-# Built by Troy Walker of T-Dub's Apps — 2026-04-22
 
