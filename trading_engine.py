@@ -1,6 +1,9 @@
 
 
 
+
+
+
 from news_sentiment import get_symbol_sentiment
 from ai_model import ai_predict_signal
 from dynamic_position import calc_volatility, adjust_risk_for_streak, adjust_risk_for_volatility
@@ -339,6 +342,16 @@ class TradingEngine:
         # Default 21,540 s = 5h 59m. Prevents same-day round-trip (day trade) flagging.
         # Emergency trailing-stops and hard stop-losses are EXEMPT (always fire).
         self.min_hold_seconds = int(os.environ.get("MIN_HOLD_SECONDS", "21540"))
+
+        # ── Confirmed risk-slider profile support ───────────────────────────────
+        # Backward-compatible by design: unless the dashboard explicitly sends a
+        # confirmed risk level, every existing setting above remains untouched.
+        # This lets an existing live deployment replace the engine safely before
+        # the slider UI is installed.
+        self.risk_profile_level: Optional[int] = None
+        self.risk_profile_name = "Current settings"
+        self._risk_profile_signature: Optional[Tuple[Any, ...]] = None
+
 
     # ──────────────────────────────────────────────────────────────────────────
     # Portfolio Safety Shield
@@ -720,6 +733,89 @@ class TradingEngine:
             f"({'REAL MONEY' if mode == 'live' else 'practice money'}).",
             level="trade" if mode == "live" else "info")
 
+    @staticmethod
+    def _setting_is_true(value: Any) -> bool:
+        """Parse a dashboard boolean without treating the string 'false' as True."""
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return value != 0
+        return str(value or "").strip().lower() in ("1", "true", "yes", "on")
+
+    @staticmethod
+    def _risk_profile_for_level(level: int) -> Dict[str, Any]:
+        """Return the validated entry-risk profile for slider levels 1 through 10.
+
+        Level 5 mirrors the engine's long-standing default configuration. The
+        slider changes entry selection and position sizing only; it does not
+        disable stop losses, trailing stops, reconciliation, or sell protection.
+        """
+        profiles: Dict[int, Dict[str, Any]] = {
+            1: {"name": "Very Conservative", "risk_per_trade_pct": 0.50, "max_position_pct": 8.0,  "min_positions": 12, "rsi_buy_max": 38.0, "sma_spread_min": 0.35, "rocket_breakout_enabled": False, "rocket_breakout_min_day_change_pct": 18.0, "rocket_breakout_volume_mult": 2.20, "rocket_breakout_min_avg_volume": 2000000.0, "rocket_breakout_max_above_sma20_pct": 12.0, "rocket_breakout_lookback_bars": 30, "forecast_required_capital_pct": 5.0,  "forecast_required_volatility": 0.018, "forecast_required_min_volume": 2500000.0},
+            2: {"name": "Conservative",      "risk_per_trade_pct": 0.75, "max_position_pct": 10.0, "min_positions": 10, "rsi_buy_max": 41.0, "sma_spread_min": 0.30, "rocket_breakout_enabled": False, "rocket_breakout_min_day_change_pct": 17.0, "rocket_breakout_volume_mult": 2.00, "rocket_breakout_min_avg_volume": 1800000.0, "rocket_breakout_max_above_sma20_pct": 15.0, "rocket_breakout_lookback_bars": 28, "forecast_required_capital_pct": 6.0,  "forecast_required_volatility": 0.020, "forecast_required_min_volume": 2200000.0},
+            3: {"name": "Cautious",          "risk_per_trade_pct": 1.00, "max_position_pct": 12.0, "min_positions": 8,  "rsi_buy_max": 44.0, "sma_spread_min": 0.24, "rocket_breakout_enabled": False, "rocket_breakout_min_day_change_pct": 16.0, "rocket_breakout_volume_mult": 1.85, "rocket_breakout_min_avg_volume": 1600000.0, "rocket_breakout_max_above_sma20_pct": 18.0, "rocket_breakout_lookback_bars": 26, "forecast_required_capital_pct": 7.0,  "forecast_required_volatility": 0.022, "forecast_required_min_volume": 1900000.0},
+            4: {"name": "Moderate",          "risk_per_trade_pct": 1.50, "max_position_pct": 16.0, "min_positions": 6,  "rsi_buy_max": 47.0, "sma_spread_min": 0.16, "rocket_breakout_enabled": True,  "rocket_breakout_min_day_change_pct": 14.0, "rocket_breakout_volume_mult": 1.65, "rocket_breakout_min_avg_volume": 1300000.0, "rocket_breakout_max_above_sma20_pct": 25.0, "rocket_breakout_lookback_bars": 23, "forecast_required_capital_pct": 9.0,  "forecast_required_volatility": 0.026, "forecast_required_min_volume": 1400000.0},
+            5: {"name": "Balanced",          "risk_per_trade_pct": 2.00, "max_position_pct": 20.0, "min_positions": 5,  "rsi_buy_max": 50.0, "sma_spread_min": 0.10, "rocket_breakout_enabled": True,  "rocket_breakout_min_day_change_pct": 12.0, "rocket_breakout_volume_mult": 1.50, "rocket_breakout_min_avg_volume": 1000000.0, "rocket_breakout_max_above_sma20_pct": 35.0, "rocket_breakout_lookback_bars": 20, "forecast_required_capital_pct": 12.0, "forecast_required_volatility": 0.030, "forecast_required_min_volume": 1000000.0},
+            6: {"name": "Growth",            "risk_per_trade_pct": 2.30, "max_position_pct": 23.0, "min_positions": 5,  "rsi_buy_max": 53.0, "sma_spread_min": 0.08, "rocket_breakout_enabled": True,  "rocket_breakout_min_day_change_pct": 11.0, "rocket_breakout_volume_mult": 1.45, "rocket_breakout_min_avg_volume": 800000.0,  "rocket_breakout_max_above_sma20_pct": 40.0, "rocket_breakout_lookback_bars": 18, "forecast_required_capital_pct": 14.0, "forecast_required_volatility": 0.034, "forecast_required_min_volume": 850000.0},
+            7: {"name": "Assertive",         "risk_per_trade_pct": 2.60, "max_position_pct": 26.0, "min_positions": 4,  "rsi_buy_max": 55.0, "sma_spread_min": 0.06, "rocket_breakout_enabled": True,  "rocket_breakout_min_day_change_pct": 10.0, "rocket_breakout_volume_mult": 1.38, "rocket_breakout_min_avg_volume": 650000.0,  "rocket_breakout_max_above_sma20_pct": 45.0, "rocket_breakout_lookback_bars": 16, "forecast_required_capital_pct": 16.0, "forecast_required_volatility": 0.038, "forecast_required_min_volume": 700000.0},
+            8: {"name": "Aggressive",        "risk_per_trade_pct": 3.00, "max_position_pct": 29.0, "min_positions": 4,  "rsi_buy_max": 58.0, "sma_spread_min": 0.04, "rocket_breakout_enabled": True,  "rocket_breakout_min_day_change_pct": 9.0,  "rocket_breakout_volume_mult": 1.30, "rocket_breakout_min_avg_volume": 500000.0,  "rocket_breakout_max_above_sma20_pct": 50.0, "rocket_breakout_lookback_bars": 15, "forecast_required_capital_pct": 18.0, "forecast_required_volatility": 0.042, "forecast_required_min_volume": 550000.0},
+            9: {"name": "Very Aggressive",   "risk_per_trade_pct": 3.50, "max_position_pct": 32.0, "min_positions": 3,  "rsi_buy_max": 60.0, "sma_spread_min": 0.02, "rocket_breakout_enabled": True,  "rocket_breakout_min_day_change_pct": 8.0,  "rocket_breakout_volume_mult": 1.22, "rocket_breakout_min_avg_volume": 350000.0,  "rocket_breakout_max_above_sma20_pct": 55.0, "rocket_breakout_lookback_bars": 13, "forecast_required_capital_pct": 21.0, "forecast_required_volatility": 0.047, "forecast_required_min_volume": 400000.0},
+            10:{"name": "Maximum",           "risk_per_trade_pct": 4.00, "max_position_pct": 35.0, "min_positions": 3,  "rsi_buy_max": 62.0, "sma_spread_min": 0.00, "rocket_breakout_enabled": True,  "rocket_breakout_min_day_change_pct": 7.0,  "rocket_breakout_volume_mult": 1.15, "rocket_breakout_min_avg_volume": 250000.0,  "rocket_breakout_max_above_sma20_pct": 60.0, "rocket_breakout_lookback_bars": 12, "forecast_required_capital_pct": 24.0, "forecast_required_volatility": 0.052, "forecast_required_min_volume": 300000.0},
+        }
+        try:
+            normalized = int(round(float(level)))
+        except (TypeError, ValueError):
+            raise ValueError("Risk level must be a number from 1 through 10.")
+        if normalized not in profiles:
+            raise ValueError("Risk level must be between 1 and 10.")
+        return dict(profiles[normalized])
+
+    def _apply_confirmed_risk_profile(self, settings: Dict[str, Any]) -> None:
+        """Apply a slider profile only after an explicit dashboard confirmation."""
+        raw_level = settings.get("risk_level", settings.get("risk_slider"))
+        if raw_level is None:
+            return
+
+        confirmed = any(
+            self._setting_is_true(settings.get(key))
+            for key in ("risk_profile_confirmed", "risk_confirmed", "apply_risk_profile")
+        )
+        if not confirmed:
+            return
+
+        profile = self._risk_profile_for_level(raw_level)
+        level = int(round(float(raw_level)))
+        signature = (level,) + tuple(profile[k] for k in sorted(profile))
+        if signature == self._risk_profile_signature:
+            return
+
+        self.risk_per_trade_pct = max(0.1, float(profile["risk_per_trade_pct"]))
+        self.max_position_pct = max(1.0, float(profile["max_position_pct"]))
+        self.min_positions = max(1, int(profile["min_positions"]))
+        self.rsi_buy_max = min(80.0, max(20.0, float(profile["rsi_buy_max"])))
+        self.sma_spread_min = max(0.0, float(profile["sma_spread_min"]))
+        self.rocket_breakout_enabled = bool(profile["rocket_breakout_enabled"])
+        self.rocket_breakout_min_day_change_pct = max(1.0, float(profile["rocket_breakout_min_day_change_pct"]))
+        self.rocket_breakout_volume_mult = max(1.0, float(profile["rocket_breakout_volume_mult"]))
+        self.rocket_breakout_min_avg_volume = max(0.0, float(profile["rocket_breakout_min_avg_volume"]))
+        self.rocket_breakout_max_above_sma20_pct = max(1.0, float(profile["rocket_breakout_max_above_sma20_pct"]))
+        self.rocket_breakout_lookback_bars = max(5, int(profile["rocket_breakout_lookback_bars"]))
+        self.forecast_required_capital_pct = max(1.0, float(profile["forecast_required_capital_pct"]))
+        self.forecast_required_volatility = max(0.001, float(profile["forecast_required_volatility"]))
+        self.forecast_required_min_volume = max(0.0, float(profile["forecast_required_min_volume"]))
+
+        self.risk_profile_level = level
+        self.risk_profile_name = str(profile["name"])
+        self._risk_profile_signature = signature
+        self.send_alert(
+            f"RISK PROFILE CONFIRMED: level {level}/10 — {self.risk_profile_name}. "
+            f"Entry sizing is {self.risk_per_trade_pct:.2f}% risk/trade, "
+            f"maximum {self.max_position_pct:.1f}% per position, spread across "
+            f"at least {self.min_positions} positions. Existing holdings and all "
+            f"sell protections remain active.",
+            level="warn" if level >= 8 else "info",
+        )
+
     def _poll_live_settings(self):
         """
         Fetch live trading settings from the dashboard's /api/settings/trading.
@@ -780,6 +876,9 @@ class TradingEngine:
             if "portfolio_stop_buffer" in s: self.portfolio_stop_buffer = max(0.0, float(s["portfolio_stop_buffer"]))
             if "shield_enabled"        in s: self.shield_enabled         = bool(s["shield_enabled"])
             if "min_hold_seconds"      in s: self.min_hold_seconds       = max(0, int(s["min_hold_seconds"]))
+            # Apply a confirmed slider profile last so its internally consistent
+            # values cannot be partially overwritten by stale dashboard fields.
+            self._apply_confirmed_risk_profile(s)
         except Exception:
             pass
 
@@ -2123,6 +2222,11 @@ class TradingEngine:
             "scan_all_market":   self.scan_all_market,
             "max_positions":     self.max_positions,
             "min_positions":     self.min_positions,
+            "risk_profile": {
+                "level": self.risk_profile_level,
+                "name": self.risk_profile_name,
+                "confirmed": self.risk_profile_level is not None,
+            },
             "risk_settings": {
                 "risk_per_trade_pct": self.risk_per_trade_pct,
                 "max_position_pct":   self.max_position_pct,
@@ -2174,6 +2278,8 @@ class TradingEngine:
             "initial_capital":     round(self.initial_capital, 2),
             "roi_pct":             roi_pct,
             "capital_hwm":         round(self._capital_hwm, 2),
+            "risk_profile_level":  self.risk_profile_level,
+            "risk_profile_name":   self.risk_profile_name,
             "risk_per_trade_pct":  self.risk_per_trade_pct,
             "max_position_pct":    self.max_position_pct,
             "min_positions":       self.min_positions,
