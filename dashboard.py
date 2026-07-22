@@ -1093,8 +1093,9 @@ _trading_settings: dict = {
     "market_hours_only":     os.environ.get("MARKET_HOURS_ONLY", "true").lower() == "true",
     # Minutes without BUY_EXECUTED before showing red trade-health banner.
     "trade_health_threshold_minutes": int(os.environ.get("TRADE_HEALTH_THRESHOLD_MINUTES", "20")),
-    # Risk slider remains dormant until the user explicitly confirms a level.
-    "risk_level": None,
+    # Confirmed beginner risk-slider profile. None/False preserves every existing
+    # advanced setting exactly as configured until the user explicitly confirms.
+    "risk_level":             None,
     "risk_profile_confirmed": False,
 }
 
@@ -1115,24 +1116,18 @@ def _load_saved_settings() -> None:
             except Exception:
                 v = 20
             _trading_settings["trade_health_threshold_minutes"] = max(5, min(240, v))
-            # Validate persisted risk profile state. Invalid/partial values fail safe
-            # to the existing individual settings instead of changing live behavior.
+            # Ignore malformed or half-written risk settings from older files.
             try:
-                saved_level = saved.get("risk_level")
-                if saved_level is None:
-                    _trading_settings["risk_level"] = None
-                    _trading_settings["risk_profile_confirmed"] = False
-                else:
-                    saved_level = int(round(float(saved_level)))
-                    if not 1 <= saved_level <= 10:
-                        raise ValueError("out of range")
-                    _trading_settings["risk_level"] = saved_level
-                    _trading_settings["risk_profile_confirmed"] = bool(
-                        saved.get("risk_profile_confirmed", False)
-                    )
-            except Exception:
+                saved_risk_level = int(_trading_settings.get("risk_level"))
+            except (TypeError, ValueError):
+                saved_risk_level = None
+            saved_risk_confirmed = bool(_trading_settings.get("risk_profile_confirmed", False))
+            if saved_risk_level is None or not (1 <= saved_risk_level <= 10) or not saved_risk_confirmed:
                 _trading_settings["risk_level"] = None
                 _trading_settings["risk_profile_confirmed"] = False
+            else:
+                _trading_settings["risk_level"] = saved_risk_level
+                _trading_settings["risk_profile_confirmed"] = True
             if "market_hours_only" in saved:
                 _MARKET_HOURS_ONLY = bool(saved.get("market_hours_only"))
     except Exception:
@@ -3231,54 +3226,6 @@ def update_trading_settings():
         "source": str(payload.get("live_consent_source", "")).strip()[:32],
     }
 
-    # ── Confirmed risk slider profile ─────────────────────────────────────────
-    # A risk level is never accepted silently. The browser must send both a valid
-    # level (1-10) and risk_profile_confirmed=true after the user approves it.
-    if "risk_level" in payload:
-        try:
-            requested_risk_level = int(round(float(payload.get("risk_level"))))
-        except (TypeError, ValueError):
-            return jsonify({
-                "status": "error",
-                "message": "risk_level must be a number from 1 through 10.",
-            }), 400
-        if not 1 <= requested_risk_level <= 10:
-            return jsonify({
-                "status": "error",
-                "message": "risk_level must be between 1 and 10.",
-            }), 400
-        if not bool(payload.get("risk_profile_confirmed", False)):
-            return jsonify({
-                "status": "error",
-                "message": "Risk profile change canceled: confirmation was not received.",
-                "risk_level": _trading_settings.get("risk_level"),
-                "risk_profile_confirmed": bool(
-                    _trading_settings.get("risk_profile_confirmed", False)
-                ),
-            }), 400
-
-        previous_risk_level = _trading_settings.get("risk_level")
-        _trading_settings["risk_level"] = requested_risk_level
-        _trading_settings["risk_profile_confirmed"] = True
-        if previous_risk_level != requested_risk_level:
-            risk_names = {
-                1: "Very Conservative", 2: "Conservative", 3: "Cautious",
-                4: "Moderate", 5: "Balanced", 6: "Growth", 7: "Assertive",
-                8: "Aggressive", 9: "Very Aggressive", 10: "Maximum",
-            }
-            note = {
-                "time": int(time.time()),
-                "level": "warn" if requested_risk_level >= 8 else "info",
-                "symbol": "",
-                "message": (
-                    f"Risk profile confirmed: level {requested_risk_level}/10 — "
-                    f"{risk_names[requested_risk_level]}. Existing holdings and sell "
-                    "protections remain active."
-                ),
-            }
-            _notifications.append(note)
-            socketio.emit("notification", note)
-
     # ── Paper ↔ Live switch — license-gated, fails safe to paper ──────────────
     if "trading_mode" in payload:
         want = str(payload.get("trading_mode", "")).lower()
@@ -3309,6 +3256,66 @@ def update_trading_settings():
         _notifications.append(note)
         socketio.emit("notification", note)
 
+    # ── Beginner risk slider — explicit confirmation required ───────────────
+    # Preview movement should remain browser-only. The server accepts a profile
+    # only when the user releases the slider and confirms the warning dialog.
+    risk_keys_present = any(k in payload for k in (
+        "risk_level", "risk_slider", "risk_profile_confirmed",
+        "risk_confirmed", "apply_risk_profile",
+    ))
+    if risk_keys_present:
+        raw_level = payload.get("risk_level", payload.get("risk_slider"))
+        confirmed_raw = payload.get(
+            "risk_profile_confirmed",
+            payload.get("risk_confirmed", payload.get("apply_risk_profile", False)),
+        )
+        confirmed = (
+            confirmed_raw is True
+            or (isinstance(confirmed_raw, (int, float)) and confirmed_raw != 0)
+            or str(confirmed_raw or "").strip().lower() in ("1", "true", "yes", "on")
+        )
+        if not confirmed:
+            return jsonify({
+                "status": "error",
+                "message": "Risk profile was not applied because confirmation was not received.",
+                "risk_level": _trading_settings.get("risk_level"),
+                "risk_profile_confirmed": bool(_trading_settings.get("risk_profile_confirmed", False)),
+            }), 400
+        try:
+            risk_level = int(round(float(raw_level)))
+        except (TypeError, ValueError):
+            return jsonify({
+                "status": "error",
+                "message": "risk_level must be a whole number from 1 through 10.",
+            }), 400
+        if risk_level < 1 or risk_level > 10:
+            return jsonify({
+                "status": "error",
+                "message": "risk_level must be between 1 and 10.",
+            }), 400
+
+        risk_names = {
+            1: "Very Conservative", 2: "Conservative", 3: "Cautious",
+            4: "Moderate", 5: "Balanced", 6: "Growth", 7: "Assertive",
+            8: "Aggressive", 9: "Very Aggressive", 10: "Maximum",
+        }
+        previous_level = _trading_settings.get("risk_level")
+        _trading_settings["risk_level"] = risk_level
+        _trading_settings["risk_profile_confirmed"] = True
+        if previous_level != risk_level:
+            note = {
+                "time": int(time.time()),
+                "level": "warn" if risk_level >= 8 else "info",
+                "symbol": "",
+                "message": (
+                    f"Risk profile confirmed: level {risk_level}/10 — "
+                    f"{risk_names[risk_level]}. The engine will apply it on its next settings poll."
+                ),
+            }
+            _notifications.append(note)
+            _notifications[:] = _notifications[-200:]
+            socketio.emit("notification", note)
+
     allowed = {
         # Core execution
         "poll_seconds", "trailing_stop_pct", "loss_threshold",
@@ -3333,8 +3340,6 @@ def update_trading_settings():
         "market_hours_only",
         # UI warning threshold for no-buy trade health banner
         "trade_health_threshold_minutes",
-        # Confirmed risk slider profile
-        "risk_level", "risk_profile_confirmed",
     }
     for k, v in payload.items():
         if k in allowed:
@@ -3358,9 +3363,6 @@ def update_trading_settings():
                 except Exception:
                     continue
                 _trading_settings[k] = max(5, min(240, minutes))
-            elif k in ("risk_level", "risk_profile_confirmed"):
-                # Already validated and normalized above.
-                continue
             else:
                 _trading_settings[k] = v
     # Persist to disk so settings survive restarts
