@@ -3774,8 +3774,36 @@ def _wait_for_market_open() -> None:
     print("[ENGINE] Market open — starting trading session.")
 
 
+# Methods the dashboard depends on the engine providing. If trading_engine.py is
+# ever replaced with a broken/stub version (e.g. one missing run_forever), the
+# engine thread would die instantly at startup and the trader would silently go
+# offline. This guard catches that BEFORE any session launches and reports a loud,
+# specific reason instead of a silent dead thread.
+_REQUIRED_ENGINE_METHODS = ("run_forever", "start", "stop", "buy", "sell", "evaluate")
+
+
+def _engine_integrity_error() -> str:
+    """Return a user-facing error if TradingEngine is missing required methods."""
+    missing = [
+        name for name in _REQUIRED_ENGINE_METHODS
+        if not callable(getattr(TradingEngine, name, None))
+    ]
+    if missing:
+        return (
+            "ENGINE FILE INVALID — trading_engine.py is missing required "
+            f"method(s): {', '.join(missing)}. The engine cannot trade. "
+            "Restore the correct trading_engine.py (re-download/reinstall) and "
+            "restart the app."
+        )
+    return ""
+
+
 def _engine_preflight_error() -> str:
     """Return a user-facing preflight error, or empty string when config is OK."""
+    integrity_error = _engine_integrity_error()
+    if integrity_error:
+        return integrity_error
+
     alpha_present = bool(key_store.get_alpha_key())
     if not alpha_present:
         return "Missing ALPHA_VANTAGE_KEY. Open SETUP API KEYS and save it."
