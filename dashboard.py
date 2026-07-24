@@ -1065,7 +1065,7 @@ _trading_settings: dict = {
     "min_positions":       int(os.environ.get("MIN_POSITIONS",         "5")),
     "risk_per_trade_usd":  float(os.environ.get("RISK_PER_TRADE_USD",  "0")),
     # ── Signal quality filters ───────────────────────────────────────────────
-    "rsi_buy_max":         float(os.environ.get("RSI_BUY_MAX",    "50.0")),
+    "rsi_buy_max":         float(os.environ.get("RSI_BUY_MAX",    "60.0")),
     "rsi_sell_min":        float(os.environ.get("RSI_SELL_MIN",   "70.0")),
     "sma_spread_min":      float(os.environ.get("SMA_SPREAD_MIN", "0.1")),
     # ── Rocket breakout mode (momentum chase for explosive movers) ─────────
