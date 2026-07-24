@@ -2971,6 +2971,33 @@ def api_stockinfo():
     return jsonify(info), 200
 
 
+@app.route("/api/orders", methods=["GET"])
+def api_orders():
+    """Recent orders for the Candlesticks history panel (optionally one symbol).
+    Read-only — lists the account's own order history."""
+    symbol = (request.args.get("symbol", "") or "").strip().upper()
+    client = _active_alpaca()
+    if not client:
+        return jsonify({"status": "error", "orders": [], "message": "Market data client not configured."}), 200
+    orders: List[Dict[str, Any]] = []
+    try:
+        kw: Dict[str, Any] = {"status": "all", "limit": 50, "direction": "desc"}
+        if symbol:
+            kw["symbols"] = [symbol]
+        for o in client.list_orders(**kw):
+            orders.append({
+                "symbol": getattr(o, "symbol", None),
+                "side": getattr(o, "side", None),
+                "qty": _safe_float(getattr(o, "qty", None)),
+                "filled_avg_price": _safe_float(getattr(o, "filled_avg_price", None)),
+                "status": getattr(o, "status", None),
+                "submitted_at": str(getattr(o, "submitted_at", "") or "")[:19],
+            })
+    except Exception as e:
+        return jsonify({"status": "error", "orders": [], "message": str(e)[:160]}), 200
+    return jsonify({"status": "ok", "count": len(orders), "orders": orders}), 200
+
+
 @app.route("/api/quotes/diag", methods=["GET"])
 def api_quotes_diag():
     """Diagnostic quote probe for support. No secrets included."""

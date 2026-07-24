@@ -3273,6 +3273,27 @@
       }
     }
 
+    async function loadHistory(symbol){
+      const box=document.getElementById('candleHistory');
+      box.innerHTML='<span class="text-muted">Loading…</span>';
+      try{
+        const r=await fetch('/api/orders?symbol='+encodeURIComponent(symbol));
+        const j=await r.json();
+        if(j.orders && j.orders.length){
+          box.innerHTML = j.orders.slice(0,12).map(o=>{
+            const cls = o.side==='buy' ? 'text-success' : 'text-danger';
+            const px = o.filled_avg_price!=null ? '@ $'+Number(o.filled_avg_price).toFixed(2) : '';
+            return `<div class="d-flex justify-content-between border-bottom py-1">
+                      <span><b class="${cls}">${(o.side||'').toUpperCase()}</b> ${o.qty||''} ${px}</span>
+                      <span class="text-muted" style="font-size:.75rem">${(o.submitted_at||'').replace('T',' ')}</span>
+                    </div>`;
+          }).join('');
+        } else {
+          box.innerHTML='<span class="text-muted">'+(j.message||'No trades yet for this stock.')+'</span>';
+        }
+      }catch(e){ box.innerHTML='<span class="text-danger">History unavailable.</span>'; }
+    }
+
     async function candleOrder(side){
       const msg=document.getElementById('candleActionMsg');
       if(!currentSymbol){ return; }
@@ -3285,7 +3306,7 @@
         const j=await r.json();
         if(j.status==='ok' || j.status==='success'){
           msg.className='small text-success'; msg.textContent=(side==='buy'?'Bought':'Sold')+' '+qty+' '+currentSymbol+'.';
-          setTimeout(()=>loadStockInfo(currentSymbol), 1200);
+          setTimeout(()=>{ loadStockInfo(currentSymbol); loadHistory(currentSymbol); }, 1200);
         } else {
           msg.className='small text-danger'; msg.textContent=j.message||'Order failed.';
         }
@@ -3306,6 +3327,7 @@
       ['candleBuy','candleSell','candleHold'].forEach(id=>{const b=document.getElementById(id); if(b) b.disabled=false;});
       loadCandles(sym, currentTF);
       loadStockInfo(sym);
+      loadHistory(sym);
     });
 
     document.getElementById('candleFit')?.addEventListener('click',()=>{ if(chart) chart.timeScale().fitContent(); });
