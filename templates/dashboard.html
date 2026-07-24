@@ -3204,25 +3204,29 @@
       inited=true;
     }
 
-    // Increment 1: sample data proves the chart wiring/zoom. Real fetch comes next.
-    function sampleData(n){
-      const out=[]; let p=150, t=Math.floor(Date.now()/1000)-n*86400;
-      for(let i=0;i<n;i++){
-        const o=p, c=o*(1+(Math.random()-0.5)*0.04);
-        const h=Math.max(o,c)*(1+Math.random()*0.02), l=Math.min(o,c)*(1-Math.random()*0.02);
-        out.push({time:t, open:+o.toFixed(2), high:+h.toFixed(2), low:+l.toFixed(2), close:+c.toFixed(2)});
-        p=c; t+=86400;
-      }
-      return out;
-    }
-
-    function loadCandles(symbol, tf){
+    async function loadCandles(symbol, tf){
       initChart(); if(!candleSeries) return;
-      candleSeries.setData(sampleData(120));
-      chart.timeScale().fitContent();
-      document.getElementById('candleChartEmpty')?.classList.add('d-none');
-      document.getElementById('candleTitle').textContent = symbol + ' · ' + tf;
-      document.getElementById('candleStatus').textContent = 'Sample data (chart wiring test — live data next).';
+      const status=document.getElementById('candleStatus');
+      const title=document.getElementById('candleTitle');
+      title.textContent = symbol + ' · ' + tf;
+      status.textContent = 'Loading ' + symbol + ' (' + tf + ')…';
+      try{
+        const r = await fetch('/api/candles?symbol=' + encodeURIComponent(symbol) + '&timeframe=' + encodeURIComponent(tf));
+        const j = await r.json();
+        if (j.candles && j.candles.length){
+          candleSeries.setData(j.candles);
+          chart.timeScale().fitContent();
+          document.getElementById('candleChartEmpty')?.classList.add('d-none');
+          const last = j.candles[j.candles.length-1];
+          document.getElementById('candleLastPrice').textContent = '$' + Number(last.close).toFixed(2);
+          status.textContent = j.count + ' candles · ' + tf;
+        } else {
+          candleSeries.setData([]);
+          status.textContent = (j.message || 'No data available') + ' (verify Alpaca data keys).';
+        }
+      } catch(e){
+        status.textContent = 'Error loading candles: ' + e.message;
+      }
     }
 
     document.getElementById('candleSearchForm')?.addEventListener('submit', function(e){
