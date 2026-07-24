@@ -2863,19 +2863,18 @@ def api_candles():
 
     Minute, Hour, Month = TimeFrameUnit.Minute, TimeFrameUnit.Hour, TimeFrameUnit.Month
     # tf_key -> (alpaca TimeFrame, days_back, limit, is_intraday)
+    # NOTE: Alpaca returns bars ascending FROM `start`, capped at `limit`; so limit
+    # must exceed the number of bars in the window or the LATEST bars get dropped
+    # (that made 1H/Live show stale data). Windows below all hold < ~900 bars, and
+    # limit=1000 guarantees the most-recent bar is always included.
     TF = {
-        "1m":   (TimeFrame(1, Minute),  2,    500, True),
-        "5m":   (TimeFrame(5, Minute),  10,   600, True),
-        "10m":  (TimeFrame(10, Minute), 20,   600, True),
-        "15m":  (TimeFrame(15, Minute), 30,   600, True),
-        "30m":  (TimeFrame(30, Minute), 60,   600, True),
-        "1h":   (TimeFrame(1, Hour),    180,  700, True),
-        "day":  (TimeFrame.Day,         500,  400, False),
-        "week": (TimeFrame.Week,        2600, 400, False),
-        "month":(TimeFrame(1, Month),   5000, 240, False),
-        "1y":   (TimeFrame.Day,         400,  400, False),
-        "5y":   (TimeFrame.Week,        2000, 400, False),
-        "live": (TimeFrame(1, Minute),  1,    120, True),
+        "1h":   (TimeFrame(1, Hour),    90,   1000, True),
+        "day":  (TimeFrame.Day,         500,  1000, False),
+        "week": (TimeFrame.Week,        2600, 1000, False),
+        "month":(TimeFrame(1, Month),   6000, 1000, False),
+        "1y":   (TimeFrame.Day,         400,  1000, False),
+        "5y":   (TimeFrame.Week,        2000, 1000, False),
+        "live": (TimeFrame(1, Minute),  2,    1000, True),
     }
     tf, days_back, limit, intraday = TF.get(tf_key, TF["day"])
 

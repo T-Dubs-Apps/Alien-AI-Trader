@@ -190,7 +190,7 @@ class TradingEngine:
         # Require RSI to be genuinely oversold (not just "not overbought") before buying.
         # Default: RSI must be BELOW 50 to enter — catching dips, not chasing tops.
         # Raise this value (e.g. 60) for more trades; lower (e.g. 40) for fewer, higher-quality entries.
-        self.rsi_buy_max    = float(os.environ.get("RSI_BUY_MAX",    "50.0"))  # RSI ceiling to BUY
+        self.rsi_buy_max    = float(os.environ.get("RSI_BUY_MAX",    "60.0"))  # RSI ceiling to BUY
         self.rsi_sell_min   = float(os.environ.get("RSI_SELL_MIN",   "70.0"))  # RSI floor to SELL
         # Minimum SMA20/SMA50 spread % before a golden cross is "real enough"
         self.sma_spread_min = float(os.environ.get("SMA_SPREAD_MIN", "0.1"))   # 0.1% spread required

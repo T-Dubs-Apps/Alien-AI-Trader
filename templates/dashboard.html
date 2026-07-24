@@ -3171,11 +3171,10 @@
   <script>
   (function(){
     const TF = [
-      {id:'1m',label:'1m'},{id:'5m',label:'5m'},{id:'10m',label:'10m'},{id:'15m',label:'15m'},
-      {id:'30m',label:'30m'},{id:'1h',label:'1H'},{id:'day',label:'1D'},{id:'week',label:'1W'},
+      {id:'1h',label:'1H'},{id:'day',label:'1D'},{id:'week',label:'1W'},
       {id:'month',label:'1M'},{id:'1y',label:'1Y'},{id:'5y',label:'5Y'},{id:'live',label:'LIVE'}
     ];
-    let chart=null, candleSeries=null, currentTF='day', currentSymbol=null, inited=false;
+    let chart=null, candleSeries=null, currentTF='day', currentSymbol=null, inited=false, liveTimer=null;
 
     function buildTFButtons(){
       const wrap=document.getElementById('candleTimeframes'); if(!wrap) return;
@@ -3186,9 +3185,19 @@
         currentTF=b.dataset.tf;
         wrap.querySelectorAll('button').forEach(x=>x.classList.remove('active'));
         b.classList.add('active');
-        if(currentSymbol) loadCandles(currentSymbol, currentTF);
+        if(currentSymbol) applyTimeframe(currentSymbol, currentTF);
       }));
     }
+
+    // Applies a timeframe and manages the LIVE auto-refresh timer.
+    function applyTimeframe(symbol, tf){
+      if(liveTimer){ clearInterval(liveTimer); liveTimer=null; }
+      loadCandles(symbol, tf);
+      if(tf==='live'){
+        liveTimer=setInterval(()=>{ if(currentSymbol) loadCandles(currentSymbol, 'live'); }, 15000);
+      }
+    }
+    function stopLive(){ if(liveTimer){ clearInterval(liveTimer); liveTimer=null; } }
 
     function initChart(){
       if(inited) return;
@@ -3226,8 +3235,10 @@
           document.getElementById('candleLastPrice').textContent = '$' + Number(last.close).toFixed(2);
           status.textContent = j.count + ' candles · ' + tf;
         } else {
-          candleSeries.setData([]);
-          status.textContent = (j.message || 'No data available') + ' (verify Alpaca data keys).';
+          if(tf!=='live') candleSeries.setData([]);   // keep last live frame if a refresh comes back empty
+          status.textContent = (tf==='live')
+            ? 'Live: waiting for intraday bars (free feed can lag ~15 min). Auto-refreshing…'
+            : ((j.message || 'No data available') + ' (verify Alpaca data keys).');
         }
       } catch(e){
         status.textContent = 'Error loading candles: ' + e.message;
@@ -3325,7 +3336,7 @@
       const badge=document.getElementById('candleLoadedBadge');
       badge.textContent=sym; badge.classList.remove('d-none');
       ['candleBuy','candleSell','candleHold'].forEach(id=>{const b=document.getElementById(id); if(b) b.disabled=false;});
-      loadCandles(sym, currentTF);
+      applyTimeframe(sym, currentTF);
       loadStockInfo(sym);
       loadHistory(sym);
     });
@@ -3336,6 +3347,8 @@
     document.querySelector('[data-bs-target="#tabCandles"]')?.addEventListener('shown.bs.tab', ()=>{
       initChart(); if(chart) chart.timeScale().fitContent();
     });
+    // Stop the Live poller when leaving the Candlesticks tab (save requests).
+    document.querySelector('[data-bs-target="#tabCandles"]')?.addEventListener('hide.bs.tab', stopLive);
 
     buildTFButtons();
     window.__candles = { get chart(){return chart;}, get series(){return candleSeries;} }; // test hook
