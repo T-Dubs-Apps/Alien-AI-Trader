@@ -410,8 +410,8 @@
         </button>
       </li>
       <li class="nav-item">
-        <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tabBacktest">
-          <i class="fa-solid fa-clock-rotate-left me-1"></i>Backtest
+        <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tabCandles">
+          <i class="fa-solid fa-chart-column me-1"></i>Candlesticks
         </button>
       </li>
       <li class="nav-item">
@@ -1188,39 +1188,77 @@
         </div>
       </div>
 
-      <!-- ══ BACKTEST TAB ══ -->
-      <div class="tab-pane fade" id="tabBacktest">
-        <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
-          <div>
-            <h5 class="mb-0 fw-bold">Strategy Backtester</h5>
-            <div class="small-muted">Test your strategy against historical data. Enter a symbol and date range, or upload a CSV (date, close columns).</div>
+      <!-- ══ CANDLESTICKS TAB ══ -->
+      <div class="tab-pane fade" id="tabCandles">
+        <!-- Search + timeframe toolbar -->
+        <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
+          <div class="d-flex align-items-center gap-2 flex-wrap">
+            <form id="candleSearchForm" class="d-flex gap-2">
+              <input class="form-control form-control-sm" id="candleSymbol" placeholder="Search stock (e.g. AAPL)" style="width:200px;text-transform:uppercase;" autocomplete="off">
+              <button class="btn btn-primary btn-sm" type="submit"><i class="fa-solid fa-magnifying-glass me-1"></i>Load</button>
+            </form>
+            <span id="candleLoadedBadge" class="badge bg-secondary d-none"></span>
+          </div>
+          <div class="btn-group btn-group-sm flex-wrap" id="candleTimeframes" role="group" aria-label="Timeframe">
+            <!-- buttons injected by JS -->
           </div>
         </div>
-        <form id="backtestForm" class="row g-3 align-items-end mb-3">
-          <div class="col-md-4">
-            <label class="form-label">Symbol</label>
-            <input class="form-control" id="backtestSymbol" placeholder="AAPL">
+
+        <div class="row g-3">
+          <!-- Chart -->
+          <div class="col-lg-9">
+            <div class="card">
+              <div class="card-body p-2">
+                <div class="d-flex justify-content-between align-items-center mb-1 px-1">
+                  <div id="candleTitle" class="fw-bold small">No stock loaded</div>
+                  <div class="d-flex align-items-center gap-2">
+                    <span id="candleLastPrice" class="fw-bold"></span>
+                    <span id="candleDayChange" class="small"></span>
+                    <button id="candleFit" class="btn btn-outline-secondary btn-sm" title="Fit / reset zoom"><i class="fa-solid fa-expand"></i></button>
+                  </div>
+                </div>
+                <div id="candleChart" style="width:100%;height:460px;position:relative;">
+                  <div id="candleChartEmpty" class="d-flex align-items-center justify-content-center text-muted" style="position:absolute;inset:0;">
+                    Search a stock above to load its candlestick chart.
+                  </div>
+                </div>
+                <div class="small-muted mt-1 px-1" id="candleStatus"></div>
+              </div>
+            </div>
           </div>
-          <div class="col-md-3">
-            <label class="form-label">Start Date</label>
-            <input class="form-control" type="date" id="backtestStart">
+
+          <!-- Side panel: info, manual actions, history -->
+          <div class="col-lg-3">
+            <div class="card mb-3">
+              <div class="card-body">
+                <div class="fw-bold mb-2"><i class="fa-solid fa-circle-info me-1"></i>Stock Info</div>
+                <div id="candleInfo" class="small text-muted">Load a stock to see its details, gains/losses and forecast.</div>
+              </div>
+            </div>
+            <div class="card mb-3">
+              <div class="card-body">
+                <div class="fw-bold mb-2"><i class="fa-solid fa-hand-pointer me-1"></i>Manual Actions</div>
+                <div class="input-group input-group-sm mb-2">
+                  <span class="input-group-text">Qty</span>
+                  <input type="number" id="candleQty" class="form-control" value="1" min="1" step="1">
+                </div>
+                <div class="d-grid gap-2">
+                  <button id="candleBuy"  class="btn btn-success btn-sm" disabled><i class="fa-solid fa-arrow-trend-up me-1"></i>Buy</button>
+                  <button id="candleSell" class="btn btn-danger btn-sm" disabled><i class="fa-solid fa-arrow-trend-down me-1"></i>Sell</button>
+                  <button id="candleHold" class="btn btn-outline-secondary btn-sm" disabled><i class="fa-solid fa-hand me-1"></i>Hold</button>
+                </div>
+                <div id="candleActionMsg" class="small mt-2"></div>
+                <div class="small-muted mt-1">Uses the same account the AI trades (paper unless live is licensed &amp; enabled).</div>
+              </div>
+            </div>
+            <div class="card">
+              <div class="card-body">
+                <div class="fw-bold mb-2"><i class="fa-solid fa-clock-rotate-left me-1"></i>History</div>
+                <div id="candleHistory" class="small text-muted">No trades yet for this stock.</div>
+              </div>
+            </div>
           </div>
-          <div class="col-md-3">
-            <label class="form-label">End Date</label>
-            <input class="form-control" type="date" id="backtestEnd">
-          </div>
-          <div class="col-md-2">
-            <label class="form-label">CSV File</label>
-            <input class="form-control" type="file" id="backtestCSV" accept=".csv">
-          </div>
-          <div class="col-12">
-            <button class="btn btn-primary" type="submit">
-              <i class="fa-solid fa-play me-1"></i>Run Backtest
-            </button>
-          </div>
-        </form>
-        <div id="backtestResult" class="mt-3"></div>
-        <canvas id="backtestChart" height="120" style="max-width:700px;"></canvas>
+        </div>
       </div>
 
     </div><!-- /tab-content -->
@@ -1229,6 +1267,7 @@
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/socket.io@4.7.2/client-dist/socket.io.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
   <script>
     // ═══════════════════════════════════════════
     //  CORE STATE
@@ -2762,9 +2801,9 @@
 
 
     // ═══════════════════════════════════════════
-    //  BACKTEST TAB LOGIC
+    //  BACKTEST TAB LOGIC (tab repurposed to Candlesticks; kept inert for reuse)
     // ═══════════════════════════════════════════
-    document.getElementById('backtestForm').addEventListener('submit', async function(e) {
+    document.getElementById('backtestForm')?.addEventListener('submit', async function(e) {
       e.preventDefault();
       const symbol = document.getElementById('backtestSymbol').value.trim().toUpperCase();
       const start  = document.getElementById('backtestStart').value;
@@ -3126,6 +3165,181 @@
     // Fallback REST pollers (WebSocket is primary; these catch up if WS stalls)
     setInterval(fetchWorkerStatus, 20000);
     setInterval(refreshQuotesNow, 8000);   // fast fallback refresh
+  </script>
+
+  <!-- ═══════════════ CANDLESTICKS PAGE ═══════════════ -->
+  <script>
+  (function(){
+    const TF = [
+      {id:'1m',label:'1m'},{id:'5m',label:'5m'},{id:'10m',label:'10m'},{id:'15m',label:'15m'},
+      {id:'30m',label:'30m'},{id:'1h',label:'1H'},{id:'day',label:'1D'},{id:'week',label:'1W'},
+      {id:'month',label:'1M'},{id:'1y',label:'1Y'},{id:'5y',label:'5Y'},{id:'live',label:'LIVE'}
+    ];
+    let chart=null, candleSeries=null, currentTF='day', currentSymbol=null, inited=false;
+
+    function buildTFButtons(){
+      const wrap=document.getElementById('candleTimeframes'); if(!wrap) return;
+      wrap.innerHTML = TF.map(t=>
+        `<button type="button" class="btn btn-outline-secondary${t.id===currentTF?' active':''}" data-tf="${t.id}">${t.label}</button>`
+      ).join('');
+      wrap.querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>{
+        currentTF=b.dataset.tf;
+        wrap.querySelectorAll('button').forEach(x=>x.classList.remove('active'));
+        b.classList.add('active');
+        if(currentSymbol) loadCandles(currentSymbol, currentTF);
+      }));
+    }
+
+    function initChart(){
+      if(inited) return;
+      const el=document.getElementById('candleChart');
+      if(!el || !window.LightweightCharts) return;
+      chart = LightweightCharts.createChart(el, {
+        layout:{ background:{color:'transparent'}, textColor:'#9aa4b2' },
+        grid:{ vertLines:{color:'rgba(255,255,255,0.05)'}, horzLines:{color:'rgba(255,255,255,0.05)'} },
+        timeScale:{ timeVisible:true, secondsVisible:false, borderColor:'rgba(255,255,255,0.1)' },
+        rightPriceScale:{ borderColor:'rgba(255,255,255,0.1)' },
+        crosshair:{ mode: LightweightCharts.CrosshairMode.Normal },
+        autoSize:true,
+      });
+      candleSeries = chart.addCandlestickSeries({
+        upColor:'#26a69a', downColor:'#ef5350', borderVisible:false,
+        wickUpColor:'#26a69a', wickDownColor:'#ef5350',
+      });
+      inited=true;
+    }
+
+    async function loadCandles(symbol, tf){
+      initChart(); if(!candleSeries) return;
+      const status=document.getElementById('candleStatus');
+      const title=document.getElementById('candleTitle');
+      title.textContent = symbol + ' · ' + tf;
+      status.textContent = 'Loading ' + symbol + ' (' + tf + ')…';
+      try{
+        const r = await fetch('/api/candles?symbol=' + encodeURIComponent(symbol) + '&timeframe=' + encodeURIComponent(tf));
+        const j = await r.json();
+        if (j.candles && j.candles.length){
+          candleSeries.setData(j.candles);
+          chart.timeScale().fitContent();
+          document.getElementById('candleChartEmpty')?.classList.add('d-none');
+          const last = j.candles[j.candles.length-1];
+          document.getElementById('candleLastPrice').textContent = '$' + Number(last.close).toFixed(2);
+          status.textContent = j.count + ' candles · ' + tf;
+        } else {
+          candleSeries.setData([]);
+          status.textContent = (j.message || 'No data available') + ' (verify Alpaca data keys).';
+        }
+      } catch(e){
+        status.textContent = 'Error loading candles: ' + e.message;
+      }
+    }
+
+    function fmtMoneyC(v){ return (v==null||isNaN(v)) ? '—' : '$'+Number(v).toFixed(2); }
+    function colorPct(v){ return v==null ? 'text-muted' : (v>=0 ? 'text-success' : 'text-danger'); }
+
+    async function loadStockInfo(symbol){
+      const box=document.getElementById('candleInfo');
+      box.innerHTML = '<span class="text-muted">Loading…</span>';
+      try{
+        const r=await fetch('/api/stockinfo?symbol='+encodeURIComponent(symbol));
+        const j=await r.json();
+        // header price + day change
+        const dc = j.change_percent;
+        document.getElementById('candleLastPrice').textContent = j.price!=null ? fmtMoneyC(j.price) : '';
+        const dcEl=document.getElementById('candleDayChange');
+        dcEl.textContent = (dc!=null ? (dc>=0?'+':'')+Number(dc).toFixed(2)+'%' : '');
+        dcEl.className = 'small ' + colorPct(dc);
+        // forecast text
+        const fc = j.forecast_direction ? (j.forecast_direction.toUpperCase()
+                    + (j.predicted_price!=null ? ' → '+fmtMoneyC(j.predicted_price) : '')
+                    + (j.forecast_phase && j.forecast_phase!=='unknown' ? ' ('+j.forecast_phase+')' : '')) : '—';
+        // position P/L (gains/losses on a holding)
+        let posHtml = '<div class="text-muted">Not currently held.</div>';
+        if(j.position){
+          const p=j.position, cls=colorPct(p.unrealized_plpc);
+          posHtml = `<div>Held: <b>${p.qty}</b> @ ${fmtMoneyC(p.avg_entry)}</div>
+                     <div>P/L: <b class="${cls}">${fmtMoneyC(p.unrealized_pl)} (${Number(p.unrealized_plpc||0).toFixed(2)}%)</b></div>`;
+        }
+        box.innerHTML =
+          `<div class="d-flex justify-content-between"><span>Price</span><b>${fmtMoneyC(j.price)}</b></div>
+           <div class="d-flex justify-content-between"><span>Day change</span><b class="${colorPct(dc)}">${dc!=null?(dc>=0?'+':'')+Number(dc).toFixed(2)+'%':'—'}</b></div>
+           <div class="d-flex justify-content-between"><span>RSI</span><b>${j.rsi!=null?Number(j.rsi).toFixed(1):'—'}</b></div>
+           <div class="d-flex justify-content-between"><span>AI signal</span><b>${j.verdict||'—'}</b></div>
+           <div class="d-flex justify-content-between"><span>Forecast</span><b>${fc}</b></div>
+           <hr class="my-2">
+           <div class="fw-bold mb-1">Your position</div>${posHtml}`;
+      }catch(e){
+        box.innerHTML = '<span class="text-danger">Info unavailable: '+e.message+'</span>';
+      }
+    }
+
+    async function loadHistory(symbol){
+      const box=document.getElementById('candleHistory');
+      box.innerHTML='<span class="text-muted">Loading…</span>';
+      try{
+        const r=await fetch('/api/orders?symbol='+encodeURIComponent(symbol));
+        const j=await r.json();
+        if(j.orders && j.orders.length){
+          box.innerHTML = j.orders.slice(0,12).map(o=>{
+            const cls = o.side==='buy' ? 'text-success' : 'text-danger';
+            const px = o.filled_avg_price!=null ? '@ $'+Number(o.filled_avg_price).toFixed(2) : '';
+            return `<div class="d-flex justify-content-between border-bottom py-1">
+                      <span><b class="${cls}">${(o.side||'').toUpperCase()}</b> ${o.qty||''} ${px}</span>
+                      <span class="text-muted" style="font-size:.75rem">${(o.submitted_at||'').replace('T',' ')}</span>
+                    </div>`;
+          }).join('');
+        } else {
+          box.innerHTML='<span class="text-muted">'+(j.message||'No trades yet for this stock.')+'</span>';
+        }
+      }catch(e){ box.innerHTML='<span class="text-danger">History unavailable.</span>'; }
+    }
+
+    async function candleOrder(side){
+      const msg=document.getElementById('candleActionMsg');
+      if(!currentSymbol){ return; }
+      if(side==='hold'){ msg.className='small text-muted'; msg.textContent='Holding '+currentSymbol+' — no order placed.'; return; }
+      const qty=parseFloat(document.getElementById('candleQty').value||'1')||1;
+      msg.className='small text-muted'; msg.textContent=(side==='buy'?'Buying':'Selling')+' '+qty+' '+currentSymbol+'…';
+      try{
+        const r=await fetch('/api/order',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({symbol:currentSymbol, qty:qty, side:side, type:'market', tif:'day'})});
+        const j=await r.json();
+        if(j.status==='ok' || j.status==='success'){
+          msg.className='small text-success'; msg.textContent=(side==='buy'?'Bought':'Sold')+' '+qty+' '+currentSymbol+'.';
+          setTimeout(()=>{ loadStockInfo(currentSymbol); loadHistory(currentSymbol); }, 1200);
+        } else {
+          msg.className='small text-danger'; msg.textContent=j.message||'Order failed.';
+        }
+      }catch(e){ msg.className='small text-danger'; msg.textContent='Order error: '+e.message; }
+    }
+
+    document.getElementById('candleBuy') ?.addEventListener('click',()=>candleOrder('buy'));
+    document.getElementById('candleSell')?.addEventListener('click',()=>candleOrder('sell'));
+    document.getElementById('candleHold')?.addEventListener('click',()=>candleOrder('hold'));
+
+    document.getElementById('candleSearchForm')?.addEventListener('submit', function(e){
+      e.preventDefault();
+      const sym=(document.getElementById('candleSymbol').value||'').trim().toUpperCase();
+      if(!sym) return;
+      currentSymbol=sym;
+      const badge=document.getElementById('candleLoadedBadge');
+      badge.textContent=sym; badge.classList.remove('d-none');
+      ['candleBuy','candleSell','candleHold'].forEach(id=>{const b=document.getElementById(id); if(b) b.disabled=false;});
+      loadCandles(sym, currentTF);
+      loadStockInfo(sym);
+      loadHistory(sym);
+    });
+
+    document.getElementById('candleFit')?.addEventListener('click',()=>{ if(chart) chart.timeScale().fitContent(); });
+
+    // The chart needs a visible, sized container — (re)fit when the tab is shown.
+    document.querySelector('[data-bs-target="#tabCandles"]')?.addEventListener('shown.bs.tab', ()=>{
+      initChart(); if(chart) chart.timeScale().fitContent();
+    });
+
+    buildTFButtons();
+    window.__candles = { get chart(){return chart;}, get series(){return candleSeries;} }; // test hook
+  })();
   </script>
 </body>
 </html>

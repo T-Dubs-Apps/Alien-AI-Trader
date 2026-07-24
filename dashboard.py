@@ -2850,6 +2850,154 @@ def api_quotes():
     return jsonify(out), 200
 
 
+@app.route("/api/candles", methods=["GET"])
+def api_candles():
+    """OHLC candles for the Candlesticks page — one symbol, selectable timeframe.
+    Read-only market data (no orders). Fails gracefully so the chart can show a
+    message instead of breaking. Same account/feed the rest of the app uses."""
+    from alpaca_trade_api.rest import TimeFrame, TimeFrameUnit
+    symbol = (request.args.get("symbol", "") or "").strip().upper()
+    tf_key = (request.args.get("timeframe", "day") or "day").strip().lower()
+    if not symbol:
+        return jsonify({"status": "error", "message": "symbol required", "candles": []}), 400
+
+    Minute, Hour, Month = TimeFrameUnit.Minute, TimeFrameUnit.Hour, TimeFrameUnit.Month
+    # tf_key -> (alpaca TimeFrame, days_back, limit, is_intraday)
+    TF = {
+        "1m":   (TimeFrame(1, Minute),  2,    500, True),
+        "5m":   (TimeFrame(5, Minute),  10,   600, True),
+        "10m":  (TimeFrame(10, Minute), 20,   600, True),
+        "15m":  (TimeFrame(15, Minute), 30,   600, True),
+        "30m":  (TimeFrame(30, Minute), 60,   600, True),
+        "1h":   (TimeFrame(1, Hour),    180,  700, True),
+        "day":  (TimeFrame.Day,         500,  400, False),
+        "week": (TimeFrame.Week,        2600, 400, False),
+        "month":(TimeFrame(1, Month),   5000, 240, False),
+        "1y":   (TimeFrame.Day,         400,  400, False),
+        "5y":   (TimeFrame.Week,        2000, 400, False),
+        "live": (TimeFrame(1, Minute),  1,    120, True),
+    }
+    tf, days_back, limit, intraday = TF.get(tf_key, TF["day"])
+
+    client = _active_alpaca()
+    if not client:
+        return jsonify({"status": "error", "candles": [],
+                        "message": "Market data client not configured (set Alpaca keys)."}), 200
+
+    start = (datetime.now(timezone.utc) - timedelta(days=days_back)).strftime("%Y-%m-%d")
+    candles: List[Dict[str, Any]] = []
+    err = None
+    feeds = [ALPACA_DATA_FEED] + (["iex"] if ALPACA_DATA_FEED != "iex" else [])
+    for feed in feeds:
+        try:
+            try:
+                bars = client.get_bars(symbol, tf, start=start, limit=limit, feed=feed)
+            except TypeError:
+                bars = client.get_bars(symbol, tf, start=start, limit=limit)
+            for b in bars:
+                t = b.t
+                tval = int(t.timestamp()) if intraday else t.strftime("%Y-%m-%d")
+                candles.append({"time": tval, "open": float(b.o), "high": float(b.h),
+                                "low": float(b.l), "close": float(b.c)})
+            if candles:
+                break
+        except Exception as e:
+            err = str(e)[:200]
+            continue
+
+    # Lightweight Charts requires unique, ascending times.
+    dedup = {c["time"]: c for c in candles}
+    candles = [dedup[k] for k in sorted(dedup.keys())]
+
+    return jsonify({
+        "status": "ok" if candles else "empty",
+        "symbol": symbol, "timeframe": tf_key, "count": len(candles),
+        "candles": candles,
+        "message": None if candles else (err or "No bars returned for this symbol/timeframe."),
+    }), 200
+
+
+@app.route("/api/stockinfo", methods=["GET"])
+def api_stockinfo():
+    """On-demand info for the Candlesticks page's loaded stock: price, day
+    change (gains/losses), AI forecast, and the account's position P/L if held.
+    Computed on demand because the loaded stock is removed from the AI scan."""
+    symbol = (request.args.get("symbol", "") or "").strip().upper()
+    if not symbol:
+        return jsonify({"status": "error", "message": "symbol required"}), 400
+
+    q = {}
+    try:
+        q = _fetch_quotes_uncached([symbol]).get(symbol, {}) or {}
+    except Exception:
+        q = {}
+    info: Dict[str, Any] = {
+        "status": "ok", "symbol": symbol, "name": q.get("name"),
+        "price": q.get("price"), "change": q.get("change"),
+        "change_percent": q.get("change_percent"),
+        "rsi": None, "verdict": None,
+        "forecast_direction": None, "forecast_phase": None, "predicted_price": None,
+        "position": None,
+    }
+
+    # AI forecast / indicators from the engine (if it's running) for this symbol.
+    eng = _engine
+    if eng is not None and q.get("price"):
+        try:
+            sig = eng._get_signal(symbol, float(q["price"]))
+            info["rsi"] = sig.get("rsi")
+            info["verdict"] = sig.get("verdict")
+            info["forecast_direction"] = sig.get("forecast_direction")
+            info["forecast_phase"] = sig.get("forecast_phase")
+            info["predicted_price"] = sig.get("predicted_price")
+        except Exception:
+            pass
+
+    # The account's actual position P/L, if it holds this symbol.
+    try:
+        client = _active_alpaca()
+        if client:
+            pos = client.get_position(symbol)
+            info["position"] = {
+                "qty": _safe_float(getattr(pos, "qty", None)),
+                "avg_entry": _safe_float(getattr(pos, "avg_entry_price", None)),
+                "market_value": _safe_float(getattr(pos, "market_value", None)),
+                "unrealized_pl": _safe_float(getattr(pos, "unrealized_pl", None)),
+                "unrealized_plpc": (_safe_float(getattr(pos, "unrealized_plpc", None)) or 0) * 100,
+            }
+    except Exception:
+        info["position"] = None   # no position (or lookup unavailable)
+
+    return jsonify(info), 200
+
+
+@app.route("/api/orders", methods=["GET"])
+def api_orders():
+    """Recent orders for the Candlesticks history panel (optionally one symbol).
+    Read-only — lists the account's own order history."""
+    symbol = (request.args.get("symbol", "") or "").strip().upper()
+    client = _active_alpaca()
+    if not client:
+        return jsonify({"status": "error", "orders": [], "message": "Market data client not configured."}), 200
+    orders: List[Dict[str, Any]] = []
+    try:
+        kw: Dict[str, Any] = {"status": "all", "limit": 50, "direction": "desc"}
+        if symbol:
+            kw["symbols"] = [symbol]
+        for o in client.list_orders(**kw):
+            orders.append({
+                "symbol": getattr(o, "symbol", None),
+                "side": getattr(o, "side", None),
+                "qty": _safe_float(getattr(o, "qty", None)),
+                "filled_avg_price": _safe_float(getattr(o, "filled_avg_price", None)),
+                "status": getattr(o, "status", None),
+                "submitted_at": str(getattr(o, "submitted_at", "") or "")[:19],
+            })
+    except Exception as e:
+        return jsonify({"status": "error", "orders": [], "message": str(e)[:160]}), 200
+    return jsonify({"status": "ok", "count": len(orders), "orders": orders}), 200
+
+
 @app.route("/api/quotes/diag", methods=["GET"])
 def api_quotes_diag():
     """Diagnostic quote probe for support. No secrets included."""
