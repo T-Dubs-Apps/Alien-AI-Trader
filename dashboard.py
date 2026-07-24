@@ -2917,6 +2917,60 @@ def api_candles():
     }), 200
 
 
+@app.route("/api/stockinfo", methods=["GET"])
+def api_stockinfo():
+    """On-demand info for the Candlesticks page's loaded stock: price, day
+    change (gains/losses), AI forecast, and the account's position P/L if held.
+    Computed on demand because the loaded stock is removed from the AI scan."""
+    symbol = (request.args.get("symbol", "") or "").strip().upper()
+    if not symbol:
+        return jsonify({"status": "error", "message": "symbol required"}), 400
+
+    q = {}
+    try:
+        q = _fetch_quotes_uncached([symbol]).get(symbol, {}) or {}
+    except Exception:
+        q = {}
+    info: Dict[str, Any] = {
+        "status": "ok", "symbol": symbol, "name": q.get("name"),
+        "price": q.get("price"), "change": q.get("change"),
+        "change_percent": q.get("change_percent"),
+        "rsi": None, "verdict": None,
+        "forecast_direction": None, "forecast_phase": None, "predicted_price": None,
+        "position": None,
+    }
+
+    # AI forecast / indicators from the engine (if it's running) for this symbol.
+    eng = _engine
+    if eng is not None and q.get("price"):
+        try:
+            sig = eng._get_signal(symbol, float(q["price"]))
+            info["rsi"] = sig.get("rsi")
+            info["verdict"] = sig.get("verdict")
+            info["forecast_direction"] = sig.get("forecast_direction")
+            info["forecast_phase"] = sig.get("forecast_phase")
+            info["predicted_price"] = sig.get("predicted_price")
+        except Exception:
+            pass
+
+    # The account's actual position P/L, if it holds this symbol.
+    try:
+        client = _active_alpaca()
+        if client:
+            pos = client.get_position(symbol)
+            info["position"] = {
+                "qty": _safe_float(getattr(pos, "qty", None)),
+                "avg_entry": _safe_float(getattr(pos, "avg_entry_price", None)),
+                "market_value": _safe_float(getattr(pos, "market_value", None)),
+                "unrealized_pl": _safe_float(getattr(pos, "unrealized_pl", None)),
+                "unrealized_plpc": (_safe_float(getattr(pos, "unrealized_plpc", None)) or 0) * 100,
+            }
+    except Exception:
+        info["position"] = None   # no position (or lookup unavailable)
+
+    return jsonify(info), 200
+
+
 @app.route("/api/quotes/diag", methods=["GET"])
 def api_quotes_diag():
     """Diagnostic quote probe for support. No secrets included."""

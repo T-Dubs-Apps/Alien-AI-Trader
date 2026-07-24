@@ -1238,12 +1238,17 @@
             <div class="card mb-3">
               <div class="card-body">
                 <div class="fw-bold mb-2"><i class="fa-solid fa-hand-pointer me-1"></i>Manual Actions</div>
+                <div class="input-group input-group-sm mb-2">
+                  <span class="input-group-text">Qty</span>
+                  <input type="number" id="candleQty" class="form-control" value="1" min="1" step="1">
+                </div>
                 <div class="d-grid gap-2">
                   <button id="candleBuy"  class="btn btn-success btn-sm" disabled><i class="fa-solid fa-arrow-trend-up me-1"></i>Buy</button>
                   <button id="candleSell" class="btn btn-danger btn-sm" disabled><i class="fa-solid fa-arrow-trend-down me-1"></i>Sell</button>
                   <button id="candleHold" class="btn btn-outline-secondary btn-sm" disabled><i class="fa-solid fa-hand me-1"></i>Hold</button>
                 </div>
-                <div class="small-muted mt-2">Uses the same account the AI trades (paper unless live is licensed & enabled).</div>
+                <div id="candleActionMsg" class="small mt-2"></div>
+                <div class="small-muted mt-1">Uses the same account the AI trades (paper unless live is licensed &amp; enabled).</div>
               </div>
             </div>
             <div class="card">
@@ -3229,6 +3234,68 @@
       }
     }
 
+    function fmtMoneyC(v){ return (v==null||isNaN(v)) ? '—' : '$'+Number(v).toFixed(2); }
+    function colorPct(v){ return v==null ? 'text-muted' : (v>=0 ? 'text-success' : 'text-danger'); }
+
+    async function loadStockInfo(symbol){
+      const box=document.getElementById('candleInfo');
+      box.innerHTML = '<span class="text-muted">Loading…</span>';
+      try{
+        const r=await fetch('/api/stockinfo?symbol='+encodeURIComponent(symbol));
+        const j=await r.json();
+        // header price + day change
+        const dc = j.change_percent;
+        document.getElementById('candleLastPrice').textContent = j.price!=null ? fmtMoneyC(j.price) : '';
+        const dcEl=document.getElementById('candleDayChange');
+        dcEl.textContent = (dc!=null ? (dc>=0?'+':'')+Number(dc).toFixed(2)+'%' : '');
+        dcEl.className = 'small ' + colorPct(dc);
+        // forecast text
+        const fc = j.forecast_direction ? (j.forecast_direction.toUpperCase()
+                    + (j.predicted_price!=null ? ' → '+fmtMoneyC(j.predicted_price) : '')
+                    + (j.forecast_phase && j.forecast_phase!=='unknown' ? ' ('+j.forecast_phase+')' : '')) : '—';
+        // position P/L (gains/losses on a holding)
+        let posHtml = '<div class="text-muted">Not currently held.</div>';
+        if(j.position){
+          const p=j.position, cls=colorPct(p.unrealized_plpc);
+          posHtml = `<div>Held: <b>${p.qty}</b> @ ${fmtMoneyC(p.avg_entry)}</div>
+                     <div>P/L: <b class="${cls}">${fmtMoneyC(p.unrealized_pl)} (${Number(p.unrealized_plpc||0).toFixed(2)}%)</b></div>`;
+        }
+        box.innerHTML =
+          `<div class="d-flex justify-content-between"><span>Price</span><b>${fmtMoneyC(j.price)}</b></div>
+           <div class="d-flex justify-content-between"><span>Day change</span><b class="${colorPct(dc)}">${dc!=null?(dc>=0?'+':'')+Number(dc).toFixed(2)+'%':'—'}</b></div>
+           <div class="d-flex justify-content-between"><span>RSI</span><b>${j.rsi!=null?Number(j.rsi).toFixed(1):'—'}</b></div>
+           <div class="d-flex justify-content-between"><span>AI signal</span><b>${j.verdict||'—'}</b></div>
+           <div class="d-flex justify-content-between"><span>Forecast</span><b>${fc}</b></div>
+           <hr class="my-2">
+           <div class="fw-bold mb-1">Your position</div>${posHtml}`;
+      }catch(e){
+        box.innerHTML = '<span class="text-danger">Info unavailable: '+e.message+'</span>';
+      }
+    }
+
+    async function candleOrder(side){
+      const msg=document.getElementById('candleActionMsg');
+      if(!currentSymbol){ return; }
+      if(side==='hold'){ msg.className='small text-muted'; msg.textContent='Holding '+currentSymbol+' — no order placed.'; return; }
+      const qty=parseFloat(document.getElementById('candleQty').value||'1')||1;
+      msg.className='small text-muted'; msg.textContent=(side==='buy'?'Buying':'Selling')+' '+qty+' '+currentSymbol+'…';
+      try{
+        const r=await fetch('/api/order',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({symbol:currentSymbol, qty:qty, side:side, type:'market', tif:'day'})});
+        const j=await r.json();
+        if(j.status==='ok' || j.status==='success'){
+          msg.className='small text-success'; msg.textContent=(side==='buy'?'Bought':'Sold')+' '+qty+' '+currentSymbol+'.';
+          setTimeout(()=>loadStockInfo(currentSymbol), 1200);
+        } else {
+          msg.className='small text-danger'; msg.textContent=j.message||'Order failed.';
+        }
+      }catch(e){ msg.className='small text-danger'; msg.textContent='Order error: '+e.message; }
+    }
+
+    document.getElementById('candleBuy') ?.addEventListener('click',()=>candleOrder('buy'));
+    document.getElementById('candleSell')?.addEventListener('click',()=>candleOrder('sell'));
+    document.getElementById('candleHold')?.addEventListener('click',()=>candleOrder('hold'));
+
     document.getElementById('candleSearchForm')?.addEventListener('submit', function(e){
       e.preventDefault();
       const sym=(document.getElementById('candleSymbol').value||'').trim().toUpperCase();
@@ -3238,6 +3305,7 @@
       badge.textContent=sym; badge.classList.remove('d-none');
       ['candleBuy','candleSell','candleHold'].forEach(id=>{const b=document.getElementById(id); if(b) b.disabled=false;});
       loadCandles(sym, currentTF);
+      loadStockInfo(sym);
     });
 
     document.getElementById('candleFit')?.addEventListener('click',()=>{ if(chart) chart.timeScale().fitContent(); });
