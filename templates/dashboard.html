@@ -1251,6 +1251,31 @@
                 <div class="small-muted mt-1">Uses the same account the AI trades (paper unless live is licensed &amp; enabled).</div>
               </div>
             </div>
+            <div class="card mb-3">
+              <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                  <div class="fw-bold"><i class="fa-solid fa-ruler-horizontal me-1"></i>Trigger Lines</div>
+                  <div class="form-check form-switch mb-0">
+                    <input class="form-check-input" type="checkbox" id="candleDrawMode">
+                    <label class="form-check-label small" for="candleDrawMode">Draw/Move</label>
+                  </div>
+                </div>
+                <div class="d-flex flex-wrap gap-1 mb-2">
+                  <button class="btn btn-outline-success btn-sm py-0 px-2" data-line="buy" disabled>+ Buy</button>
+                  <button class="btn btn-outline-danger btn-sm py-0 px-2" data-line="sell" disabled>+ Sell</button>
+                  <button class="btn btn-outline-warning btn-sm py-0 px-2" data-line="stop" disabled>+ Stop</button>
+                  <button class="btn btn-outline-secondary btn-sm py-0 px-2" data-line="hold" disabled>+ Hold</button>
+                  <button class="btn btn-outline-info btn-sm py-0 px-2" data-line="start" disabled>+ Start</button>
+                </div>
+                <div id="candleLines" class="small text-muted">Load a stock, then add lines. Drag them on the chart in Draw/Move mode.</div>
+                <hr class="my-2">
+                <div class="form-check form-switch">
+                  <input class="form-check-input" type="checkbox" id="candleArm">
+                  <label class="form-check-label small fw-bold text-warning" for="candleArm">Arm auto-execution</label>
+                </div>
+                <div class="small-muted">When armed, crossing a line fires its action automatically (paper unless live is licensed). Off by default.</div>
+              </div>
+            </div>
             <div class="card">
               <div class="card-body">
                 <div class="fw-bold mb-2"><i class="fa-solid fa-clock-rotate-left me-1"></i>History</div>
@@ -3336,6 +3361,8 @@
       const badge=document.getElementById('candleLoadedBadge');
       badge.textContent=sym; badge.classList.remove('d-none');
       ['candleBuy','candleSell','candleHold'].forEach(id=>{const b=document.getElementById(id); if(b) b.disabled=false;});
+      document.querySelectorAll('[data-line]').forEach(b=>b.disabled=false);
+      clearLines();   // trigger lines are per-symbol
       applyTimeframe(sym, currentTF);
       loadStockInfo(sym);
       loadHistory(sym);
@@ -3350,8 +3377,84 @@
     // Stop the Live poller when leaving the Candlesticks tab (save requests).
     document.querySelector('[data-bs-target="#tabCandles"]')?.addEventListener('hide.bs.tab', stopLive);
 
+    // ── Trigger lines (Phase 2 UI; auto-execution wired later, off by default) ──
+    const LINE_STYLE = {
+      buy:  {color:'#26a69a', title:'BUY'},
+      sell: {color:'#ef5350', title:'SELL'},
+      stop: {color:'#ff9800', title:'STOP'},
+      hold: {color:'#9e9e9e', title:'HOLD'},
+      start:{color:'#42a5f5', title:'START'},
+    };
+    let lines=[], lineSeq=1, drawMode=false, dragging=null;
+
+    function defaultLinePrice(){
+      try{ const d=candleSeries.data(); if(d && d.length) return d[d.length-1].close; }catch(e){}
+      const t=document.getElementById('candleLastPrice').textContent.replace(/[^0-9.]/g,'');
+      return t ? parseFloat(t) : 100;
+    }
+    function renderLines(){
+      const box=document.getElementById('candleLines');
+      if(!lines.length){ box.innerHTML='<span class="text-muted">No lines. Add one above, then drag on the chart in Draw/Move mode.</span>'; return; }
+      box.innerHTML = lines.map(l=>{
+        const s=LINE_STYLE[l.type];
+        return `<div class="d-flex justify-content-between align-items-center py-1 border-bottom">
+          <span><span class="badge" style="background:${s.color}">${s.title}</span> <b id="lp-${l.id}">$${Number(l.price).toFixed(2)}</b></span>
+          <button class="btn btn-sm btn-outline-danger py-0 px-1" data-del="${l.id}"><i class="fa-solid fa-xmark"></i></button>
+        </div>`;
+      }).join('');
+      box.querySelectorAll('[data-del]').forEach(b=>b.addEventListener('click',()=>removeLine(+b.dataset.del)));
+    }
+    function addLine(type){
+      if(!candleSeries) return;
+      const price=defaultLinePrice(), s=LINE_STYLE[type];
+      const pl=candleSeries.createPriceLine({price, color:s.color, lineWidth:2, lineStyle:0, axisLabelVisible:true, title:s.title});
+      lines.push({id:lineSeq++, type, price, pl});
+      renderLines();
+    }
+    function removeLine(id){
+      const i=lines.findIndex(l=>l.id===id); if(i<0) return;
+      try{ candleSeries.removePriceLine(lines[i].pl); }catch(e){}
+      lines.splice(i,1); renderLines();
+    }
+    function clearLines(){ lines.forEach(l=>{try{candleSeries.removePriceLine(l.pl);}catch(e){}}); lines=[]; renderLines(); }
+
+    document.getElementById('candleDrawMode')?.addEventListener('change',function(){
+      drawMode=this.checked;
+      if(chart) chart.applyOptions({handleScroll:!drawMode, handleScale:!drawMode});
+      const c=document.getElementById('candleChart'); if(c) c.style.cursor = drawMode ? 'ns-resize' : '';
+    });
+    document.querySelectorAll('[data-line]').forEach(b=>b.addEventListener('click',()=>addLine(b.dataset.line)));
+
+    (function(){
+      const el=document.getElementById('candleChart'); if(!el) return;
+      function nearestLine(y){
+        if(!candleSeries) return null;
+        const price=candleSeries.coordinateToPrice(y); if(price==null) return null;
+        const p8=candleSeries.coordinateToPrice(y+8);
+        const thresh=Math.abs((p8!=null?price-p8:price*0.01))*1.5 || price*0.01;
+        let best=null,bd=Infinity;
+        lines.forEach(l=>{const d=Math.abs(l.price-price); if(d<thresh && d<bd){bd=d;best=l;}});
+        return best;
+      }
+      el.addEventListener('mousedown',e=>{
+        if(!drawMode) return;
+        const rect=el.getBoundingClientRect();
+        dragging=nearestLine(e.clientY-rect.top);
+      });
+      window.addEventListener('mousemove',e=>{
+        if(!dragging||!drawMode) return;
+        const rect=el.getBoundingClientRect();
+        const price=candleSeries.coordinateToPrice(e.clientY-rect.top);
+        if(price==null) return;
+        dragging.price=price; dragging.pl.applyOptions({price});
+        const lp=document.getElementById('lp-'+dragging.id); if(lp) lp.textContent='$'+Number(price).toFixed(2);
+      });
+      window.addEventListener('mouseup',()=>{ dragging=null; });
+    })();
+
     buildTFButtons();
-    window.__candles = { get chart(){return chart;}, get series(){return candleSeries;} }; // test hook
+    window.__candles = { get chart(){return chart;}, get series(){return candleSeries;},
+                         get lines(){return lines;}, addLine, clearLines }; // test hook
   })();
   </script>
 </body>
