@@ -194,6 +194,12 @@ class TradingEngine:
         self.rsi_sell_min   = float(os.environ.get("RSI_SELL_MIN",   "70.0"))  # RSI floor to SELL
         # Minimum SMA20/SMA50 spread % before a golden cross is "real enough"
         self.sma_spread_min = float(os.environ.get("SMA_SPREAD_MIN", "0.1"))   # 0.1% spread required
+        # Max % a BUY price may sit ABOVE the longer-run VWAP before it's judged
+        # "chasing". The old rule required price within 2% of a ~100-day VWAP,
+        # which a stock in a golden-cross uptrend essentially never satisfies —
+        # it blocked ~4 of every 5 otherwise-valid entries (and even blocked
+        # cheap entries below VWAP). 15% keeps a real anti-chase guard.
+        self.vwap_max_premium_pct = float(os.environ.get("VWAP_MAX_PREMIUM_PCT", "15.0"))
 
         # Optional momentum-chase mode for explosive movers that would fail the
         # dip-buy filter stack (e.g., large same-day breakouts).
@@ -1324,9 +1330,16 @@ class TradingEngine:
         min_indicator_bars = 50
 
         def _df_from_alpha_daily() -> Optional[pd.DataFrame]:
-            """Fallback historical bars from Alpha Vantage daily endpoint."""
+            """Fallback historical bars from Alpha Vantage daily endpoint.
+
+            Uses the FREE `get_daily` (TIME_SERIES_DAILY) endpoint. The previous
+            code called `get_daily_adjusted`, which Alpha Vantage moved behind a
+            paid plan — so on a free key it always returned a "premium endpoint"
+            error, leaving the engine with no bars (and therefore no signals/buys)
+            whenever Alpaca's data feed was unavailable.
+            """
             try:
-                data, _ = self.ts.get_daily_adjusted(symbol=symbol, outputsize="compact")
+                data, _ = self.ts.get_daily(symbol=symbol, outputsize="compact")
                 ts = data.get("Time Series (Daily)", {}) if isinstance(data, dict) else {}
                 if not ts:
                     return None
@@ -1337,7 +1350,8 @@ class TradingEngine:
                         "h": float(bar.get("2. high", 0) or 0),
                         "l": float(bar.get("3. low", 0) or 0),
                         "c": float(bar.get("4. close", 0) or 0),
-                        "v": float(bar.get("6. volume", 0) or 0),
+                        # get_daily uses "5. volume"; get_daily_adjusted used "6. volume".
+                        "v": float(bar.get("5. volume", bar.get("6. volume", 0)) or 0),
                     })
                 if not rows:
                     return None
@@ -1532,7 +1546,10 @@ class TradingEngine:
             death_cross  = sma20 < sma50
             price_above_lower = price > boll_lower
             price_below_upper = price < boll_upper
-            price_near_vwap = abs(price - vwap) / vwap <= 0.02
+            # Anti-chase guard: only reject when price is stretched FAR above the
+            # longer-run VWAP. Buying at or below VWAP (a discount) is always fine.
+            price_not_overextended = price <= vwap * (1.0 + self.vwap_max_premium_pct / 100.0)
+            signal["vwap_premium_pct"] = round((price - vwap) / vwap * 100.0, 3)
             forecast_up = signal.get("forecast_direction") == "up"
             signal["forecast_confirmed"] = bool(forecast_up)
 
@@ -1545,7 +1562,7 @@ class TradingEngine:
                 rsi < self.rsi_buy_max and
                 macd > macd_signal and
                 price_above_lower and price_below_upper and
-                price_near_vwap
+                price_not_overextended
             ):
                 signal["verdict"] = "BUY"
                 signal["spread_pct"] = round(spread_pct, 3)
