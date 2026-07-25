@@ -1,0 +1,351 @@
+# ═══════════════════════════════════════════════════════════════════════════
+#  render.owner.yaml — OWNER DEPLOYMENT ONLY (Troy / T-Dub's Apps)
+# ═══════════════════════════════════════════════════════════════════════════
+#  This is the FULL configuration for the main deployment: the license server,
+#  Stripe store, admin console, update campaigns and owner grants.
+#
+#  It is NOT the file new customers deploy. Customers use render.yaml, which is
+#  deliberately minimal so Render's Blueprint form doesn't demand 73 values a
+#  brand-new user hasn't got yet.
+#
+#  DO NOT point a customer at this file. Every `sync: false` here is an owner
+#  secret that must only ever exist in the owner's own Render account.
+#
+#  To use: Render Blueprint → point at this filename for the owner service.
+# ═══════════════════════════════════════════════════════════════════════════
+
+services:
+  # -- Web Dashboard -------------------------------------------------------
+  - type: web
+    name: alien-ai-trader-dashboard
+    runtime: python
+    autoDeploy: true
+    healthCheckPath: /health
+    buildCommand: pip install -r requirements.txt
+    # gevent worker class is REQUIRED for Socket.IO WebSocket support.
+    # gthread does not support WebSockets and will break live dashboard updates.
+    startCommand: gunicorn --worker-class gevent --workers 1 --bind 0.0.0.0:$PORT dashboard:app
+    envVars:
+      # ── ROLE: this is THE owner deployment ────────────────────────────────
+      # Enables the license authority, Stripe store + webhooks, admin console,
+      # owner grants and update campaigns. Customer deployments omit this (the
+      # code defaults to 'client'), so they serve the trading app only and have
+      # no ability to issue or sell licenses.
+      - key: APP_ROLE
+        value: owner
+      # Pin a stable supported runtime; avoid automatic jumps to new Python
+      # majors that can break broker/data SDK compatibility.
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: FLASK_SECRET
+        generateValue: true
+      # -- Dashboard security -----------------------------------------------
+      # Set your OWN password here to lock your trading dashboard. When set, the
+      # dashboard and all control endpoints (orders, settings, live keys, on/off)
+      # require logging in — a stranger with your URL can't touch it. Leave unset
+      # and the dashboard is OPEN to anyone with the link (a boot warning fires).
+      # Strongly recommended: pick a strong password unique to your deployment.
+      - key: DASHBOARD_PASSWORD
+        sync: false
+      # Trusted owner emails for new-device owner login (comma-separated).
+      - key: TRUSTED_OWNER_EMAILS
+        sync: false
+      # Owner-only lockdown token used by in-app Freeze button.
+      - key: OWNER_FREEZE_TOKEN
+        sync: false
+      # -- Subscription persistence (survive updates / restarts / crashes) --
+      # LICENSE_EMAIL: the email you purchased with. On every boot the app
+      #   re-validates it and auto-restores your license from Stripe — so an
+      #   update never makes you re-activate. Set this and paid stays paid.
+      - key: LICENSE_EMAIL
+        sync: false
+      # LICENSE_GRANT: optional signed comp/owner grant blob (owner_grant.py).
+      #   Honored directly by signature — comp licenses survive with no server.
+      - key: LICENSE_GRANT
+        sync: false
+      # DATA_DIR: where state lives (license, settings, live keys, grants DB).
+      #   Leave UNSET for free tier (works fine; the app self-recovers on boot).
+      #   Set to /var/data AND attach the persistent disk below to preserve
+      #   settings + in-app keys verbatim ("return to the exact state"). See the
+      #   commented `disk:` block near the bottom of this file.
+      - key: DATA_DIR
+        sync: false
+      # -- API Keys (set manually in Render dashboard) ----------------------
+      # PAPER account keys (practice money). Required.
+      - key: ALPACA_KEY
+        sync: false
+      - key: ALPACA_SECRET
+        sync: false
+      - key: ALPACA_BASE_URL
+        sync: false
+      # Market data feed for Alpaca quote/bar calls.
+      # Use IEX by default so data keeps flowing on plans without SIP access.
+      - key: ALPACA_DATA_FEED
+        value: iex
+        sync: false
+      # LIVE account keys (real money). Optional — set these to enable the
+      # in-app Paper→Live toggle. Live still only activates with a valid license.
+      - key: ALPACA_LIVE_KEY
+        sync: false
+      - key: ALPACA_LIVE_SECRET
+        sync: false
+      - key: ALPHA_VANTAGE_KEY
+        sync: false
+      # Pushbullet token (either variable name works; code checks both).
+      - key: PUSHBULLET_API_KEY
+        sync: false
+      - key: PUSHBULLET_TOKEN
+        sync: false
+      - key: PUSHOVER_TOKEN
+        sync: false
+      - key: PUSHOVER_USER
+        sync: false
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_FROM_NUMBER
+        sync: false
+      - key: TWILIO_TO_NUMBER
+        sync: false
+      # -- Email delivery (buyer activation emails) -------------------------
+      # Gmail SMTP — set both in the Render dashboard (App Password, not your
+      # normal Gmail password; requires 2-Step Verification on the account).
+      - key: GMAIL_ADDRESS
+        sync: false
+      - key: GMAIL_APP_PASSWORD
+        sync: false
+      # -- Trading mode -----------------------------------------------------
+      # Boot mode only. The real control is the in-app Paper↔Live toggle, which
+      # is license-gated. Keep this 'paper' so every deployment starts safe;
+      # buyers flip to live inside the app after activating their license.
+      - key: TRADING_MODE
+        value: paper
+      - key: LIVE_TRADING_ENABLED
+        value: "false"
+      - key: ENGINE_MODE
+        value: AI
+      # -- Stock list -------------------------------------------------------
+      - key: STOCK_LIST
+        value: AAPL,GOOG,TSLA,MSFT,AMZN
+        sync: false
+      # -- Scan & execution -------------------------------------------------
+      - key: POLL_SECONDS
+        value: "10"         # aggressive default: faster scans for higher turnover
+        sync: false
+      - key: SCAN_WORKERS
+        value: "10"
+        sync: false
+      - key: TRAILING_STOP_PCT
+        value: "2.2"
+        sync: false
+      - key: LOSS_THRESHOLD
+        value: "4.0"
+        sync: false
+      - key: MAX_POSITIONS
+        value: "8"
+        sync: false
+      - key: SCAN_ALL_MARKET
+        value: "true"       # active default: include full-market momentum candidates
+        sync: false
+      - key: MARKET_SCAN_CANDIDATES
+        value: "40"
+        sync: false
+      - key: MARKET_MIN_PRICE
+        value: "0.50"       # include sub-$1 names while avoiding extreme microcap noise
+        sync: false
+      - key: MARKET_MAX_PRICE
+        value: "5000"
+        sync: false
+      - key: MAX_TRADES_PER_HOUR
+        value: "20"
+        sync: false
+      - key: MIN_HOLD_SECONDS
+        value: "900"        # 15m minimum hold (emergency stops still fire immediately)
+        sync: false
+      - key: ORDER_QTY
+        value: "1"
+        sync: false
+      # -- Capital & position sizing ----------------------------------------
+      # 0 = AUTO: size every trade to the account's real balance (recommended).
+      # Any >0 value pins the pool to that many dollars instead.
+      - key: INITIAL_CAPITAL
+        value: "0"
+        sync: false
+      - key: RISK_PER_TRADE_PCT
+        value: "2.0"
+        sync: false
+      - key: MAX_POSITION_PCT
+        value: "20.0"
+        sync: false
+      - key: MIN_POSITIONS
+        value: "5"
+        sync: false
+      - key: RISK_PER_TRADE_USD
+        value: "0"
+        sync: false
+      # Hard invariants: never exceed these protection caps.
+      - key: MAX_GROSS_EXPOSURE_PCT
+        value: "85.0"
+        sync: false
+      - key: MIN_CASH_RESERVE_PCT
+        value: "10.0"
+        sync: false
+      # Forecast policy: enforce forecast confirmation only when risk profile
+      # is high (capital-intensive, volatile, or low-liquidity symbols).
+      - key: FORECAST_REQUIRED_CAPITAL_PCT
+        value: "12.0"
+        sync: false
+      - key: FORECAST_REQUIRED_VOLATILITY
+        value: "0.03"
+        sync: false
+      - key: FORECAST_REQUIRED_MIN_VOLUME
+        value: "1000000"
+        sync: false
+      # -- Signal filters ---------------------------------------------------
+      - key: RSI_BUY_MAX
+        value: "60.0"
+        sync: false
+      - key: RSI_SELL_MIN
+        value: "62.0"
+        sync: false
+      - key: SMA_SPREAD_MIN
+        value: "0.0"
+        sync: false
+      # Rocket breakout mode: optional momentum-chase entries for explosive movers.
+      - key: ROCKET_BREAKOUT_ENABLED
+        value: "true"
+        sync: false
+      - key: ROCKET_BREAKOUT_MIN_DAY_CHANGE_PCT
+        value: "12.0"
+        sync: false
+      - key: ROCKET_BREAKOUT_VOLUME_MULT
+        value: "1.5"
+        sync: false
+      - key: ROCKET_BREAKOUT_MIN_AVG_VOLUME
+        value: "150000"
+        sync: false
+      - key: ROCKET_BREAKOUT_MAX_ABOVE_SMA20_PCT
+        value: "35.0"
+        sync: false
+      - key: ROCKET_BREAKOUT_LOOKBACK_BARS
+        value: "20"
+        sync: false
+      # -- Portfolio ladder -------------------------------------------------
+      - key: LADDER_INTERVAL
+        value: "120"        # rescore every 2 min — keeps AV calls well within free limit
+        sync: false
+      - key: MIN_SCORE_TO_BUY
+        value: "35.0"
+        sync: false
+      - key: TOP_TIER_PCT
+        value: "0.40"
+        sync: false
+      - key: BOTTOM_TIER_PCT
+        value: "0.20"
+        sync: false
+      # -- Alerts & heartbeat -----------------------------------------------
+      - key: AFTERHOURS_DROP_PCT
+        value: "3"
+        sync: false
+      - key: ROCKET_ALERT_PCT
+        value: "5"
+        sync: false
+      - key: DASHBOARD_BASE_URL
+        sync: false
+      # Strict by default: set explicit origins (comma-separated) like
+      # https://your-dashboard.example.com. Leaving this unset disables
+      # cross-origin API access (same-origin only).
+      - key: ALLOWED_ORIGINS
+        sync: false
+      # Optional explicit admin token for sensitive ops endpoints
+      # (/api/audit/verify, /api/anomaly/status) when not using dashboard session.
+      - key: ADMIN_API_TOKEN
+        sync: false
+      # Fail-closed startup in production if baseline security env vars are missing.
+      - key: STRICT_PRODUCTION_GUARDS
+        value: "true"
+      # Lightweight disaster recovery snapshots of local state.
+      - key: BACKUP_ENABLED
+        value: "true"
+      - key: BACKUP_INTERVAL_SECONDS
+        value: "900"
+      - key: BACKUP_RETENTION
+        value: "96"
+      # Signed tamper-evident audit stream.
+      - key: AUDIT_SIGNING_KEY
+        sync: false
+      # Automatic attack/failure containment.
+      - key: AUTO_FREEZE_ON_ANOMALY
+        value: "true"
+      # Optional encrypted offsite replication to passive service.
+      - key: BACKUP_REPLICA_URL
+        sync: false
+      - key: BACKUP_REPLICA_TOKEN
+        sync: false
+      - key: BACKUP_ENCRYPTION_KEY
+        sync: false
+      # Token expected by passive node receive endpoint.
+      - key: REPLICA_RECEIVE_TOKEN
+        sync: false
+      # -- Integrated engine (formerly worker-only settings) ----------------
+      - key: RUN_SECONDS
+        value: "21540"
+        sync: false
+      - key: HEARTBEAT_EVERY_SECONDS
+        value: "10"
+        sync: false
+      # -- Market hours only: engine pauses outside 9:30-16:00 ET Mon-Fri ------
+      - key: MARKET_HOURS_ONLY
+        value: "true"
+        sync: false
+
+    # ── OPTIONAL: full-state persistence (the "Both" / recommended setup) ─────
+    # Uncomment this disk AND set DATA_DIR=/var/data above to make EVERYTHING
+    # (license cache, settings, in-app live keys, grants DB) survive verbatim so
+    # the app returns to the exact state it was in before any update/restart/
+    # crash. Requires a PAID Render instance (free web services can't mount a
+    # disk). All Render charges are the account owner's responsibility.
+    #
+    # Without the disk the app STILL self-recovers your subscription on boot via
+    # LICENSE_EMAIL (free tier, nothing to pay) — only runtime-changed settings
+    # revert to their env-var defaults.
+    #
+    # disk:
+    #   name: aat-data
+    #   mountPath: /var/data
+    #   sizeGB: 1
+
+# Built by Troy Walker of T-Dub's Apps -- 2026-04-28
+# 2026-06: Collapsed to single-service architecture. Worker service suspended on Render.
+#          Engine runs inside dashboard process. Saves ~$7/mo.
+
+# ── OPTIONAL PASSIVE FAILOVER NODE (uncomment to enable) ─────────────────────
+# This service receives encrypted backup replicas and keeps a warm standby app
+# process. Engine autostart is disabled so it stays passive until promoted.
+# To fail over, point your DNS/URL to this service and set DISABLE_ENGINE_AUTOSTART=0.
+#
+# - type: web
+#   name: alien-ai-trader-passive
+#   runtime: python
+#   autoDeploy: true
+#   healthCheckPath: /health
+#   buildCommand: pip install -r requirements.txt
+#   startCommand: gunicorn --worker-class gevent --workers 1 --bind 0.0.0.0:$PORT dashboard:app
+#   envVars:
+#     - key: PYTHON_VERSION
+#       value: 3.11.9
+#     - key: DISABLE_ENGINE_AUTOSTART
+#       value: "1"
+#     - key: BACKUP_ENABLED
+#       value: "false"
+#     - key: REPLICA_RECEIVE_TOKEN
+#       sync: false
+#     - key: DATA_DIR
+#       value: /var/data
+#     - key: FLASK_SECRET
+#       generateValue: true
+#   # disk:
+#   #   name: aat-passive-data
+#   #   mountPath: /var/data
+#   #   sizeGB: 1

@@ -190,9 +190,34 @@ socketio = SocketIO(
     ping_interval=25,
 )
 
-# License routes (server side — only does anything on the central deployment
-# that holds the Stripe keys; inert on user machines)
-register_license_routes(app)
+# ── APP ROLE: owner deployment vs customer deployment ────────────────────────
+# The same codebase runs both the author's central deployment and every
+# customer's own copy. They must NOT expose the same surface:
+#
+#   owner  — the single deployment the author runs. Serves the license
+#            authority, Stripe store + webhooks, admin console, owner grants
+#            and update campaigns. Set APP_ROLE=owner in that Render service.
+#
+#   client — everybody else's deployment (the DEFAULT). Trading app only. It
+#            validates its license by calling OUT to the owner's server; it
+#            never issues, grants or sells anything, so it has no authority to
+#            abuse and nothing for an attacker to reach.
+#
+# Defaults to 'client' and any unrecognized value falls back to 'client', so a
+# deployment can only ever become an authority by explicit, deliberate opt-in.
+APP_ROLE = (os.environ.get("APP_ROLE", "client") or "client").strip().lower()
+if APP_ROLE not in ("client", "owner"):
+    print(f"[ROLE] Unrecognized APP_ROLE={APP_ROLE!r} — falling back to 'client'.")
+    APP_ROLE = "client"
+IS_OWNER_DEPLOYMENT = (APP_ROLE == "owner")
+
+if IS_OWNER_DEPLOYMENT:
+    # License authority, Stripe store/webhooks, admin + update campaign routes.
+    register_license_routes(app)
+    print("[ROLE] APP_ROLE=owner — license server, store and admin routes ENABLED.")
+else:
+    print("[ROLE] APP_ROLE=client — trading app only; "
+          "license/store/admin routes are NOT served by this deployment.")
 
 # ── License client (every installed copy) ────────────────────────────────
 # Paper trading is free forever. Live trading requires an active license,
@@ -265,10 +290,30 @@ def _dashboard_password_candidates() -> list[str]:
 
 
 # Normalize once at boot so every endpoint reads one canonical value.
+_DEFAULT_LICENSE_SERVER = "https://alien-ai-trader-dashboard.onrender.com"
+# Hosts a CLIENT build is allowed to treat as the licensing authority. This is
+# deliberately code-controlled, not env-controlled: an env var a user can edit
+# is not a trust boundary. If the authority ever moves, this constant moves
+# with the shipped code.
+_TRUSTED_LICENSE_SERVERS = (_DEFAULT_LICENSE_SERVER,)
+
 LICENSE_SERVER_URL = _clean_env_value(
     "LICENSE_SERVER_URL",
-    "https://alien-ai-trader-dashboard.onrender.com",
+    _DEFAULT_LICENSE_SERVER,
 ).rstrip("/")
+
+# A client build validates live-trading entitlement against the owner's server.
+# Repointing it at a self-run server is how a deployment would license itself,
+# so on a client the override is IGNORED rather than honored.
+#
+# Ignoring beats refusing to boot: a bad value must never take a running trading
+# app offline. Worst case the setting is disregarded and a loud line is logged.
+# Owner deployments are exempt — that build IS the authority.
+if not IS_OWNER_DEPLOYMENT and LICENSE_SERVER_URL not in _TRUSTED_LICENSE_SERVERS:
+    print(f"[LICENSE] IGNORING LICENSE_SERVER_URL={LICENSE_SERVER_URL!r} — a client "
+          f"deployment may only validate against {_DEFAULT_LICENSE_SERVER}. "
+          "Falling back to the trusted server; nothing else is affected.")
+    LICENSE_SERVER_URL = _DEFAULT_LICENSE_SERVER
 
 # ── Dashboard access gate (per-deployment password) ───────────────────────────
 # Each owner sets their OWN password on their OWN Render service via the
@@ -1169,11 +1214,43 @@ _alpaca = None        # paper client (always paper endpoint)
 _alpaca_live = None   # live client, built lazily only when live is used
 _alpha = None
 
-if ALPACA_KEY and ALPACA_SECRET:
-    _alpaca = REST(ALPACA_KEY, ALPACA_SECRET, base_url="https://paper-api.alpaca.markets")
 
-if ALPHA_VANTAGE_KEY:
-    _alpha = TimeSeries(key=ALPHA_VANTAGE_KEY, output_format="json")
+# Clients are built LAZILY from key_store (in-app entry first, env var second)
+# rather than once at import from env vars only. That is what lets a brand new
+# Render deployment boot with zero keys, show the setup panel, and start trading
+# the moment the user saves their keys — with no redeploy and no restart.
+def _get_paper_client():
+    global _alpaca
+    if _alpaca is None:
+        pk, ps = key_store.get_paper_keys()
+        if pk and ps:
+            _alpaca = REST(pk, ps, base_url="https://paper-api.alpaca.markets")
+    return _alpaca
+
+
+def _get_alpha():
+    global _alpha
+    if _alpha is None:
+        ak = key_store.get_alpha_key()
+        if ak:
+            _alpha = TimeSeries(key=ak, output_format="json")
+    return _alpha
+
+
+def _reset_provider_clients() -> None:
+    """Drop cached clients so the next call rebuilds them with the new keys."""
+    global _alpaca, _alpaca_live, _alpha
+    _alpaca = None
+    _alpaca_live = None
+    _alpha = None
+
+
+# Rebuild automatically whenever keys are saved in-app.
+key_store.on_change(_reset_provider_clients)
+
+# Build once now so an env-var deployment behaves exactly as before.
+_get_paper_client()
+_get_alpha()
 
 
 def _live_keys_present() -> bool:
@@ -1213,7 +1290,7 @@ def _active_alpaca():
     """The Alpaca client matching the current effective mode."""
     if _effective_mode() == "live":
         return _get_live_client()
-    return _alpaca
+    return _get_paper_client()
 
 
 # ── Tier / plan gating (Trader vs Pro) ────────────────────────────────────────
@@ -1391,7 +1468,10 @@ def dashboard_logout():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return jsonify({"status": "ok"}), 200
+    # role is reported so a deployment's identity can be confirmed from outside
+    # without logging in. It reveals nothing sensitive — only which surface is
+    # served, which is already observable from the routes themselves.
+    return jsonify({"status": "ok", "role": APP_ROLE}), 200
 
 
 @app.route("/api/audit/verify", methods=["GET"])
@@ -1941,7 +2021,12 @@ def get_your_trader():
     here, downloads the installer (free), and can subscribe to unlock live
     trading or deploy their own private cloud copy. No trading dashboard is
     exposed here — that lives at '/'. Prices load live from the price map so a
-    price change (e.g. annual $199) shows here with no redeploy."""
+    price change (e.g. annual $199) shows here with no redeploy.
+
+    Owner deployment only. A customer's own copy is not a storefront — it
+    forwards to the real one so a shared link still lands somewhere useful."""
+    if not IS_OWNER_DEPLOYMENT:
+        return redirect(f"{LICENSE_SERVER_URL}/get")
     html = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Get Alien AI Trader</title>
@@ -2073,7 +2158,12 @@ def admin_panel(token):
     """Owner console, reachable ONLY at /admin/<ADMIN_PATH>, where ADMIN_PATH is a
     secret slug you set as a Render env var. Every other path returns 404, so the
     console is not publicly discoverable. Actions still require LICENSE_SECRET
-    (which is brute-force locked in license_api). Unset ADMIN_PATH = page disabled."""
+    (which is brute-force locked in license_api). Unset ADMIN_PATH = page disabled.
+
+    Owner deployment only — a customer's copy has no admin surface at all, and
+    the endpoints this console drives are not even registered there."""
+    if not IS_OWNER_DEPLOYMENT:
+        return "Not Found", 404
     if not ADMIN_PATH or token != ADMIN_PATH:
         return "Not Found", 404
     html = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
@@ -2536,9 +2626,10 @@ def _quote_diag_symbol(sym: str, active_client, feed_order: List[str]) -> Dict[s
                         "error": str(e)[:180],
                     })
 
-    if price is None and _alpha:
+    _av = _get_alpha()
+    if price is None and _av:
         try:
-            data, _ = _alpha.get_quote_endpoint(sym)
+            data, _ = _av.get_quote_endpoint(sym)
             p = _safe_float(data.get("05. price"))
             ch = _safe_float(data.get("09. change"))
             chp = _safe_float(str(data.get("10. change percent", "")).replace("%", "").strip())
@@ -2646,9 +2737,10 @@ def _bars_diag_symbol(sym: str, active_client, feed_order: List[str], limit: int
         if _alpaca_bars("1Hour"):
             return diag
 
-    if _alpha:
+    _av = _get_alpha()
+    if _av:
         try:
-            data, _ = _alpha.get_daily_adjusted(symbol=sym, outputsize="compact")
+            data, _ = _av.get_daily_adjusted(symbol=sym, outputsize="compact")
             ts = data.get("Time Series (Daily)", {}) if isinstance(data, dict) else {}
             closes = []
             for _, row in ts.items():
@@ -2778,12 +2870,12 @@ def _fetch_quotes_uncached(symbols: List[str]) -> Dict[str, Any]:
             except Exception:
                 pass
 
-    if _alpha:
+    if _get_alpha():
         for sym in symbols:
             if sym in out and out[sym].get("price") is not None:
                 continue
             try:
-                data, _ = _alpha.get_quote_endpoint(sym)
+                data, _ = _av.get_quote_endpoint(sym)
                 price = _safe_float(data.get("05. price"))
                 change = _safe_float(data.get("09. change"))
                 change_pct_raw = data.get("10. change percent", "")
@@ -3025,7 +3117,7 @@ def api_quotes_diag():
         "effective_mode": _effective_mode(),
         "requested_mode": _requested_mode(),
         "alpaca_client_present": bool(active_client),
-        "alpha_vantage_present": bool(_alpha),
+        "alpha_vantage_present": bool(_get_alpha()),
         "configured_feed": ALPACA_DATA_FEED,
         "feed_probe_order": feed_order,
         "symbols": symbols,
@@ -3062,7 +3154,7 @@ def api_bars_diag():
         "effective_mode": _effective_mode(),
         "requested_mode": _requested_mode(),
         "alpaca_client_present": bool(active_client),
-        "alpha_vantage_present": bool(_alpha),
+        "alpha_vantage_present": bool(_get_alpha()),
         "configured_feed": ALPACA_DATA_FEED,
         "feed_probe_order": feed_order,
         "symbols": symbols,
@@ -3576,6 +3668,94 @@ def save_live_keys():
                     "message": "Live keys saved and verified."}), 200
 
 
+@app.route("/api/keys/status", methods=["GET"])
+def keys_status():
+    """Which credentials are configured, and where they came from.
+
+    Presence only — key VALUES are never returned to the browser."""
+    return jsonify(key_store.status()), 200
+
+
+@app.route("/api/keys/setup", methods=["POST"])
+def keys_setup():
+    """Save the starter credentials (paper Alpaca + Alpha Vantage) in-app.
+
+    This is what lets the Render Blueprint ask for nothing up front: deploy
+    first, get your keys second, paste them here, and the engine starts on the
+    next supervisor cycle — no redeploy, no env vars, no Render dashboard.
+    """
+    blocked = _owner_freeze_block("API key setup")
+    if blocked:
+        return blocked
+    limited = _rate_limited("keys_setup", limit=10, window_seconds=300)
+    if limited:
+        return limited
+
+    payload = request.json or {}
+    k  = (payload.get("alpaca_key") or "").strip()
+    s  = (payload.get("alpaca_secret") or "").strip()
+    av = (payload.get("alpha_vantage_key") or "").strip()
+
+    if not k and not s and not av:
+        return jsonify({"status": "error",
+                        "message": "Enter at least one key to save."}), 400
+    if (k and not s) or (s and not k):
+        return jsonify({"status": "error",
+                        "message": "Alpaca needs BOTH the key and the secret."}), 400
+
+    # Verify against the PAPER endpoint before saving, so a typo is caught here
+    # instead of showing up later as a silent engine failure.
+    account_status = ""
+    if k and s:
+        try:
+            acct = REST(k, s, base_url="https://paper-api.alpaca.markets").get_account()
+            account_status = str(getattr(acct, "status", "") or "")
+        except Exception as e:
+            return jsonify({
+                "status": "error",
+                "message": ("Alpaca rejected those PAPER keys. Make sure you copied them "
+                            f"from your Paper Trading account, not a live one. ({e})"),
+            }), 400
+
+    saved = key_store.save({
+        "ALPACA_KEY": k or None,
+        "ALPACA_SECRET": s or None,
+        "ALPHA_VANTAGE_KEY": av or None,
+    })
+    if not saved:
+        return jsonify({"status": "error",
+                        "message": "Could not write the key store. Check DATA_DIR permissions."}), 500
+
+    _record_anomaly("settings_update")
+    _audit_event(
+        "setup_keys_saved",
+        {
+            "alpaca_key_suffix": k[-4:] if len(k) >= 4 else ("set" if k else ""),
+            "alpha_vantage_supplied": bool(av),
+            "account_status": account_status,
+        },
+        actor="dashboard_user",
+    )
+
+    st = key_store.status()
+    if st["needs_setup"]:
+        missing = []
+        if not st["paper_keys"]:
+            missing.append("Alpaca paper key + secret")
+        if not st["alpha_key"]:
+            missing.append("Alpha Vantage key")
+        msg = "Saved. Still needed: " + " and ".join(missing) + "."
+    else:
+        msg = ("Saved and verified. The engine starts on its next check "
+               "(within about 30 seconds) — no redeploy needed.")
+
+    note = {"time": int(time.time()), "level": "info", "symbol": "", "message": msg}
+    _notifications.append(note)
+    socketio.emit("notification", note)
+    return jsonify({"status": "ok", "account_status": account_status,
+                    "keys": st, "message": msg}), 200
+
+
 # -----------------------------------------------
 # WebSocket events
 # -----------------------------------------------
@@ -3632,6 +3812,7 @@ def _internal_heartbeat(eng: TradingEngine, lad: PortfolioLadderScanner) -> None
     """Update _worker_status and _ladder_top20 in-process (no HTTP round-trip)."""
     global _worker_status, _ladder_top20
     account_snapshot: Dict[str, Any] = {"available": False}
+    broker_snapshot: Dict[str, Any] = {"available": False, "buys": [], "fill_count": 0}
     next_account_refresh = 0.0
 
     def _to_float(v: Any, default: float = 0.0) -> float:
@@ -3641,6 +3822,62 @@ def _internal_heartbeat(eng: TradingEngine, lad: PortfolioLadderScanner) -> None
             return float(v)
         except Exception:
             return default
+
+    def _order_epoch(order: Any) -> int:
+        """Best-effort fill timestamp -> epoch seconds (alpaca returns tz-aware
+        datetimes or pandas Timestamps depending on SDK version)."""
+        for attr in ("filled_at", "submitted_at", "created_at"):
+            raw = getattr(order, attr, None)
+            if raw is None:
+                continue
+            try:
+                return int(raw.timestamp())
+            except Exception:
+                try:
+                    return int(datetime.fromisoformat(str(raw).replace("Z", "+00:00")).timestamp())
+                except Exception:
+                    continue
+        return int(time.time())
+
+    def _fetch_broker_fills() -> Dict[str, Any]:
+        """Today's filled orders straight from the broker.
+
+        This is account truth, so it counts manual orders and survives engine
+        session restarts — unlike eng.trade_log / eng._buy_decision_log, which
+        only ever see trades the engine itself placed.
+        """
+        day_start = datetime.now(timezone.utc).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        ).isoformat()
+        orders = eng.api.list_orders(
+            status="closed", limit=200, direction="desc", after=day_start
+        )
+        buys: List[Dict[str, Any]] = []
+        fill_count = 0
+        for o in orders or []:
+            if str(getattr(o, "status", "") or "").lower() != "filled":
+                continue
+            fill_count += 1
+            if str(getattr(o, "side", "") or "").lower() != "buy":
+                continue
+            qty = _to_float(getattr(o, "filled_qty", None) or getattr(o, "qty", None))
+            px = _to_float(getattr(o, "filled_avg_price", None))
+            cost = qty * px
+            buys.append({
+                "time": _order_epoch(o),
+                "symbol": str(getattr(o, "symbol", "") or "").upper(),
+                "verdict": "BUY_EXECUTED",
+                "reason": "filled_at_broker",
+                "detail": f"qty={qty:g} avg=${px:,.2f} cost=${cost:,.2f}",
+                "price": round(px, 4) if px else None,
+            })
+        buys.sort(key=lambda b: b["time"])
+        return {
+            "available": True,
+            "buys": buys[-10:],
+            "fill_count": fill_count,
+            "fetched_at": int(time.time()),
+        }
 
     while getattr(eng, "running", True):
         try:
@@ -3662,6 +3899,7 @@ def _internal_heartbeat(eng: TradingEngine, lad: PortfolioLadderScanner) -> None
                         "available": True,
                         "status": str(getattr(acct, "status", "") or ""),
                         "equity": round(_to_float(getattr(acct, "equity", 0)), 2),
+                        "last_equity": round(_to_float(getattr(acct, "last_equity", 0)), 2),
                         "cash": round(_to_float(getattr(acct, "cash", 0)), 2),
                         "buying_power": round(_to_float(getattr(acct, "buying_power", 0)), 2),
                         "portfolio_value": round(_to_float(getattr(acct, "portfolio_value", 0)), 2),
@@ -3675,23 +3913,56 @@ def _internal_heartbeat(eng: TradingEngine, lad: PortfolioLadderScanner) -> None
                     account_snapshot["error"] = str(acct_err)[:200]
                     account_snapshot["fetched_at"] = int(now_ts)
 
+                try:
+                    broker_snapshot = _fetch_broker_fills()
+                except Exception as fills_err:
+                    if not broker_snapshot.get("available"):
+                        broker_snapshot = {"available": False, "buys": [], "fill_count": 0}
+                    broker_snapshot["error"] = str(fills_err)[:200]
+                    broker_snapshot["fetched_at"] = int(now_ts)
+
             top20: list = []
             try:
                 top20 = lad.get_ladder()[:20]
             except Exception:
                 pass
 
+            # Engine-internal figures only cover trades the engine placed itself
+            # and reset every session restart. Prefer broker truth when we have it
+            # so manual orders count and the numbers survive restarts.
+            engine_profit = round(eng.profit, 4)
+            day_pnl = engine_profit
+            day_pnl_source = "engine_session"
+            if account_snapshot.get("available"):
+                equity = _to_float(account_snapshot.get("equity"))
+                last_equity = _to_float(account_snapshot.get("last_equity"))
+                if equity and last_equity:
+                    day_pnl = round(equity - last_equity, 2)
+                    day_pnl_source = "broker_day"
+
+            trade_count = len(eng.trade_log)
+            trade_count_source = "engine_session"
+            if broker_snapshot.get("available"):
+                trade_count = int(broker_snapshot.get("fill_count") or 0)
+                trade_count_source = "broker_today"
+
             _worker_status.update({
                 "running":              eng.running,
                 "state":                "trading" if eng.running else "offline",
                 "mode":                 eng.trading_mode,
                 "stocks":               eng.stock_list,
-                "profit":               round(eng.profit, 4),
+                "profit":               engine_profit,
+                "day_pnl":              day_pnl,
+                "day_pnl_source":       day_pnl_source,
                 "positions":            positions,
                 "signals":              signals_snapshot,
                 "buy_decisions":        buy_decisions_snapshot,
+                "broker_buys":          broker_snapshot.get("buys", []),
+                "broker_available":     bool(broker_snapshot.get("available")),
                 "message":              "alive",
-                "trade_count":          len(eng.trade_log),
+                "trade_count":          trade_count,
+                "trade_count_source":   trade_count_source,
+                "capital_hwm":          round(getattr(eng, "_capital_hwm", 0.0), 2),
                 "account":              account_snapshot,
                 "capital": {
                     "initial":   round(eng.initial_capital, 2),
@@ -3951,9 +4222,15 @@ def _engine_preflight_error() -> str:
     if integrity_error:
         return integrity_error
 
-    alpha_present = bool(key_store.get_alpha_key())
-    if not alpha_present:
-        return "Missing ALPHA_VANTAGE_KEY. Open SETUP API KEYS and save it."
+    # A brand-new deployment legitimately has no keys yet. Say so plainly and
+    # point at the in-app setup panel instead of naming env vars the user was
+    # never asked to set.
+    if not key_store.has_paper_keys():
+        return ("Setup needed: add your Alpaca paper API key and secret in "
+                "Settings → Setup to start trading.")
+    if not key_store.has_alpha_key():
+        return ("Setup needed: add your Alpha Vantage API key in "
+                "Settings → Setup to start trading.")
 
     # Preflight the account that the engine will actually use right now.
     if _effective_mode() == "live":
@@ -3974,8 +4251,9 @@ def _engine_preflight_error() -> str:
             )
         return ""
 
+    pk, ps = key_store.get_paper_keys()
     paper_ok, paper_detail = _alpaca_auth_probe(
-        ALPACA_KEY, ALPACA_SECRET, "https://paper-api.alpaca.markets"
+        pk, ps, "https://paper-api.alpaca.markets"
     )
     if not paper_ok:
         if _is_transient_broker_error(paper_detail):

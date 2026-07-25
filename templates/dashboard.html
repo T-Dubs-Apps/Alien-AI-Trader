@@ -76,6 +76,29 @@
       50%      { box-shadow: 0 0 12px 4px rgba(34,197,94,.25); }
     }
 
+    /* ── ATTENTION INDICATOR ──
+       Translucent amber dot that pulses on a tab (and on the setting inside it)
+       until the user deals with whatever needs them — first-run setup today,
+       pending updates next. Keeps pulsing; it never auto-dismisses. */
+    .attention-dot {
+      display: inline-block;
+      width: 9px; height: 9px;
+      margin-left: 6px;
+      border-radius: 50%;
+      background: rgba(245,158,11,.75);
+      box-shadow: 0 0 6px 2px rgba(245,158,11,.4);
+      animation: pulse-attention 1.6s ease-in-out infinite;
+      vertical-align: middle;
+      pointer-events: none;
+    }
+    @keyframes pulse-attention {
+      0%,100% { opacity: .45; box-shadow: 0 0 5px 1px rgba(245,158,11,.35); transform: scale(.9); }
+      50%     { opacity: 1;   box-shadow: 0 0 13px 5px rgba(245,158,11,.5);  transform: scale(1.15); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .attention-dot { animation: none; opacity: .9; }
+    }
+
     /* ── TABS ── */
     .nav-tabs {
       border-bottom: 1px solid var(--border);
@@ -311,28 +334,28 @@
         <div class="stat-card">
           <div class="stat-label">Gainers Today</div>
           <div class="stat-value up" id="statGainers">—</div>
-          <div class="stat-sub">In your list</div>
+          <div class="stat-sub" id="statGainersSub">In your list</div>
         </div>
       </div>
       <div class="col-6 col-md-3">
         <div class="stat-card">
           <div class="stat-label">Losers Today</div>
           <div class="stat-value down" id="statLosers">—</div>
-          <div class="stat-sub">In your list</div>
+          <div class="stat-sub" id="statLosersSub">In your list</div>
         </div>
       </div>
       <div class="col-6 col-md-3">
         <div class="stat-card">
-          <div class="stat-label">Engine P&amp;L</div>
+          <div class="stat-label">P&amp;L Today</div>
           <div class="stat-value" id="statPnL">—</div>
-          <div class="stat-sub">Session profit/loss</div>
+          <div class="stat-sub" id="statPnLSub">Account profit/loss</div>
         </div>
       </div>
       <div class="col-6 col-md-3">
         <div class="stat-card">
-          <div class="stat-label">Trades (Session)</div>
+          <div class="stat-label">Trades Today</div>
           <div class="stat-value" id="statTradeCount">—</div>
-          <div class="stat-sub">Buy + Sell orders</div>
+          <div class="stat-sub" id="statTradeCountSub">Filled buy + sell orders</div>
         </div>
       </div>
       <div class="col-6 col-md-3">
@@ -811,6 +834,62 @@
       <!-- ══ SETTINGS TAB ══ -->
       <div class="tab-pane fade" id="tabSettings">
         <div class="row g-4">
+
+          <!-- ══ SETUP — first run: add your own API keys ══ -->
+          <div class="col-12" id="setupCard" style="display:none;">
+            <div class="glass-card" style="border-color:#f59e0b;">
+              <div class="section-title" style="color:#f59e0b;">
+                <i class="fa-solid fa-wand-magic-sparkles me-1"></i>Setup — add your API keys
+              </div>
+              <div class="small-muted mb-3">
+                Your deployment is running. It needs your own free API keys before it can trade.
+                Keys are stored in <strong>your</strong> deployment only — they are never sent
+                anywhere else, and never shown back to the browser once saved.
+              </div>
+
+              <div class="row g-3">
+                <div class="col-md-6">
+                  <label class="form-label small mb-1">
+                    Alpaca <strong>PAPER</strong> API Key ID
+                    <a href="https://alpaca.markets" target="_blank" rel="noopener noreferrer"
+                       class="ms-1" style="font-size:.72rem;">get one free →</a>
+                  </label>
+                  <input id="setupAlpacaKey" class="form-control form-control-sm"
+                         autocomplete="off" spellcheck="false" placeholder="PK...">
+                </div>
+                <div class="col-md-6">
+                  <label class="form-label small mb-1">Alpaca <strong>PAPER</strong> Secret Key</label>
+                  <input id="setupAlpacaSecret" type="password" class="form-control form-control-sm"
+                         autocomplete="off" spellcheck="false" placeholder="Your paper secret">
+                </div>
+                <div class="col-md-6">
+                  <label class="form-label small mb-1">
+                    Alpha Vantage API Key
+                    <a href="https://www.alphavantage.co/support/#api-key" target="_blank"
+                       rel="noopener noreferrer" class="ms-1" style="font-size:.72rem;">get one free →</a>
+                  </label>
+                  <input id="setupAlphaKey" class="form-control form-control-sm"
+                         autocomplete="off" spellcheck="false" placeholder="Your Alpha Vantage key">
+                </div>
+                <div class="col-md-6 d-flex align-items-end">
+                  <button class="btn btn-warning btn-sm w-100" id="setupSaveBtn" style="color:#000;">
+                    <i class="fa-solid fa-floppy-disk me-1"></i>Save keys &amp; start trading
+                  </button>
+                </div>
+              </div>
+
+              <div id="setupResult" class="small mt-3"></div>
+
+              <div class="small-muted mt-3" style="font-size:.74rem;line-height:1.5;">
+                <i class="fa-solid fa-shield-halved me-1"></i>
+                Use your <strong>Paper Trading</strong> keys here — practice money, no real funds at
+                risk. This app always starts in paper mode. Real-money trading needs a paid license,
+                separate live keys, and you switching it on yourself.
+                <span id="setupKeySources" class="d-block mt-1"></span>
+              </div>
+            </div>
+          </div>
+
           <!-- Engine Status -->
           <div class="col-lg-6">
             <div class="glass-card">
@@ -1298,17 +1377,19 @@
     //  CORE STATE
     // ═══════════════════════════════════════════
     const LS_KEY = "alien_ai_trader_watchlist_v1";
+    const LS_REMOVED_KEY = "alien_ai_trader_watchlist_removed_v1";
     const openPrices  = {};   // symbol -> price at first load (open proxy)
     const lastPrices  = {};   // symbol -> price from last tick
     const priceHistory = {}; // symbol -> [last 20 prices] for sparkline
+    const quoteCache  = {};   // symbol -> last GOOD quote (survives a failed poll)
     const feedLines   = [];   // rolling feed log
     let pollTimer     = null;
     let notifFilter   = 'all';
     let unreadAlerts  = 0;
     let marketDataSeen = false;
-    const barsDiagBySymbol = {}; // symbol -> bars diag result from /api/bars/diag
-    const BARS_DIAG_TTL_MS = 30000;
-    let lastBarsDiagFetchMs = 0;
+    const barsDiagBySymbol = {}; // symbol -> last GOOD bars diag from /api/bars/diag
+    const BARS_DIAG_TTL_MS = 60000;
+    const BARS_DIAG_BATCH  = 5;   // symbols probed per cycle — each is a live Alpaca bars pull
     let engineTrackedSymbols = new Set();
     const DEFAULT_TRADE_HEALTH_THRESHOLD_MINUTES = 20;
     let tradeHealthThresholdMinutes = DEFAULT_TRADE_HEALTH_THRESHOLD_MINUTES;
@@ -1385,6 +1466,19 @@
     }
     function saveWatchlist(l) { localStorage.setItem(LS_KEY, JSON.stringify(l)); }
     function normalizeSymbol(s) { return String(s||"").trim().toUpperCase(); }
+
+    // Symbols you explicitly removed. Without this, the auto-add paths below
+    // (open positions on every heartbeat, trade notifications) put a removed
+    // symbol straight back within seconds and Remove looks broken.
+    function loadRemoved() {
+      try { const r = JSON.parse(localStorage.getItem(LS_REMOVED_KEY)); return new Set(Array.isArray(r) ? r : []); }
+      catch { return new Set(); }
+    }
+    function saveRemoved(set) {
+      try { localStorage.setItem(LS_REMOVED_KEY, JSON.stringify([...set])); } catch {}
+    }
+    function markRemoved(sym) { const s = loadRemoved(); s.add(normalizeSymbol(sym)); saveRemoved(s); }
+    function unmarkRemoved(sym) { const s = loadRemoved(); s.delete(normalizeSymbol(sym)); saveRemoved(s); }
     function isWatchlistSymbol(sym) {
       const s = normalizeSymbol(sym);
       if (!s) return false;
@@ -1423,10 +1517,12 @@
     }
     function upsertWatchlistSymbols(symbols) {
       const list = loadWatchlist();
+      const removed = loadRemoved();
       let changed = false;
       (symbols || []).forEach(raw => {
         const sym = normalizeSymbol(raw);
         if (!sym) return;
+        if (removed.has(sym)) return;   // you removed it on purpose — respect that
         if (!list.includes(sym)) {
           list.push(sym);
           changed = true;
@@ -1487,6 +1583,7 @@
       const feed = String(diag.feed || '').toUpperCase();
       const bars = Number(diag.bars || 0);
 
+      const probed = !!barsDiagBySymbol[sym];
       let klass = 'partial';
       let label = 'PRICE ONLY';
 
@@ -1496,6 +1593,10 @@
       } else if (provider === 'alpha_vantage') {
         klass = 'fallback';
         label = `BARS AV${tf ? ' ' + tf : ''}`;
+      } else if (!probed) {
+        // Not probed yet — don't claim "price only" before we've checked.
+        klass = 'partial';
+        label = 'CHECKING…';
       } else if (quote && quote.price == null) {
         klass = 'missing';
         label = 'NO MARKET DATA';
@@ -1564,17 +1665,28 @@
     function renderWatchlistCards(quotes) {
       const grid = document.getElementById('watchlistGrid');
       const list = loadWatchlist();
-      let gainers = 0, losers = 0;
+      let gainers = 0, losers = 0, flat = 0, unpriced = 0;
 
       document.getElementById('statWatchCount').textContent = list.length;
 
       if (!list.length) {
         grid.innerHTML = '<div class="small-muted py-4 text-center">Your watchlist is empty. Add a symbol above.</div>';
+        document.getElementById('statGainers').textContent = '0';
+        document.getElementById('statLosers').textContent  = '0';
         return;
       }
 
+      // Cache good quotes so one failed poll doesn't blank every card and reset
+      // the gainer/loser counts to zero.
       list.forEach(sym => {
-        const q = quotes[sym] || {};
+        const fresh = quotes[sym];
+        if (fresh && fresh.price != null) quoteCache[sym] = fresh;
+      });
+
+      list.forEach(sym => {
+        const q = (quotes[sym] && quotes[sym].price != null)
+                    ? quotes[sym]
+                    : (quoteCache[sym] || quotes[sym] || {});
         const price   = q.price;
         const change  = q.change;
         const pct     = q.change_percent;
@@ -1589,7 +1701,12 @@
         }
 
         const dayDir = (change != null) ? (change >= 0 ? 'up' : 'down') : 'flat';
-        if (change != null) { if (change >= 0) gainers++; else losers++; }
+        // Every symbol lands in exactly one bucket, so the counts always
+        // reconcile against the watchlist total.
+        if (change == null)      unpriced++;
+        else if (change > 0)     gainers++;
+        else if (change < 0)     losers++;
+        else                     flat++;
 
         const arrowIcon = tickDir === 'up' ? 'fa-arrow-up' : tickDir === 'down' ? 'fa-arrow-down' : 'fa-minus';
         const dayArrow  = dayDir  === 'up' ? '▲' : dayDir === 'down' ? '▼' : '—';
@@ -1670,6 +1787,16 @@
 
       document.getElementById('statGainers').textContent = gainers;
       document.getElementById('statLosers').textContent  = losers;
+
+      // Show the leftovers so the numbers visibly add up to the watchlist count.
+      const rest = [];
+      if (flat)     rest.push(`${flat} flat`);
+      if (unpriced) rest.push(`${unpriced} no data`);
+      const restTxt = rest.length ? ` · ${rest.join(', ')}` : '';
+      const gSub = document.getElementById('statGainersSub');
+      const lSub = document.getElementById('statLosersSub');
+      if (gSub) gSub.textContent = `of ${list.length} tracked${restTxt}`;
+      if (lSub) lSub.textContent = `of ${list.length} tracked${restTxt}`;
     }
 
     // ═══════════════════════════════════════════
@@ -1683,24 +1810,42 @@
 
     async function refreshBarsDiagIfNeeded(symbols) {
       const now = Date.now();
-      const hasAll = symbols.every(sym => !!barsDiagBySymbol[sym]);
-      if (hasAll && (now - lastBarsDiagFetchMs) < BARS_DIAG_TTL_MS) return;
 
-      const res = await fetch('/api/bars/diag?symbols=' + encodeURIComponent(symbols.join(',')));
+      // Per-symbol TTL. The old check refetched EVERY symbol on every 5s poll
+      // whenever one symbol was missing, and /api/bars/diag does a live 100-bar
+      // Alpaca pull per symbol — that self-inflicted rate limiting is what made
+      // the chips flicker.
+      const due = symbols.filter(sym => {
+        const e = barsDiagBySymbol[sym];
+        return !e || (now - (e.checkedAt || 0)) >= BARS_DIAG_TTL_MS;
+      }).slice(0, BARS_DIAG_BATCH);
+      if (!due.length) return;
+
+      const res = await fetch('/api/bars/diag?symbols=' + encodeURIComponent(due.join(',')));
       if (!res.ok) throw new Error('bars diag fetch failed');
       const payload = await res.json();
 
       (payload.results || []).forEach(item => {
         const sym = normalizeSymbol(item.symbol || '');
         if (!sym) return;
-        barsDiagBySymbol[sym] = {
-          provider: (item.result || {}).provider || null,
-          timeframe: (item.result || {}).timeframe || null,
-          feed: (item.result || {}).feed || null,
-          bars: (item.result || {}).bars || 0,
-        };
+        const r = item.result || {};
+        const stamp = Date.now();
+        if (r.provider) {
+          barsDiagBySymbol[sym] = {
+            provider: r.provider,
+            timeframe: r.timeframe || null,
+            feed: r.feed || null,
+            bars: r.bars || 0,
+            checkedAt: stamp,
+          };
+        } else if (barsDiagBySymbol[sym]) {
+          // Probe failed/throttled — keep the last known-good answer instead of
+          // wiping it to "PRICE ONLY", just retry on the next TTL.
+          barsDiagBySymbol[sym].checkedAt = stamp;
+        } else {
+          barsDiagBySymbol[sym] = { provider: null, checkedAt: stamp };
+        }
       });
-      lastBarsDiagFetchMs = Date.now();
     }
 
     async function refreshQuotesNow() {
@@ -1772,14 +1917,17 @@
       const sym = normalizeSymbol(document.getElementById('stockSearch').value);
       if (!sym) return;
       const list = loadWatchlist();
+      unmarkRemoved(sym);   // adding it back clears the "removed on purpose" flag
       if (!list.includes(sym)) { list.push(sym); saveWatchlist(list); }
       document.getElementById('stockSearch').value = '';
       refreshQuotesNow();
     }
     function removeSymbol(sym) {
       sym = normalizeSymbol(sym);
+      markRemoved(sym);
       saveWatchlist(loadWatchlist().filter(s => s !== sym));
       delete lastPrices[sym]; delete openPrices[sym]; delete priceHistory[sym];
+      delete quoteCache[sym]; delete barsDiagBySymbol[sym];
       if (sparkCharts[sym]) { sparkCharts[sym].destroy(); delete sparkCharts[sym]; }
       const card = document.getElementById('card-' + sym);
       if (card) card.remove();
@@ -2020,16 +2168,23 @@
       } catch {}
     }
 
-    function renderBuyDecisions(items) {
+    function renderBuyDecisions(items, brokerBuys, brokerAvailable) {
       const execBox = document.getElementById('buyExecutedList');
       const blockBox = document.getElementById('buyBlockedList');
       if (!execBox || !blockBox) return;
 
       const all = Array.isArray(items) ? items : [];
-      const executed = all
-        .filter(it => String(it?.verdict || '').toUpperCase() === 'BUY_EXECUTED')
-        .slice()
-        .reverse();
+      const fills = Array.isArray(brokerBuys) ? brokerBuys : [];
+
+      // The engine's decision log only ever sees buys the ENGINE placed, so a
+      // manual purchase never showed up here. Broker fills are account truth and
+      // already include the engine's own orders — prefer them when available.
+      const executed = (brokerAvailable && fills.length)
+        ? fills.slice().reverse()
+        : all
+            .filter(it => String(it?.verdict || '').toUpperCase() === 'BUY_EXECUTED')
+            .slice()
+            .reverse();
       const blocked = all
         .filter(it => {
           const v = String(it?.verdict || '').toUpperCase();
@@ -2057,7 +2212,9 @@
 
       execBox.innerHTML = executed.length
         ? toHtml(executed)
-        : '<div class="small-muted">No executed buys yet in the recent decision stream.</div>';
+        : (brokerAvailable
+            ? '<div class="small-muted">No buy orders filled on this account today.</div>'
+            : '<div class="small-muted">No executed buys yet in the recent decision stream.</div>');
       blockBox.innerHTML = blocked.length
         ? toHtml(blocked)
         : '<div class="small-muted">No blocked/error buy attempts in the recent decision stream.</div>';
@@ -2087,6 +2244,12 @@
           const ts = Number(d?.time || 0);
           if (ts > newestExec) newestExec = ts;
         }
+      }
+      // A manual buy is still a buy — count broker fills so the banner doesn't
+      // warn "no BUY_EXECUTED" while an order is sitting filled on the account.
+      for (const b of (Array.isArray(status?.broker_buys) ? status.broker_buys : [])) {
+        const ts = Number(b?.time || 0);
+        if (ts > newestExec) newestExec = ts;
       }
       if (newestExec > lastBuyExecutedTs) {
         lastBuyExecutedTs = newestExec;
@@ -2174,16 +2337,31 @@
         staleEl.textContent = d.message || '';
       }
 
-      if (d.profit != null) {
-        const v = +d.profit;
-        pnlEl.className = 'stat-value ' + (v >= 0 ? 'up' : 'down');
-        pnlEl.textContent = fmtMoney(v);
+      // P&L — prefer the broker's own day P&L (equity vs previous close). It
+      // includes manual orders and open-position moves, and it doesn't reset
+      // when the engine rotates sessions the way d.profit does.
+      const pnlVal = (d.day_pnl != null) ? +d.day_pnl : (d.profit != null ? +d.profit : null);
+      if (pnlVal != null) {
+        pnlEl.className = 'stat-value ' + (pnlVal >= 0 ? 'up' : 'down');
+        pnlEl.textContent = fmtMoney(pnlVal);
+        const pnlSub = document.getElementById('statPnLSub');
+        if (pnlSub) {
+          pnlSub.textContent = (d.day_pnl_source === 'broker_day')
+            ? 'Account, vs yesterday close'
+            : 'Engine session only (realized)';
+        }
       }
 
       // Trade count
       if (d.trade_count != null) {
         const tc = document.getElementById('statTradeCount');
         if (tc) tc.textContent = d.trade_count;
+        const tcSub = document.getElementById('statTradeCountSub');
+        if (tcSub) {
+          tcSub.textContent = (d.trade_count_source === 'broker_today')
+            ? 'Filled today, incl. manual'
+            : 'Engine session only';
+        }
       }
 
       // Capital pool display
@@ -2249,7 +2427,7 @@
       // Update goal tracker with live capital total
       if (d.capital && d.capital.total) updateGoalFromCapital(d.capital.total);
       updateFeeDisplay();
-      renderBuyDecisions(d.buy_decisions || []);
+      renderBuyDecisions(d.buy_decisions || [], d.broker_buys || [], !!d.broker_available);
       updateTradeHealthBanner(d);
 
       document.getElementById('engineStatus').textContent = JSON.stringify(d, null, 2);
@@ -3173,10 +3351,97 @@
     // ═══════════════════════════════════════════
     //  INIT
     // ═══════════════════════════════════════════
+    // ═══════════════════════════════════════════
+    //  FIRST-RUN SETUP (own API keys, entered in-app)
+    // ═══════════════════════════════════════════
+    // The Render Blueprint deliberately asks for almost nothing, so a brand new
+    // deployment arrives here with no keys. This panel is how they get in —
+    // no env vars, no Render dashboard, no redeploy.
+    let setupNeeded = false;
+
+    async function refreshSetupState() {
+      try {
+        const r = await fetch('/api/keys/status');
+        if (!r.ok) return;
+        const d = await r.json();
+        setupNeeded = !!d.needs_setup;
+
+        const card = document.getElementById('setupCard');
+        if (card) card.style.display = setupNeeded ? '' : 'none';
+
+        // Once keys exist, stop pre-filling attention where it isn't needed.
+        const src = document.getElementById('setupKeySources');
+        if (src && d.sources) {
+          const bits = [];
+          if (d.paper_keys) bits.push('Alpaca paper keys ✓');
+          if (d.alpha_key)  bits.push('Alpha Vantage ✓');
+          if (d.live_keys)  bits.push('Live keys ✓');
+          src.textContent = bits.length ? ('Configured: ' + bits.join(' · ')) : '';
+        }
+        updateSettingsAttention();
+      } catch {}
+    }
+
+    // Pulsing amber dot on the Settings tab whenever it needs the user's attention.
+    function updateSettingsAttention() {
+      const tab = document.querySelector('[data-bs-target="#tabSettings"]');
+      if (!tab) return;
+      let dot = tab.querySelector('.attention-dot');
+      if (setupNeeded) {
+        if (!dot) {
+          dot = document.createElement('span');
+          dot.className = 'attention-dot';
+          tab.appendChild(dot);
+        }
+      } else if (dot) {
+        dot.remove();
+      }
+    }
+
+    async function saveSetupKeys() {
+      const btn = document.getElementById('setupSaveBtn');
+      const out = document.getElementById('setupResult');
+      const k  = document.getElementById('setupAlpacaKey').value.trim();
+      const s  = document.getElementById('setupAlpacaSecret').value.trim();
+      const av = document.getElementById('setupAlphaKey').value.trim();
+
+      if (!k && !s && !av) {
+        out.innerHTML = '<span class="text-warning">⚠ Enter at least one key.</span>';
+        return;
+      }
+      btn.disabled = true;
+      out.innerHTML = '<span class="small-muted">Verifying with Alpaca…</span>';
+      try {
+        const r = await fetch('/api/keys/setup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ alpaca_key: k, alpaca_secret: s, alpha_vantage_key: av })
+        });
+        const d = await r.json();
+        if (d.status === 'ok') {
+          out.innerHTML = `<span class="text-success">✔ ${escHtml(d.message)}</span>`;
+          // Never leave secrets sitting in the DOM.
+          document.getElementById('setupAlpacaSecret').value = '';
+          document.getElementById('setupAlphaKey').value = '';
+          await refreshSetupState();
+          fetchWorkerStatus();
+        } else {
+          out.innerHTML = `<span class="text-warning">⚠ ${escHtml(d.message || 'Could not save those keys.')}</span>`;
+        }
+      } catch {
+        out.innerHTML = '<span class="text-warning">⚠ Could not reach the app. Is it still running?</span>';
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    document.getElementById('setupSaveBtn')?.addEventListener('click', saveSetupKeys);
+
     loadAITraderState();
     loadRiskSettings();
     loadShieldSettings();
     loadGoalSettings();
+    refreshSetupState();
     refreshQuotesNow();
     startPolling();
     fetchWorkerStatus();
@@ -3188,6 +3453,11 @@
     fetchOwnerFreezeStatus();
 
     // Fallback REST pollers (WebSocket is primary; these catch up if WS stalls)
+    // refreshSetupState is included so the setup panel and its pulsing indicator
+    // self-heal: if the status call ever fails (expired session, brief network
+    // blip) the user isn't left staring at a page that silently hides the one
+    // thing they still need to do.
+    setInterval(refreshSetupState, 30000);
     setInterval(fetchWorkerStatus, 20000);
     setInterval(refreshQuotesNow, 8000);   // fast fallback refresh
   </script>

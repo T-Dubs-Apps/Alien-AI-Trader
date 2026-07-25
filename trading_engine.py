@@ -12,6 +12,7 @@ except Exception:
     def get_forecast(closes, periods_ahead=5):
         return {"score": 0.0, "forecast_direction": "neutral", "forecast_phase": "unknown", "predicted_price": None, "confidence": 0.0, "slope_pct_per_bar": 0.0}
 import os
+import sys
 
 # Prevent Alpaca SDK retry storms when market-data quota is exhausted.
 # One retry is enough; the engine-level caches/backoff handle later attempts.
@@ -69,12 +70,27 @@ class TradingEngine:
         lower = sma - num_std * std
         return float(upper), float(sma), float(lower)
 
-    def _calc_vwap(self, df: pd.DataFrame):
-        # VWAP = sum(price * volume) / sum(volume)
+    def _calc_vwap(self, df: pd.DataFrame, window: int = None):
+        """VWAP = sum(price * volume) / sum(volume), over the last `window` bars.
+
+        The window matters enormously. This value feeds the anti-chase guard,
+        whose job is "is price stretched above where it has RECENTLY traded?".
+        Computed over the whole 100-bar history it instead answers "has this
+        stock risen over the last five months?" — which is true of every healthy
+        uptrend, so it blocked exactly the momentum names the golden-cross rule
+        is built to find. A short window restores the intended meaning: steady
+        uptrends sit close to it, sharp multi-day spikes stand far above it.
+
+        window=None keeps the original full-window behavior for any caller that
+        genuinely wants the long-run average.
+        """
         if df is None or df.empty or 'c' not in df or 'v' not in df:
             return None
-        pv = (df['c'].astype(float) * df['v'].astype(float)).sum()
-        v = df['v'].astype(float).sum()
+        d = df if not window else df.tail(int(window))
+        if d.empty:
+            return None
+        pv = (d['c'].astype(float) * d['v'].astype(float)).sum()
+        v = d['v'].astype(float).sum()
         if v == 0:
             return None
         return float(pv / v)
@@ -200,6 +216,13 @@ class TradingEngine:
         # it blocked ~4 of every 5 otherwise-valid entries (and even blocked
         # cheap entries below VWAP). 15% keeps a real anti-chase guard.
         self.vwap_max_premium_pct = float(os.environ.get("VWAP_MAX_PREMIUM_PCT", "15.0"))
+        # Bars used for the anti-chase VWAP. Must stay SHORT (see _calc_vwap):
+        # measured against the full 100-bar window this guard blocked every
+        # stock up ~35%+ over five months, which is precisely what the
+        # golden-cross entry selects for — the two rules cancelled out and the
+        # engine could not buy a trending stock at all. Set 0 to restore the old
+        # full-window behavior.
+        self.vwap_window_bars = int(os.environ.get("VWAP_WINDOW_BARS", "20"))
 
         # Optional momentum-chase mode for explosive movers that would fail the
         # dip-buy filter stack (e.g., large same-day breakouts).
@@ -226,10 +249,11 @@ class TradingEngine:
         # signed license (see dashboard _live_allowed()). The engine trusts the
         # effective mode it is handed on /api/settings/trading and always fails
         # SAFE to paper when live keys are absent.
-        self._paper_key    = self._clean_env("ALPACA_KEY", "")
-        self._paper_secret = self._clean_env("ALPACA_SECRET", "")
-        self._live_key     = self._clean_env("ALPACA_LIVE_KEY", "")
-        self._live_secret  = self._clean_env("ALPACA_LIVE_SECRET", "")
+        # All credentials come from key_store, which reads keys the user saved
+        # in-app FIRST and falls back to env vars. That lets a fresh Render
+        # deployment start with no env vars at all.
+        self._paper_key, self._paper_secret = key_store.get_paper_keys()
+        self._live_key, self._live_secret   = key_store.get_live_keys()
         alpha_vantage_key  = key_store.get_alpha_key()
         pushbullet_token   = (
             self._clean_env("PUSHBULLET_TOKEN", "")
@@ -237,9 +261,14 @@ class TradingEngine:
         )
 
         if not self._paper_key or not self._paper_secret:
-            raise RuntimeError("Missing ALPACA_KEY / ALPACA_SECRET env vars.")
+            raise RuntimeError(
+                "Setup needed: add your Alpaca paper API key and secret in "
+                "Settings -> Setup."
+            )
         if not alpha_vantage_key:
-            raise RuntimeError("Missing ALPHA_VANTAGE_KEY env var.")
+            raise RuntimeError(
+                "Setup needed: add your Alpha Vantage API key in Settings -> Setup."
+            )
 
         # Always boot in PAPER. Honor an explicit live boot only when live keys
         # actually exist (no send_alert here — pushbullet/pushover aren't set up yet).
@@ -1497,7 +1526,7 @@ class TradingEngine:
         sma50 = self._calc_sma(closes, 50)
         macd, macd_signal = self._calc_macd(closes)
         boll_upper, boll_mid, boll_lower = self._calc_bollinger(closes)
-        vwap = self._calc_vwap(df)
+        vwap = self._calc_vwap(df, getattr(self, "vwap_window_bars", 20))
 
         signal["rsi"] = rsi
         signal["sma20"] = round(sma20, 4) if sma20 else None
@@ -1533,12 +1562,28 @@ class TradingEngine:
         #   2. RSI below rsi_buy_max
         #   3. MACD > MACD signal (bullish)
         #   4. Price above lower Bollinger Band but below upper
-        #   5. Price not far above VWAP (within 2%)
+        #   5. Price not stretched above the SHORT-window VWAP
         # SELL if:
         #   1. Death cross (SMA20 < SMA50)
         #   2. RSI > rsi_sell_min
         #   3. MACD < MACD signal (bearish)
         #   4. Price >= upper Bollinger Band
+
+        # If ANY indicator is missing the whole rule below is skipped and the
+        # verdict silently stays HOLD. That looked identical to "no setup today"
+        # and hid real data outages — SMA50 alone needs 50 bars, so a short or
+        # partial bar response disables buying with no visible reason. Name it.
+        _missing = [n for n, v in (
+            ("sma20", sma20), ("sma50", sma50), ("rsi", rsi), ("macd", macd),
+            ("macd_signal", macd_signal), ("boll_upper", boll_upper),
+            ("boll_lower", boll_lower), ("vwap", vwap),
+        ) if v is None or (n != "rsi" and not v)]
+        if _missing:
+            signal["data_issue"] = "insufficient_bars"
+            signal["data_issue_detail"] = (
+                f"Cannot evaluate entry — missing {', '.join(_missing)} "
+                f"(got {len(closes)} bars; SMA50 alone needs 50)."
+            )
 
         if sma20 and sma50 and rsi is not None and macd is not None and macd_signal is not None and boll_upper and boll_lower and vwap:
             spread_pct = abs(sma20 - sma50) / sma50 * 100
@@ -1759,7 +1804,7 @@ class TradingEngine:
                         self._signal_compact(signal),
                         price,
                     )
-                    print(f"[ENGINE] {symbol} BUY signal — auto-trade is OFF, skipping.")
+                    print(f"[ENGINE] {symbol} BUY signal - auto-trade is OFF, skipping.")
                     return
                 # Check ladder approval if scanner is attached
                 # is_ladder_approved is attached by integrate_ladder_with_engine()
@@ -1829,7 +1874,7 @@ class TradingEngine:
             # 1. Trailing stop — price fell X% below its peak since purchase → SELL
             if drop_from_peak >= self.trailing_stop_pct:
                 if not self.auto_trade:
-                    print(f"[ENGINE] {symbol} TRAILING STOP triggered — auto-trade is OFF, skipping sell.")
+                    print(f"[ENGINE] {symbol} TRAILING STOP triggered - auto-trade is OFF, skipping sell.")
                     return
                 self.send_alert(
                     f"TRAILING STOP: {symbol} fell {drop_from_peak*100:.1f}% from peak "
@@ -1858,7 +1903,7 @@ class TradingEngine:
                 change_from_buy > 0
             ):
                 if not self.auto_trade:
-                    print(f"[ENGINE] {symbol} FORECAST EXIT triggered — auto-trade is OFF, skipping sell.")
+                    print(f"[ENGINE] {symbol} FORECAST EXIT triggered - auto-trade is OFF, skipping sell.")
                     return
                 self.send_alert(
                     f"FORECAST EXIT: {symbol} momentum peaked @ ${peak:.2f} "
@@ -2126,8 +2171,26 @@ class TradingEngine:
           warn   → print + Pushbullet + Pushover (normal)
           alert  → print + Pushbullet + Pushover (EMERGENCY, breaks DND) + Twilio call
           rocket → print + Pushbullet + Pushover (HIGH, bypasses quiet hours)
+
+        The print is encoding-hardened. Alert text contains characters like the
+        arrow in the SIZING message, and on a console using a legacy codepage
+        (Windows cp1252) printing one raises UnicodeEncodeError. That exception
+        propagated straight out of buy() — and because the SIZING alert is sent
+        BEFORE submit_order, every single buy died before the order was placed.
+        An alert must never be able to stop a trade.
         """
-        print(f"[{level.upper()}] {message}")
+        try:
+            print(f"[{level.upper()}] {message}")
+        except UnicodeEncodeError:
+            # Fall back to an ASCII-safe rendering rather than losing the trade.
+            try:
+                enc = (getattr(sys.stdout, "encoding", None) or "ascii")
+                print(f"[{level.upper()}] " +
+                      message.encode(enc, errors="replace").decode(enc, errors="replace"))
+            except Exception:
+                pass
+        except Exception:
+            pass
 
         if self.alert_callback:
             try:
