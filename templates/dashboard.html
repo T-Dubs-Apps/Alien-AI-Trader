@@ -3362,6 +3362,7 @@
       badge.textContent=sym; badge.classList.remove('d-none');
       ['candleBuy','candleSell','candleHold'].forEach(id=>{const b=document.getElementById(id); if(b) b.disabled=false;});
       document.querySelectorAll('[data-line]').forEach(b=>b.disabled=false);
+      if(typeof disarmAuto==='function') disarmAuto();   // never carry armed state to a new stock
       clearLines();   // trigger lines are per-symbol
       applyTimeframe(sym, currentTF);
       loadStockInfo(sym);
@@ -3374,8 +3375,10 @@
     document.querySelector('[data-bs-target="#tabCandles"]')?.addEventListener('shown.bs.tab', ()=>{
       initChart(); if(chart) chart.timeScale().fitContent();
     });
-    // Stop the Live poller when leaving the Candlesticks tab (save requests).
-    document.querySelector('[data-bs-target="#tabCandles"]')?.addEventListener('hide.bs.tab', stopLive);
+    // Stop the Live poller AND disarm auto-execution when leaving the Candlesticks tab.
+    document.querySelector('[data-bs-target="#tabCandles"]')?.addEventListener('hide.bs.tab', ()=>{
+      stopLive(); if(typeof disarmAuto==='function') disarmAuto();
+    });
 
     // ── Trigger lines (Phase 2 UI; auto-execution wired later, off by default) ──
     const LINE_STYLE = {
@@ -3408,7 +3411,7 @@
       if(!candleSeries) return;
       const price=defaultLinePrice(), s=LINE_STYLE[type];
       const pl=candleSeries.createPriceLine({price, color:s.color, lineWidth:2, lineStyle:0, axisLabelVisible:true, title:s.title});
-      lines.push({id:lineSeq++, type, price, pl});
+      lines.push({id:lineSeq++, type, price, pl, fired:false});
       renderLines();
     }
     function removeLine(id){
@@ -3452,9 +3455,82 @@
       window.addEventListener('mouseup',()=>{ dragging=null; });
     })();
 
+    // ═══════ Phase 2b: auto-execution monitor (client-side, active only while armed + page open) ═══════
+    let armed=false, monitorTimer=null, lastPx=null;
+
+    function setArmUI(){
+      const lbl=document.querySelector('label[for="candleArm"]');
+      if(!lbl) return;
+      lbl.textContent = armed ? 'ARMED — watching for line crossings' : 'Arm auto-execution';
+      lbl.classList.toggle('text-warning', !armed);
+      lbl.classList.toggle('text-success', armed);
+    }
+    function stopMonitor(){ if(monitorTimer){ clearInterval(monitorTimer); monitorTimer=null; } }
+    function startMonitor(){
+      stopMonitor(); lastPx=null;
+      lines.forEach(l=>l.fired=false);
+      monitorTimer=setInterval(checkTriggers, 4000);
+      checkTriggers();
+    }
+    function disarmAuto(){
+      const c=document.getElementById('candleArm'); if(c) c.checked=false;
+      armed=false; stopMonitor(); setArmUI();
+    }
+
+    document.getElementById('candleArm')?.addEventListener('change', function(){
+      if(this.checked){
+        if(!currentSymbol){ this.checked=false; return; }
+        if(!lines.some(l=>['buy','sell','stop'].includes(l.type))){
+          alert('Add at least one Buy, Sell or Stop line before arming.'); this.checked=false; return;
+        }
+        armed=true; startMonitor();
+      } else { armed=false; stopMonitor(); }
+      setArmUI();
+    });
+
+    async function checkTriggers(){
+      if(!armed || !currentSymbol) return;
+      let price=null;
+      try{
+        const r=await fetch('/api/quotes?symbols='+encodeURIComponent(currentSymbol));
+        const j=await r.json();
+        const q=j[currentSymbol];
+        price = (q && q.price!=null) ? Number(q.price) : null;
+      }catch(e){ return; }
+      if(price==null) return;
+      const lpEl=document.getElementById('candleLastPrice'); if(lpEl) lpEl.textContent='$'+price.toFixed(2);
+      const prev=lastPx; lastPx=price;
+      if(prev==null) return;                         // need two samples to detect a crossing
+      for(const l of lines){
+        if(l.fired) continue;
+        const crossed = (prev < l.price && price >= l.price) || (prev > l.price && price <= l.price);
+        if(crossed) fireLine(l, price);
+      }
+    }
+
+    async function fireLine(line, price){
+      line.fired=true;
+      const lp=document.getElementById('lp-'+line.id);
+      if(lp && !/fired/.test(lp.innerHTML)) lp.innerHTML += ' <span class="badge bg-secondary">fired</span>';
+      // buy/sell/stop trade; hold/start are non-trading markers (semantics TBD with user)
+      let side = line.type==='buy' ? 'buy' : (line.type==='sell'||line.type==='stop') ? 'sell' : null;
+      if(side){
+        try{
+          await fetch('/api/order',{method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({symbol:currentSymbol, side, qty:1, type:'market', tif:'day'})});
+          // the order emits a server notification -> shows in Live Feed + Alerts automatically
+          setTimeout(()=>{ try{ loadHistory(currentSymbol); }catch(e){} }, 1500);
+        }catch(e){}
+      }
+      // auto-disarm once every trade line has fired (prevents surprise repeats)
+      const tradeLines=lines.filter(l=>['buy','sell','stop'].includes(l.type));
+      if(tradeLines.length && tradeLines.every(l=>l.fired)) disarmAuto();
+    }
+
     buildTFButtons();
     window.__candles = { get chart(){return chart;}, get series(){return candleSeries;},
-                         get lines(){return lines;}, addLine, clearLines }; // test hook
+                         get lines(){return lines;}, get armed(){return armed;},
+                         addLine, clearLines, checkTriggers, _setPrev:(p)=>{lastPx=p;} }; // test hook
   })();
   </script>
 </body>
