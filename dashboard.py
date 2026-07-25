@@ -215,6 +215,15 @@ if IS_OWNER_DEPLOYMENT:
     # License authority, Stripe store/webhooks, admin + update campaign routes.
     register_license_routes(app)
     print("[ROLE] APP_ROLE=owner — license server, store and admin routes ENABLED.")
+    # Follow-up reminder emails for update campaigns. Owner deployment only —
+    # a customer's copy must never email anyone. Guarded so a failure here can
+    # never stop the app from booting.
+    if os.environ.get("UPDATE_REMINDERS_ENABLED", "true").lower() != "false":
+        try:
+            from license_api import start_update_reminder_scheduler
+            start_update_reminder_scheduler()
+        except Exception as _sched_err:
+            print(f"[UPDATES] Reminder scheduler not started: {str(_sched_err)[:160]}")
 else:
     print("[ROLE] APP_ROLE=client — trading app only; "
           "license/store/admin routes are NOT served by this deployment.")

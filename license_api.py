@@ -3,8 +3,10 @@ import os
 import secrets
 import sqlite3
 import hashlib
+import hmac
 import smtplib
 import time
+import threading
 from email.message import EmailMessage
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote, unquote
@@ -858,6 +860,80 @@ def register_license_routes(app):
             'failures': fail_rows[:50],
         }), 200
 
+    @app.route('/api/updates/admin/sweep', methods=['POST'])
+    def admin_sweep_update_reminders():
+        """Send every reminder that is due right now (owner/admin only).
+
+        The scheduler does this hourly; this exists so a sweep can be forced
+        and observed without waiting for the next tick."""
+        ok, err = _admin_check(request)
+        if err:
+            return err
+        payload = request.json or {}
+        app_id = (payload.get('appId') or 'alien-ai-trader').strip()
+        base = (payload.get('baseUrl') or HUB_BASE_URL or request.host_url.rstrip('/'))
+        return jsonify(send_due_update_reminders(app_id, base_url=base)), 200
+
+    @app.route('/api/updates/action', methods=['GET'])
+    def updates_action():
+        """One-click Yes / Not now / Turn off from an email button.
+
+        Requires the signed token so a link cannot be forged — otherwise a
+        stranger could accept on someone's behalf, or opt them out silently.
+        """
+        try:
+            update_id = int(request.args.get('updateId') or 0)
+        except Exception:
+            return "Invalid update link.", 400
+        email = _norm_email(unquote(request.args.get('email', '')))
+        app_id = (unquote(request.args.get('appId', 'alien-ai-trader')) or 'alien-ai-trader').strip()
+        action = (request.args.get('action') or '').strip().lower()
+        token = request.args.get('t') or ''
+
+        if not update_id or not email or action not in ('accept', 'decline', 'optout'):
+            return "Invalid update link.", 400
+        if not verify_update_link_token(update_id, email, app_id, action, token):
+            return "This update link is not valid. Please use the link from your email.", 403
+
+        try:
+            st = respond_to_update(update_id, email, app_id, action)
+        except ValueError as e:
+            return str(e), 400
+
+        campaign = get_update_campaign(update_id) or {}
+        title = campaign.get('title', 'Update')
+        version = campaign.get('version', '')
+
+        if action == 'accept':
+            head = "Update accepted"
+            body = ("It will be applied by your Alien AI Trader the next time it checks in "
+                    "(within about 15 minutes), or immediately if you open Settings now.")
+        elif action == 'decline':
+            nxt = st.get('next_prompt_at')
+            when = ''
+            if nxt:
+                try:
+                    days = max(1, (datetime.fromisoformat(nxt) - datetime.now(timezone.utc)).days)
+                    when = f" We'll remind you in about {days} day{'s' if days != 1 else ''}."
+                except Exception:
+                    pass
+            head = "No problem"
+            body = f"Nothing has changed on your deployment.{when}"
+        else:
+            head = "Update notifications turned off"
+            body = ("You won't be emailed about updates again. Your trader keeps running "
+                    "exactly as it is — you can turn notifications back on from Settings.")
+
+        return f"""<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>{head}</title>
+<style>body{{font-family:Segoe UI,Arial,sans-serif;background:#0b1220;color:#e2e8f0;display:flex;
+align-items:center;justify-content:center;min-height:100vh;margin:0;padding:16px}}
+.card{{max-width:560px;background:#111b30;border:1px solid #1f345f;border-radius:12px;padding:24px}}
+h2{{margin:0 0 10px}}p{{line-height:1.55}}.muted{{color:#94a3b8;font-size:.85rem}}</style>
+</head><body><div class="card"><h2>{head}</h2>
+<p class="muted">{title} {version}</p><p>{body}</p>
+<p class="muted">Recorded for {email}.</p></div></body></html>""", 200
+
     @app.route('/api/updates/pending', methods=['POST'])
     def updates_pending():
         """Updates a client deployment still needs, with the settings to apply.
@@ -1469,6 +1545,65 @@ def _now_iso():
     return datetime.now(timezone.utc).isoformat()
 
 
+def due_update_reminders(app_id='alien-ai-trader', limit=200) -> list:
+    """(campaign, email, state) for reminders that are due to go out now.
+
+    Due means: the user has a state row (they were prompted and declined), the
+    snooze has expired, and they have not accepted, installed or opted out.
+    Users who have never been contacted are handled by admin/send instead, so
+    the scheduler only ever follows up — it cannot cold-email anybody.
+    """
+    now = datetime.now(timezone.utc)
+    out = []
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT * FROM update_states
+            WHERE app_id=? AND status IN ('snoozed','final_choice')
+            ORDER BY id ASC LIMIT ?
+            """,
+            (app_id, limit),
+        ).fetchall()
+    for r in rows:
+        st = dict(r)
+        if is_opted_out(st["email"], app_id):
+            continue
+        nxt = st.get("next_prompt_at")
+        if st["status"] == "snoozed":
+            if not nxt:
+                continue
+            try:
+                if datetime.fromisoformat(nxt) > now:
+                    continue
+            except Exception:
+                continue
+        else:
+            # final_choice has no timer; send it once, then never again.
+            if st.get("last_prompt_at"):
+                try:
+                    # allow a re-send only if the earlier one was before the
+                    # final decline (guards against duplicate final emails)
+                    if datetime.fromisoformat(st["last_prompt_at"]) > now - timedelta(days=365):
+                        continue
+                except Exception:
+                    continue
+        campaign = get_update_campaign(st["update_id"])
+        if not campaign:
+            continue
+        out.append((campaign, st["email"], st))
+    return out
+
+
+def mark_reminder_sent(update_id, email, app_id) -> None:
+    """Stamp last_prompt_at and clear the timer so one due reminder sends once."""
+    st = get_update_state(update_id, email, app_id)
+    st["last_prompt_at"] = _now_iso()
+    if st["status"] == "snoozed":
+        st["next_prompt_at"] = None   # wait for their answer, don't re-fire
+    _save_update_state(st)
+
+
 def is_opted_out(email, app_id) -> bool:
     email = _norm_email(email)
     with sqlite3.connect(DB_PATH) as conn:
@@ -1639,28 +1774,140 @@ def get_updates_for_email(email, app_id):
     return out
 
 
-def build_update_email_body(campaign, email, accept_url):
+def update_link_token(update_id, email, app_id, action) -> str:
+    """Signature for a one-click email link.
+
+    Without this, anyone who guessed the URL could accept an update on someone
+    else's behalf — or silently opt them out of ever being told about one again.
+    Signed with LICENSE_SECRET, which only the owner deployment holds.
+    """
+    msg = f"{update_id}|{_norm_email(email)}|{app_id}|{action}".encode("utf-8")
+    return hmac.new(LICENSE_SECRET.encode("utf-8"), msg, hashlib.sha256).hexdigest()[:32]
+
+
+def verify_update_link_token(update_id, email, app_id, action, token) -> bool:
+    expected = update_link_token(update_id, email, app_id, action)
+    return hmac.compare_digest(expected, str(token or ""))
+
+
+def build_update_action_url(base, campaign_id, email, app_id, action) -> str:
+    tok = update_link_token(campaign_id, email, app_id, action)
+    return (f"{base}/api/updates/action?updateId={campaign_id}&appId={quote(app_id)}"
+            f"&email={quote(email)}&action={action}&t={tok}")
+
+
+def build_update_email_body(campaign, email, accept_url, declines=0, final_choice=False,
+                            base=None, app_id='alien-ai-trader'):
+    """Reminder text for this user's stage in the ladder.
+
+    First contact asks. The follow-ups acknowledge that they were already asked
+    — pretending otherwise is what makes update mail feel like spam. The final
+    one stops asking and offers a way out.
+    """
     version = campaign.get('version') or ''
     title = campaign.get('title') or 'Alien AI Trader update'
     message = campaign.get('message') or ''
     update_url = campaign.get('update_url') or ''
-    manual = f"\nUpdate link: {update_url}\n" if update_url else "\n"
+    cid = campaign.get('id')
+
+    base = base or ''
+    decline_url = build_update_action_url(base, cid, email, app_id, 'decline') if base else ''
+    optout_url = build_update_action_url(base, cid, email, app_id, 'optout') if base else ''
+
+    if final_choice:
+        opener = ("This update has been waiting a while, so this is the last time we'll "
+                  "raise it. Please pick one of the two options below.")
+        choices = (f"Yes, install it:\n{accept_url}\n\n"
+                   f"Turn off update notifications (you will not be emailed about "
+                   f"updates again):\n{optout_url}\n")
+    elif declines >= 1:
+        opener = "An update is still available for the Alien AI Trader. Install it now?"
+        choices = (f"Yes, install it:\n{accept_url}\n\n"
+                   f"Not yet — remind me later:\n{decline_url}\n")
+    else:
+        opener = "An update is available for the Alien AI Trader. Would you like to install it?"
+        choices = (f"Yes, install it:\n{accept_url}\n\n"
+                   f"Not right now:\n{decline_url}\n")
+
+    manual = f"\nMore detail: {update_url}\n" if update_url else "\n"
     return f"""Hi,
 
-A new Alien AI Trader update is ready.
+{opener}
 
 Version: {version}
 Title: {title}
 
 {message}
 
-Accept this update:
-{accept_url}
-{manual}
-If the button/link does not open, copy and paste the URL into your browser.
+{choices}{manual}
+Nothing changes on your deployment unless you choose to install. Updates only
+adjust settings in your own copy — they never contain anyone else's API keys.
+If a link does not open, copy and paste the URL into your browser.
 
 This message was sent to: {email}
 """
+
+
+def send_due_update_reminders(app_id='alien-ai-trader', base_url=None) -> dict:
+    """Send every reminder that is currently due. Safe to call repeatedly."""
+    base = (base_url or HUB_BASE_URL or '').rstrip('/')
+    sent = failed = 0
+    details = []
+    if not _email_configured():
+        return {"sent": 0, "failed": 0, "skipped": "email not configured"}
+
+    for campaign, email, st in due_update_reminders(app_id):
+        try:
+            declines = int(st.get("declines") or 0)
+            final = (st.get("status") == "final_choice")
+            accept_url = build_update_action_url(base, campaign["id"], email, app_id, "accept")
+            body = build_update_email_body(
+                campaign, email, accept_url,
+                declines=declines, final_choice=final, base=base, app_id=app_id,
+            )
+            if final:
+                subject = f"Last reminder: Alien AI Trader update {campaign.get('version','')}"
+            elif declines >= 1:
+                subject = f"Still available: Alien AI Trader update {campaign.get('version','')}"
+            else:
+                subject = f"Alien AI Trader update {campaign.get('version','')}: {campaign.get('title','')}"
+
+            if _send_email(email, subject, body):
+                mark_reminder_sent(campaign["id"], email, app_id)
+                sent += 1
+                details.append({"email": email, "updateId": campaign["id"], "stage":
+                                "final" if final else f"decline_{declines}"})
+            else:
+                failed += 1
+        except Exception as e:
+            failed += 1
+            details.append({"email": email, "error": str(e)[:160]})
+    return {"sent": sent, "failed": failed, "details": details[:50]}
+
+
+def start_update_reminder_scheduler(app_id='alien-ai-trader', interval_seconds=None):
+    """Background loop that sends due follow-ups. OWNER DEPLOYMENT ONLY.
+
+    Started from dashboard.py only when APP_ROLE=owner, so a customer's copy
+    never emails anyone. Every failure is swallowed: a reminder is the least
+    important thing this process does and must never disturb trading.
+    """
+    interval = int(interval_seconds or os.getenv('UPDATE_REMINDER_INTERVAL_SECONDS', '3600'))
+
+    def _loop():
+        while True:
+            try:
+                res = send_due_update_reminders(app_id)
+                if res.get("sent"):
+                    print(f"[UPDATES] Sent {res['sent']} reminder(s).")
+            except Exception as e:
+                print(f"[UPDATES] Reminder sweep failed (will retry): {str(e)[:160]}")
+            time.sleep(interval)
+
+    t = threading.Thread(target=_loop, name="update-reminders", daemon=True)
+    t.start()
+    print(f"[UPDATES] Reminder scheduler started (every {interval}s).")
+    return t
 
 
 def store_verification(verification_id, email, phone, app_id, tier, code, expires_at):
