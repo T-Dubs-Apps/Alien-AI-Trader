@@ -759,16 +759,27 @@ def register_license_routes(app):
         if err:
             return err
 
-        payload = request.json or {}
-        app_id = (payload.get('appId') or 'alien-ai-trader').strip()
-        version = (payload.get('version') or '').strip()
-        title = (payload.get('title') or '').strip()
-        message = (payload.get('message') or '').strip()
-        update_url = (payload.get('updateUrl') or '').strip()
-        created_by = (payload.get('createdBy') or 'owner').strip() or 'owner'
+        payload_in = request.json or {}
+        app_id = (payload_in.get('appId') or 'alien-ai-trader').strip()
+        version = (payload_in.get('version') or '').strip()
+        title = (payload_in.get('title') or '').strip()
+        message = (payload_in.get('message') or '').strip()
+        update_url = (payload_in.get('updateUrl') or '').strip()
+        created_by = (payload_in.get('createdBy') or 'owner').strip() or 'owner'
 
         if not version or not title or not message:
             return jsonify({'error': 'version, title, and message are required'}), 400
+
+        payload = payload_in.get('payload') or {}
+        if not isinstance(payload, dict):
+            return jsonify({'error': 'payload must be an object'}), 400
+        # Hard stop: an update is broadcast to every licensed deployment, so a
+        # credential in it would be handed to all of them. Refuse at the source.
+        _BANNED = ('KEY', 'SECRET', 'TOKEN', 'PASSWORD', 'PRIVATE', 'CREDENTIAL')
+        leaked = [k for k in (payload.get('settings') or {})
+                  if any(b in str(k).upper() for b in _BANNED)]
+        if leaked:
+            return jsonify({'error': f'payload.settings must not contain secrets: {leaked}'}), 400
 
         campaign_id = create_update_campaign(
             app_id=app_id,
@@ -777,6 +788,7 @@ def register_license_routes(app):
             message=message,
             update_url=update_url,
             created_by=created_by,
+            payload=payload,
         )
         row = get_update_campaign(campaign_id)
         return jsonify({'status': 'ok', 'campaign': row}), 200
@@ -845,6 +857,47 @@ def register_license_routes(app):
             'failed': failed,
             'failures': fail_rows[:50],
         }), 200
+
+    @app.route('/api/updates/pending', methods=['POST'])
+    def updates_pending():
+        """Updates a client deployment still needs, with the settings to apply.
+
+        Called by each installed copy using its licensed email. Public by design
+        — it returns only campaign text and non-secret settings, never anything
+        belonging to the owner or to another user.
+        """
+        payload = request.json or {}
+        email = _norm_email(payload.get('email'))
+        app_id = (payload.get('appId') or 'alien-ai-trader').strip()
+        if not email:
+            return jsonify({'error': 'email required'}), 400
+        items = pending_updates_for(email, app_id)
+        return jsonify({
+            'status': 'ok',
+            'optedOut': is_opted_out(email, app_id),
+            'count': len(items),
+            'updates': items,
+        }), 200
+
+    @app.route('/api/updates/respond', methods=['POST'])
+    def updates_respond():
+        """Record accept / installed / decline / optout and advance the ladder."""
+        payload = request.json or {}
+        email = _norm_email(payload.get('email'))
+        app_id = (payload.get('appId') or 'alien-ai-trader').strip()
+        action = (payload.get('action') or '').strip().lower()
+        update_id = payload.get('updateId')
+        if not email or update_id is None:
+            return jsonify({'error': 'email and updateId required'}), 400
+        try:
+            update_id = int(update_id)
+        except Exception:
+            return jsonify({'error': 'updateId must be an integer'}), 400
+        try:
+            st = respond_to_update(update_id, email, app_id, action)
+        except ValueError as e:
+            return jsonify({'error': str(e)}), 400
+        return jsonify({'status': 'ok', 'state': st}), 200
 
     @app.route('/api/updates/inbox', methods=['POST'])
     def updates_inbox():
@@ -1287,19 +1340,76 @@ def init_db():
             )
             """
         )
+        # Per-user progress through the reminder ladder for one campaign.
+        # Separate from acceptances so a decline is remembered with its own
+        # schedule instead of looking identical to "never responded".
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS update_states (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                update_id INTEGER,
+                email TEXT,
+                app_id TEXT,
+                status TEXT,             -- pending | snoozed | accepted | installed | opted_out
+                declines INTEGER DEFAULT 0,
+                next_prompt_at TEXT,     -- ISO; when the next reminder may go out
+                last_prompt_at TEXT,
+                installed_at TEXT,
+                UNIQUE(update_id, email, app_id)
+            )
+            """
+        )
+        # Opting out is per-user, not per-campaign: "stop sending me updates".
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS update_optouts (
+                email TEXT,
+                app_id TEXT,
+                opted_out_at TEXT,
+                UNIQUE(email, app_id)
+            )
+            """
+        )
+        # payload = the settings this update applies. Added by migration so
+        # existing owner databases upgrade in place rather than needing a reset.
+        cursor.execute("PRAGMA table_info(update_campaigns)")
+        _cols = {r[1] for r in cursor.fetchall()}
+        if "payload" not in _cols:
+            cursor.execute("ALTER TABLE update_campaigns ADD COLUMN payload TEXT")
         conn.commit()
 
 
-def create_update_campaign(app_id, version, title, message, update_url, created_by='owner'):
+# ── Reminder ladder ──────────────────────────────────────────────────────────
+# Decline 1 -> ask again in 2 days. Decline 2 -> ask again in a week.
+# Decline 3 -> final prompt: accept, or turn updates off for good.
+SNOOZE_STEPS_DAYS = (2, 7)
+MAX_DECLINES = 3
+
+
+def _next_snooze_days(declines: int):
+    """Days until the next prompt, or None when the ladder is exhausted."""
+    if declines <= 0:
+        return None
+    if declines <= len(SNOOZE_STEPS_DAYS):
+        return SNOOZE_STEPS_DAYS[declines - 1]
+    return None
+
+
+def create_update_campaign(app_id, version, title, message, update_url,
+                           created_by='owner', payload=None):
+    """payload = the non-secret settings this update applies on the user's own
+    deployment, plus any secrets it should PROMPT them for. It must never carry
+    a credential: it travels to every licensed copy."""
     now = datetime.now(timezone.utc).isoformat()
+    payload_json = json.dumps(payload or {})
     with sqlite3.connect(DB_PATH) as conn:
         cur = conn.cursor()
         cur.execute(
             """
-            INSERT INTO update_campaigns (app_id, version, title, message, update_url, created_by, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO update_campaigns (app_id, version, title, message, update_url, created_by, created_at, payload)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (app_id, version, title, message, update_url, created_by, now),
+            (app_id, version, title, message, update_url, created_by, now, payload_json),
         )
         conn.commit()
         return cur.lastrowid
@@ -1353,6 +1463,144 @@ def record_update_acceptance(update_id, email, app_id):
             (update_id, email, app_id, datetime.now(timezone.utc).isoformat()),
         )
         conn.commit()
+
+
+def _now_iso():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def is_opted_out(email, app_id) -> bool:
+    email = _norm_email(email)
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute(
+            "SELECT 1 FROM update_optouts WHERE email=? AND app_id=?", (email, app_id)
+        ).fetchone()
+    return bool(row)
+
+
+def set_opted_out(email, app_id) -> None:
+    email = _norm_email(email)
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO update_optouts (email, app_id, opted_out_at) VALUES (?,?,?)",
+            (email, app_id, _now_iso()),
+        )
+        conn.commit()
+
+
+def get_update_state(update_id, email, app_id) -> dict:
+    email = _norm_email(email)
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT * FROM update_states WHERE update_id=? AND email=? AND app_id=?",
+            (update_id, email, app_id),
+        ).fetchone()
+    return dict(row) if row else {
+        "update_id": update_id, "email": email, "app_id": app_id,
+        "status": "pending", "declines": 0,
+        "next_prompt_at": None, "last_prompt_at": None, "installed_at": None,
+    }
+
+
+def _save_update_state(st: dict) -> None:
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO update_states
+              (update_id, email, app_id, status, declines,
+               next_prompt_at, last_prompt_at, installed_at)
+            VALUES (?,?,?,?,?,?,?,?)
+            """,
+            (st["update_id"], _norm_email(st["email"]), st["app_id"], st["status"],
+             int(st.get("declines") or 0), st.get("next_prompt_at"),
+             st.get("last_prompt_at"), st.get("installed_at")),
+        )
+        conn.commit()
+
+
+def respond_to_update(update_id, email, app_id, action: str) -> dict:
+    """Record a user's answer and advance the reminder ladder.
+
+    accept    -> they said yes; the client installs and then reports 'installed'
+    installed -> applied on their deployment; stop prompting for this campaign
+    decline   -> snooze per the ladder; the 3rd decline forces the final choice
+    optout    -> stop sending update emails entirely
+    """
+    email = _norm_email(email)
+    action = (action or "").strip().lower()
+    st = get_update_state(update_id, email, app_id)
+
+    if action == "optout":
+        set_opted_out(email, app_id)
+        st["status"] = "opted_out"
+        st["next_prompt_at"] = None
+    elif action == "accept":
+        st["status"] = "accepted"
+        st["next_prompt_at"] = None
+        record_update_acceptance(update_id, email, app_id)
+    elif action == "installed":
+        st["status"] = "installed"
+        st["installed_at"] = _now_iso()
+        st["next_prompt_at"] = None
+        record_update_acceptance(update_id, email, app_id)
+    elif action == "decline":
+        st["declines"] = int(st.get("declines") or 0) + 1
+        days = _next_snooze_days(st["declines"])
+        if days is None:
+            # Ladder exhausted: no more silent reminders. The next prompt the
+            # user sees must offer accept-or-turn-off rather than nagging again.
+            st["status"] = "final_choice"
+            st["next_prompt_at"] = None
+        else:
+            st["status"] = "snoozed"
+            st["next_prompt_at"] = (
+                datetime.now(timezone.utc) + timedelta(days=days)
+            ).isoformat()
+    else:
+        raise ValueError("action must be accept, installed, decline or optout")
+
+    _save_update_state(st)
+    st["max_declines"] = MAX_DECLINES
+    return st
+
+
+def pending_updates_for(email, app_id) -> list:
+    """Campaigns this user still needs to see, newest last.
+
+    Excludes anything accepted/installed, anything snoozed until later, and
+    everything if they turned updates off.
+    """
+    email = _norm_email(email)
+    if is_opted_out(email, app_id):
+        return []
+    now = datetime.now(timezone.utc)
+    out = []
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT * FROM update_campaigns WHERE app_id=? ORDER BY id ASC", (app_id,)
+        ).fetchall()
+    for r in rows:
+        c = dict(r)
+        st = get_update_state(c["id"], email, app_id)
+        if st["status"] in ("accepted", "installed", "opted_out"):
+            continue
+        nxt = st.get("next_prompt_at")
+        if nxt:
+            try:
+                if datetime.fromisoformat(nxt) > now:
+                    continue     # still snoozed
+            except Exception:
+                pass
+        try:
+            c["payload"] = json.loads(c.get("payload") or "{}")
+        except Exception:
+            c["payload"] = {}
+        c["state"] = st
+        c["final_choice"] = (st["status"] == "final_choice")
+        out.append(c)
+    return out
 
 
 def get_updates_for_email(email, app_id):

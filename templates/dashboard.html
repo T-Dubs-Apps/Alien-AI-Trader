@@ -835,6 +835,23 @@
       <div class="tab-pane fade" id="tabSettings">
         <div class="row g-4">
 
+          <!-- ══ UPDATE AVAILABLE ══ -->
+          <div class="col-12" id="updateCard" style="display:none;">
+            <div class="glass-card" style="border-color:#f59e0b;">
+              <div class="section-title" style="color:#f59e0b;">
+                <i class="fa-solid fa-cloud-arrow-down me-1"></i>Update available
+                <span class="attention-dot"></span>
+              </div>
+              <div id="updateList"></div>
+              <div id="updateResult" class="small mt-2"></div>
+              <div class="small-muted mt-2" style="font-size:.74rem;">
+                Updates only ever change settings in <strong>your</strong> deployment.
+                They never contain anyone else's API keys, and anything you must supply
+                yourself is listed so you can enter it in Settings → Setup.
+              </div>
+            </div>
+          </div>
+
           <!-- ══ SETUP — first run: add your own API keys ══ -->
           <div class="col-12" id="setupCard" style="display:none;">
             <div class="glass-card" style="border-color:#f59e0b;">
@@ -3382,12 +3399,83 @@
       } catch {}
     }
 
+    // ═══════════════════════════════════════════
+    //  UPDATES (pull-only: this copy asks, you decide)
+    // ═══════════════════════════════════════════
+    let pendingUpdates = [];
+
+    async function refreshUpdates() {
+      try {
+        const r = await fetch('/api/updates/available');
+        if (!r.ok) return;
+        const d = await r.json();
+        pendingUpdates = d.updates || [];
+        renderUpdates();
+        updateSettingsAttention();
+      } catch {}
+    }
+
+    function renderUpdates() {
+      const card = document.getElementById('updateCard');
+      const list = document.getElementById('updateList');
+      if (!card || !list) return;
+      if (!pendingUpdates.length) { card.style.display = 'none'; return; }
+      card.style.display = '';
+
+      list.innerHTML = pendingUpdates.map(u => {
+        const secrets = (u.requires_secrets || []);
+        // Third decline: no more "not now". Accept, or turn updates off.
+        const finalChoice = u.final_choice;
+        const buttons = finalChoice
+          ? `<button class="btn btn-warning btn-sm" style="color:#000"
+                     onclick="respondUpdate(${u.id},'accept')">Yes, install it</button>
+             <button class="btn btn-outline-secondary btn-sm"
+                     onclick="respondUpdate(${u.id},'optout')">Turn updates off</button>`
+          : `<button class="btn btn-warning btn-sm" style="color:#000"
+                     onclick="respondUpdate(${u.id},'accept')">Yes, install it</button>
+             <button class="btn btn-outline-secondary btn-sm"
+                     onclick="respondUpdate(${u.id},'decline')">Not right now</button>`;
+        return `
+          <div class="mb-3 pb-3" style="border-bottom:1px solid var(--border);">
+            <div class="fw-bold">${escHtml(u.title || 'Update')} ${escHtml(u.version || '')}</div>
+            <div class="small-muted mb-2">${escHtml(u.message || '')}</div>
+            ${u.settings_count ? `<div class="small mb-1">Applies ${u.settings_count} setting(s) to this deployment.</div>` : ''}
+            ${secrets.length ? `<div class="small mb-2" style="color:#f59e0b;">
+                You'll need to supply: <strong>${secrets.map(escHtml).join(', ')}</strong>
+                (entered by you in Settings → Setup — never included in an update).</div>` : ''}
+            ${finalChoice ? `<div class="small mb-2" style="color:#f59e0b;">
+                This update has been postponed ${u.declines} times. Please choose:
+                install it, or turn off update notifications.</div>` : ''}
+            <div class="d-flex gap-2 flex-wrap">${buttons}</div>
+          </div>`;
+      }).join('');
+    }
+
+    async function respondUpdate(id, action) {
+      const out = document.getElementById('updateResult');
+      out.innerHTML = '<span class="small-muted">Working…</span>';
+      try {
+        const r = await fetch('/api/updates/respond', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ updateId: id, action })
+        });
+        const d = await r.json();
+        out.innerHTML = d.status === 'ok'
+          ? `<span class="text-success">✔ ${escHtml(d.message)}</span>`
+          : `<span class="text-warning">⚠ ${escHtml(d.message || 'Could not complete that.')}</span>`;
+        await refreshUpdates();
+        if (action === 'accept') { loadRiskSettings(); refreshSetupState(); }
+      } catch {
+        out.innerHTML = '<span class="text-warning">⚠ Could not reach the app.</span>';
+      }
+    }
+
     // Pulsing amber dot on the Settings tab whenever it needs the user's attention.
     function updateSettingsAttention() {
       const tab = document.querySelector('[data-bs-target="#tabSettings"]');
       if (!tab) return;
       let dot = tab.querySelector('.attention-dot');
-      if (setupNeeded) {
+      if (setupNeeded || pendingUpdates.length) {
         if (!dot) {
           dot = document.createElement('span');
           dot.className = 'attention-dot';
@@ -3442,6 +3530,7 @@
     loadShieldSettings();
     loadGoalSettings();
     refreshSetupState();
+    refreshUpdates();
     refreshQuotesNow();
     startPolling();
     fetchWorkerStatus();
@@ -3458,6 +3547,7 @@
     // blip) the user isn't left staring at a page that silently hides the one
     // thing they still need to do.
     setInterval(refreshSetupState, 30000);
+    setInterval(refreshUpdates, 900000);   // 15 min; server-side cache matches
     setInterval(fetchWorkerStatus, 20000);
     setInterval(refreshQuotesNow, 8000);   // fast fallback refresh
   </script>

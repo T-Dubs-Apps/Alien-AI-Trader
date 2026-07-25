@@ -3668,12 +3668,204 @@ def save_live_keys():
                     "message": "Live keys saved and verified."}), 200
 
 
+def _storage_status() -> Dict[str, Any]:
+    """Is this deployment's saved state durable, or wiped on the next redeploy?
+
+    Render's filesystem is ephemeral unless a disk is mounted, so settings,
+    saved keys and the license cache silently reset on redeploy. Guessing from
+    "it survived a restart" is unreliable — a restart is not a redeploy, and a
+    service that never restarted proves nothing. Report it plainly instead.
+    """
+    configured = (os.environ.get("DATA_DIR") or "").strip()
+    persistent = bool(configured) and os.path.abspath(configured) != os.path.abspath(base_dir)
+    return {
+        "data_dir": DATA_DIR,
+        "data_dir_configured": bool(configured),
+        "persistent": persistent,
+        "settings_file_exists": os.path.exists(SETTINGS_FILE),
+        "detail": (
+            "Saved settings and keys persist across redeploys (DATA_DIR points at a "
+            "mounted disk)." if persistent else
+            "DATA_DIR is not set, so this deployment stores state in the app folder. "
+            "On a cloud host that is wiped on every redeploy — settings, in-app keys "
+            "and the license cache reset to their defaults. Attach a persistent disk "
+            "and set DATA_DIR to keep them."
+        ),
+    }
+
+
+@app.route("/api/storage/status", methods=["GET"])
+def storage_status():
+    """Whether this deployment's state survives a redeploy."""
+    return jsonify(_storage_status()), 200
+
+
+# ── Updates (client side) ────────────────────────────────────────────────────
+# This deployment asks the owner's server what updates are outstanding for its
+# licensed email, then applies them LOCALLY on accept. Nothing is pushed in: the
+# user's own copy pulls, and only when they say yes.
+_updates_cache: Dict[str, Any] = {"fetched_at": 0, "data": {"updates": [], "optedOut": False}}
+_UPDATES_TTL = 900   # 15 min
+
+
+def _license_email_for_updates() -> str:
+    lic = _load_local_license()
+    return _norm_email(lic.get("email") or os.environ.get("LICENSE_EMAIL") or "")
+
+
+def _fetch_pending_updates(force: bool = False) -> Dict[str, Any]:
+    now = time.time()
+    if not force and (now - _updates_cache["fetched_at"]) < _UPDATES_TTL:
+        return _updates_cache["data"]
+    email = _license_email_for_updates()
+    if not email:
+        data = {"updates": [], "optedOut": False, "reason": "no licensed email on this deployment"}
+        _updates_cache.update({"fetched_at": now, "data": data})
+        return data
+    try:
+        r = requests.post(
+            f"{LICENSE_SERVER_URL}/api/updates/pending",
+            json={"email": email, "appId": APP_ID}, timeout=15,
+        )
+        data = r.json() if r.ok else {"updates": [], "optedOut": False,
+                                      "reason": f"server returned HTTP {r.status_code}"}
+    except Exception as e:
+        # Never let an unreachable update server disturb trading.
+        data = {"updates": [], "optedOut": False, "reason": f"update server unreachable: {str(e)[:120]}"}
+    _updates_cache.update({"fetched_at": now, "data": data})
+    return data
+
+
+def _apply_update_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Apply an update's non-secret settings to THIS deployment.
+
+    Only keys the app already understands are accepted, anything secret-shaped
+    is refused outright, and required credentials are reported back so the user
+    is prompted to enter their own — an update never carries a key.
+    """
+    applied, skipped = {}, []
+    settings = (payload or {}).get("settings") or {}
+    banned = ("KEY", "SECRET", "TOKEN", "PASSWORD", "PRIVATE", "CREDENTIAL")
+
+    for k, v in settings.items():
+        name = str(k)
+        if any(b in name.upper() for b in banned):
+            skipped.append({"key": name, "why": "refused: secret-shaped key"})
+            continue
+        if name not in _trading_settings:
+            skipped.append({"key": name, "why": "unknown setting for this version"})
+            continue
+        try:
+            cur = _trading_settings.get(name)
+            _trading_settings[name] = type(cur)(v) if isinstance(cur, (int, float)) and not isinstance(cur, bool) else v
+            applied[name] = _trading_settings[name]
+        except Exception as e:
+            skipped.append({"key": name, "why": f"could not apply: {str(e)[:80]}"})
+
+    if applied:
+        _apply_pro_gating(_trading_settings)   # never let an update exceed the paid tier
+        _save_settings()
+
+    needed = [str(s) for s in ((payload or {}).get("requires_secrets") or [])]
+    missing = []
+    st = key_store.status()
+    for s in needed:
+        if s in key_store.FIELDS and st["sources"].get(s) == "missing":
+            missing.append(s)
+
+    return {"applied": applied, "skipped": skipped, "secrets_needed": missing}
+
+
+@app.route("/api/updates/available", methods=["GET"])
+def updates_available():
+    """Pending updates for this deployment (drives the in-app indicator)."""
+    force = request.args.get("refresh") == "1"
+    data = _fetch_pending_updates(force=force)
+    ups = data.get("updates") or []
+    return jsonify({
+        "count": len(ups),
+        "optedOut": bool(data.get("optedOut")),
+        "email": _license_email_for_updates(),
+        "reason": data.get("reason", ""),
+        "updates": [{
+            "id": u.get("id"), "version": u.get("version"), "title": u.get("title"),
+            "message": u.get("message"), "final_choice": bool(u.get("final_choice")),
+            "declines": (u.get("state") or {}).get("declines", 0),
+            "settings_count": len(((u.get("payload") or {}).get("settings") or {})),
+            "requires_secrets": ((u.get("payload") or {}).get("requires_secrets") or []),
+        } for u in ups],
+    }), 200
+
+
+@app.route("/api/updates/respond", methods=["POST"])
+def updates_respond_local():
+    """Yes / not now / turn updates off — and on Yes, actually install it."""
+    blocked = _owner_freeze_block("updates")
+    if blocked:
+        return blocked
+    body = request.json or {}
+    action = str(body.get("action") or "").strip().lower()
+    try:
+        update_id = int(body.get("updateId"))
+    except Exception:
+        return jsonify({"status": "error", "message": "updateId is required."}), 400
+    if action not in ("accept", "decline", "optout"):
+        return jsonify({"status": "error", "message": "action must be accept, decline or optout."}), 400
+
+    email = _license_email_for_updates()
+    if not email:
+        return jsonify({"status": "error",
+                        "message": "No licensed email on this deployment — activate your license first."}), 400
+
+    result = {}
+    if action == "accept":
+        data = _fetch_pending_updates(force=True)
+        match = next((u for u in (data.get("updates") or []) if u.get("id") == update_id), None)
+        if not match:
+            return jsonify({"status": "error", "message": "That update is no longer available."}), 404
+        result = _apply_update_payload(match.get("payload") or {})
+
+    server_action = "installed" if action == "accept" else action
+    try:
+        requests.post(
+            f"{LICENSE_SERVER_URL}/api/updates/respond",
+            json={"email": email, "appId": APP_ID,
+                  "updateId": update_id, "action": server_action},
+            timeout=15,
+        )
+    except Exception:
+        pass   # applied locally already; the server record can catch up later
+
+    _fetch_pending_updates(force=True)
+    _record_anomaly("settings_update")
+    _audit_event("update_response",
+                 {"updateId": update_id, "action": action, "applied": result.get("applied", {})},
+                 actor="dashboard_user")
+
+    if action == "accept":
+        msg = f"Update installed. {len(result.get('applied', {}))} setting(s) applied."
+        if result.get("secrets_needed"):
+            msg += (" Still needed from you: " + ", ".join(result["secrets_needed"]) +
+                    " — add them in Settings → Setup.")
+    elif action == "decline":
+        msg = "Update postponed. We'll remind you later."
+    else:
+        msg = "Update notifications turned off. You can re-enable them any time."
+
+    note = {"time": int(time.time()), "level": "info", "symbol": "", "message": msg}
+    _notifications.append(note)
+    socketio.emit("notification", note)
+    return jsonify({"status": "ok", "message": msg, "result": result}), 200
+
+
 @app.route("/api/keys/status", methods=["GET"])
 def keys_status():
     """Which credentials are configured, and where they came from.
 
     Presence only — key VALUES are never returned to the browser."""
-    return jsonify(key_store.status()), 200
+    st = key_store.status()
+    st["storage"] = _storage_status()
+    return jsonify(st), 200
 
 
 @app.route("/api/keys/setup", methods=["POST"])
