@@ -2963,21 +2963,35 @@ def api_candles():
         return jsonify({"status": "error", "message": "symbol required", "candles": []}), 400
 
     Minute, Hour, Month = TimeFrameUnit.Minute, TimeFrameUnit.Hour, TimeFrameUnit.Month
-    # tf_key -> (alpaca TimeFrame, days_back, limit, is_intraday)
-    # NOTE: Alpaca returns bars ascending FROM `start`, capped at `limit`; so limit
-    # must exceed the number of bars in the window or the LATEST bars get dropped
-    # (that made 1H/Live show stale data). Windows below all hold < ~900 bars, and
-    # limit=1000 guarantees the most-recent bar is always included.
+    # tf_key -> (alpaca TimeFrame, days_back, limit, is_intraday, keep_last)
+    #
+    # Each button now means WHAT IT SAYS: the label is how much HISTORY you get,
+    # and the bar size is chosen to suit it. Previously the labels were bar sizes
+    # with unrelated windows behind them -- "1M" meant monthly bars over 16 YEARS,
+    # which is why the time selection looked wrong.
+    #
+    # Alpaca returns bars ascending FROM `start`, capped at `limit`. If the window
+    # holds more bars than `limit`, the NEWEST bars are the ones dropped. The old
+    # "live" row asked for 2 days of 1-minute bars (up to ~1,900) with limit=1000,
+    # so it returned bars from two days ago and looked frozen. Fix: ask for plenty
+    # (limit 10000) and trim to the most recent `keep_last` bars afterwards.
+    #
+    # days_back on intraday rows is deliberately >= 4 so a Monday morning (or a
+    # long weekend) still finds the previous session instead of coming back empty.
     TF = {
-        "1h":   (TimeFrame(1, Hour),    90,   1000, True),
-        "day":  (TimeFrame.Day,         500,  1000, False),
-        "week": (TimeFrame.Week,        2600, 1000, False),
-        "month":(TimeFrame(1, Month),   6000, 1000, False),
-        "1y":   (TimeFrame.Day,         400,  1000, False),
-        "5y":   (TimeFrame.Week,        2000, 1000, False),
-        "live": (TimeFrame(1, Minute),  2,    1000, True),
+        "1d":   (TimeFrame(1, Minute),  4,    10000, True,  390),   # today, minute bars
+        "5d":   (TimeFrame(5, Minute),  9,    10000, True,  400),   # 5 days, 5-min bars
+        "1mo":  (TimeFrame(1, Hour),    38,   10000, True,  260),   # 1 month, hourly
+        "6mo":  (TimeFrame.Day,         200,  10000, False, 130),   # 6 months, daily
+        "1y":   (TimeFrame.Day,         400,  10000, False, 260),   # 1 year, daily
+        "5y":   (TimeFrame.Week,        1900, 10000, False, 265),   # 5 years, weekly
+        "max":  (TimeFrame(1, Month),   7300, 10000, False, 260),   # 20 years, monthly
+        "live": (TimeFrame(1, Minute),  4,    10000, True,  390),   # today, auto-refresh
     }
-    tf, days_back, limit, intraday = TF.get(tf_key, TF["day"])
+    # Old keys kept working so existing links/bookmarks do not break.
+    LEGACY = {"1h": "1mo", "day": "1y", "week": "5y", "month": "max"}
+    tf_key = LEGACY.get(tf_key, tf_key)
+    tf, days_back, limit, intraday, keep_last = TF.get(tf_key, TF["1y"])
 
     client = _active_alpaca()
     if not client:
@@ -3009,9 +3023,15 @@ def api_candles():
     dedup = {c["time"]: c for c in candles}
     candles = [dedup[k] for k in sorted(dedup.keys())]
 
+    # Keep the MOST RECENT bars. Trimming from the end (not the start) is what
+    # guarantees the newest candle is always on the chart.
+    if keep_last and len(candles) > keep_last:
+        candles = candles[-keep_last:]
+
     return jsonify({
         "status": "ok" if candles else "empty",
         "symbol": symbol, "timeframe": tf_key, "count": len(candles),
+        "intraday": intraday,
         "candles": candles,
         "message": None if candles else (err or "No bars returned for this symbol/timeframe."),
     }), 200

@@ -631,6 +631,33 @@
           <div class="col-lg-6">
             <div class="glass-card h-100">
               <div class="section-title"><i class="fa-solid fa-shield me-1"></i>AI Trading Controls</div>
+
+              <!-- ═══ Risk slider (drives the boxes below) ═══════════════════ -->
+              <div class="mb-3 p-2 rounded" style="background:rgba(255,255,255,.03);border:1px solid var(--border);">
+                <div class="d-flex justify-content-between align-items-center mb-1">
+                  <label class="form-label mb-0" for="riskSlider" title="One control that sets how picky the AI is about entries and how big each position can be.">
+                    <i class="fa-solid fa-sliders me-1"></i>Risk Level
+                  </label>
+                  <span id="riskSliderName" class="badge bg-secondary">Loading…</span>
+                </div>
+                <input type="range" class="form-range" id="riskSlider" min="1" max="10" step="1" value="5">
+                <div class="d-flex justify-content-between small-muted" style="font-size:.66rem;">
+                  <span>1 · Safest</span><span>5 · Balanced</span><span>10 · Maximum</span>
+                </div>
+                <div id="riskSliderPreview" class="small-muted mt-2" style="font-size:.7rem;"></div>
+                <div class="d-flex align-items-center gap-2 mt-2">
+                  <button class="btn btn-sm btn-primary" type="button" id="riskSliderApply">
+                    <i class="fa-solid fa-check me-1"></i>Apply risk level
+                  </button>
+                  <span id="riskSliderStatus" class="small-muted" style="font-size:.7rem;"></span>
+                </div>
+                <div class="small-muted mt-1" style="font-size:.66rem;">
+                  Moving the slider only previews. Nothing changes until you press Apply and confirm.
+                  It affects <b>entries and sizing only</b> — stop-losses, trailing stops and sell
+                  protection stay on at every level.
+                </div>
+              </div>
+
               <div class="row g-2">
                 <div class="col-6">
                   <label class="form-label" title="Sell if price drops this % from its highest point since purchase. The stock keeps running until it reverses.">Trailing Stop % <i class="fa-solid fa-circle-info fa-xs" style="color:var(--muted)"></i></label>
@@ -2857,6 +2884,116 @@
       }
     }
 
+    // ═══════════════ RISK SLIDER ═══════════════
+    // Mirrors trading_engine.py _risk_profile_for_level() so the preview shows
+    // exactly what the engine will apply. If you change the engine table, change
+    // this one too. Level 5 is the engine's long-standing default.
+    const RISK_PROFILES = {
+      1:{name:'Very Conservative', risk:0.50, maxPos:8,  minPos:12, rsi:38, spread:0.35, rocket:false},
+      2:{name:'Conservative',      risk:0.75, maxPos:10, minPos:10, rsi:41, spread:0.30, rocket:false},
+      3:{name:'Cautious',          risk:1.00, maxPos:12, minPos:8,  rsi:44, spread:0.24, rocket:false},
+      4:{name:'Moderate',          risk:1.50, maxPos:16, minPos:6,  rsi:47, spread:0.16, rocket:true},
+      5:{name:'Balanced',          risk:2.00, maxPos:20, minPos:5,  rsi:50, spread:0.10, rocket:true},
+      6:{name:'Growth',            risk:2.30, maxPos:23, minPos:5,  rsi:53, spread:0.08, rocket:true},
+      7:{name:'Assertive',         risk:2.60, maxPos:26, minPos:4,  rsi:55, spread:0.06, rocket:true},
+      8:{name:'Aggressive',        risk:3.00, maxPos:29, minPos:4,  rsi:58, spread:0.04, rocket:true},
+      9:{name:'Very Aggressive',   risk:3.50, maxPos:32, minPos:3,  rsi:60, spread:0.02, rocket:true},
+      10:{name:'Maximum',          risk:4.00, maxPos:35, minPos:3,  rsi:62, spread:0.00, rocket:true},
+    };
+    let riskLevelApplied = null;
+
+    function riskBadgeClass(lvl){
+      if (lvl >= 8) return 'bg-danger';
+      if (lvl >= 6) return 'bg-warning text-dark';
+      if (lvl <= 3) return 'bg-info text-dark';
+      return 'bg-secondary';
+    }
+    function renderRiskPreview(){
+      const lvl = parseInt(document.getElementById('riskSlider').value, 10);
+      const p = RISK_PROFILES[lvl]; if (!p) return;
+      const badge = document.getElementById('riskSliderName');
+      badge.textContent = lvl + '/10 · ' + p.name;
+      badge.className = 'badge ' + riskBadgeClass(lvl);
+      document.getElementById('riskSliderPreview').innerHTML =
+        'Risks <b>' + p.risk.toFixed(2) + '%</b> of the account per trade · '
+      + 'max <b>' + p.maxPos + '%</b> in any one stock · spreads across at least <b>'
+      + p.minPos + '</b> positions<br>'
+      + 'Buys only when RSI is under <b>' + p.rsi + '</b> · needs <b>' + p.spread.toFixed(2)
+      + '%</b> SMA spread · Rocket Breakout <b>' + (p.rocket ? 'ON' : 'OFF') + '</b>'
+      + (riskLevelApplied === lvl
+          ? ' <span class="text-success">(currently applied)</span>'
+          : ' <span class="text-warning">(preview — not applied yet)</span>');
+    }
+
+    async function applyRiskLevel(){
+      const lvl = parseInt(document.getElementById('riskSlider').value, 10);
+      const p = RISK_PROFILES[lvl];
+      const statusEl = document.getElementById('riskSliderStatus');
+      if (!p) return;
+      let warn =
+        'Apply risk level ' + lvl + '/10 — ' + p.name + '?\n\n'
+      + 'This will change how the AI buys:\n'
+      + '  • Risk per trade: ' + p.risk.toFixed(2) + '% of the account\n'
+      + '  • Max in one stock: ' + p.maxPos + '%\n'
+      + '  • Minimum positions: ' + p.minPos + '\n'
+      + '  • RSI buy ceiling: ' + p.rsi + '\n'
+      + '  • SMA spread minimum: ' + p.spread.toFixed(2) + '%\n'
+      + '  • Rocket Breakout: ' + (p.rocket ? 'ON' : 'OFF') + '\n\n'
+      + 'Stop-losses, trailing stops and sell protection stay ON.\n'
+      + 'Existing holdings are not touched.';
+      if (lvl >= 8) {
+        warn += '\n\nWARNING: level ' + lvl + ' is high risk. It puts more money into '
+              + 'fewer positions and buys stocks that have already run up. Losses can '
+              + 'be substantially larger.';
+      }
+      if (!confirm(warn)) {
+        statusEl.textContent = 'Cancelled — nothing changed.';
+        return;
+      }
+      statusEl.textContent = 'Applying…';
+      try {
+        const r = await fetch('/api/settings/trading', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ risk_level: lvl, risk_profile_confirmed: true })
+        });
+        const j = await r.json().catch(()=>({}));
+        if (!r.ok || j.status === 'error') {
+          statusEl.innerHTML = '<span class="text-danger">' +
+            (j.message || ('Failed (HTTP ' + r.status + ')')) + '</span>';
+          return;
+        }
+        riskLevelApplied = lvl;
+        statusEl.innerHTML = '<span class="text-success">Applied. The engine picks it up '
+                           + 'on its next settings poll.</span>';
+        // Keep the number boxes honest so they match what the engine will use.
+        const set = (id,v)=>{ const el=document.getElementById(id); if(el) el.value=v; };
+        set('riskPerTradePct', p.risk);   set('maxPositionPct', p.maxPos);
+        set('minPositions',    p.minPos); set('rsiBuyMax',      p.rsi);
+        set('smaSpreadMin',    p.spread);
+        const rk=document.getElementById('rocketBreakoutEnabled'); if(rk) rk.checked=p.rocket;
+        renderRiskPreview();
+      } catch(e){
+        statusEl.innerHTML = '<span class="text-danger">Error: ' + e.message + '</span>';
+      }
+    }
+
+    function initRiskSlider(){
+      const sl = document.getElementById('riskSlider'); if (!sl) return;
+      sl.addEventListener('input', renderRiskPreview);
+      document.getElementById('riskSliderApply')?.addEventListener('click', applyRiskLevel);
+      fetch('/api/settings/trading').then(r=>r.json()).then(j=>{
+        const s = j.settings || j || {};
+        const lvl = parseInt(s.risk_level, 10);
+        if (lvl >= 1 && lvl <= 10) { sl.value = lvl; riskLevelApplied = lvl; }
+        else {
+          document.getElementById('riskSliderStatus').textContent =
+            'No risk level set yet — your existing settings are in use.';
+        }
+        renderRiskPreview();
+      }).catch(()=>renderRiskPreview());
+    }
+    document.addEventListener('DOMContentLoaded', initRiskSlider);
+
     function saveRiskSettings() {
       const thresholdMinutes = normalizeTradeHealthThresholdMinutes(document.getElementById('tradeHealthThreshold').value);
       document.getElementById('tradeHealthThreshold').value = thresholdMinutes;
@@ -3555,11 +3692,35 @@
   <!-- ═══════════════ CANDLESTICKS PAGE ═══════════════ -->
   <script>
   (function(){
+    // Each label is HOW MUCH HISTORY you get; the bar size is chosen to match.
+    // `bars` is shown in the status line so it is never a guess what you're seeing.
     const TF = [
-      {id:'1h',label:'1H'},{id:'day',label:'1D'},{id:'week',label:'1W'},
-      {id:'month',label:'1M'},{id:'1y',label:'1Y'},{id:'5y',label:'5Y'},{id:'live',label:'LIVE'}
+      {id:'1d',  label:'1D',   bars:'1-minute bars'},
+      {id:'5d',  label:'5D',   bars:'5-minute bars'},
+      {id:'1mo', label:'1M',   bars:'hourly bars'},
+      {id:'6mo', label:'6M',   bars:'daily bars'},
+      {id:'1y',  label:'1Y',   bars:'daily bars'},
+      {id:'5y',  label:'5Y',   bars:'weekly bars'},
+      {id:'max', label:'MAX',  bars:'monthly bars'},
+      {id:'live',label:'LIVE', bars:'1-minute bars, auto-refreshing'}
     ];
-    let chart=null, candleSeries=null, currentTF='day', currentSymbol=null, inited=false, liveTimer=null;
+    let chart=null, candleSeries=null, currentTF='1y', currentSymbol=null, inited=false, liveTimer=null;
+
+    // Intraday bars arrive as UTC epoch seconds, and Lightweight Charts renders
+    // epochs in UTC -- so the 9:30am market open was being drawn at 13:30/14:30.
+    // Shift each stamp by the New York offset so the axis reads in market time.
+    // Uses the browser's own timezone database, so it stays right across DST.
+    const _etFmt = new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',
+      hour12:false, year:'numeric', month:'2-digit', day:'2-digit',
+      hour:'2-digit', minute:'2-digit', second:'2-digit'});
+    function toMarketTime(epochSec){
+      try{
+        const p = _etFmt.formatToParts(new Date(epochSec*1000));
+        const g = t => parseInt(p.find(x=>x.type===t).value, 10);
+        return Math.floor(Date.UTC(g('year'), g('month')-1, g('day'),
+                                   g('hour')%24, g('minute'), g('second'))/1000);
+      }catch(e){ return epochSec; }
+    }
 
     function buildTFButtons(){
       const wrap=document.getElementById('candleTimeframes'); if(!wrap) return;
@@ -3607,18 +3768,26 @@
       initChart(); if(!candleSeries) return;
       const status=document.getElementById('candleStatus');
       const title=document.getElementById('candleTitle');
-      title.textContent = symbol + ' · ' + tf;
-      status.textContent = 'Loading ' + symbol + ' (' + tf + ')…';
+      const tfMeta = TF.find(t=>t.id===tf) || {label:tf, bars:''};
+      title.textContent = symbol + ' · ' + tfMeta.label + (tfMeta.bars ? ' (' + tfMeta.bars + ')' : '');
+      status.textContent = 'Loading ' + symbol + ' (' + tfMeta.label + ')…';
       try{
         const r = await fetch('/api/candles?symbol=' + encodeURIComponent(symbol) + '&timeframe=' + encodeURIComponent(tf));
         const j = await r.json();
         if (j.candles && j.candles.length){
-          candleSeries.setData(j.candles);
+          // Intraday stamps are numbers (epoch); daily/weekly/monthly are
+          // 'YYYY-MM-DD' strings, which need no timezone treatment.
+          const data = j.intraday
+            ? j.candles.map(c => ({...c, time: toMarketTime(c.time)}))
+            : j.candles;
+          candleSeries.setData(data);
           chart.timeScale().fitContent();
           document.getElementById('candleChartEmpty')?.classList.add('d-none');
-          const last = j.candles[j.candles.length-1];
+          const last = data[data.length-1];
           document.getElementById('candleLastPrice').textContent = '$' + Number(last.close).toFixed(2);
-          status.textContent = j.count + ' candles · ' + tf;
+          const meta = (TF.find(t=>t.id===tf) || {});
+          status.textContent = j.count + ' candles · ' + (meta.bars || tf)
+                             + (j.intraday ? ' · times in US market time (ET)' : '');
         } else {
           if(tf!=='live') candleSeries.setData([]);   // keep last live frame if a refresh comes back empty
           status.textContent = (tf==='live')
