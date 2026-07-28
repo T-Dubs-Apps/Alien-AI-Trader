@@ -662,7 +662,7 @@
                 <div class="col-6">
                   <label class="form-label" title="Sell if price drops this % from its highest point since purchase. The stock keeps running until it reverses.">Trailing Stop % <i class="fa-solid fa-circle-info fa-xs" style="color:var(--muted)"></i></label>
                   <div class="input-group">
-                    <input class="form-control" type="number" id="trailingStop" value="3" min="0.1" max="50" step="0.1">
+                    <input class="form-control" type="number" id="trailingStop" value="2.2" min="0.1" max="50" step="0.1">
                     <span class="input-group-text" style="background:var(--card);border-color:var(--border);color:var(--muted);">%</span>
                   </div>
                   <div class="small-muted mt-1" style="font-size:.68rem;">Drop from peak triggers sell</div>
@@ -670,7 +670,7 @@
                 <div class="col-6">
                   <label class="form-label" title="Absolute floor: sell if price drops this % below your buy price (catches stocks that never rise).">Stop-Loss % <i class="fa-solid fa-circle-info fa-xs" style="color:var(--muted)"></i></label>
                   <div class="input-group">
-                    <input class="form-control" type="number" id="stopLoss" value="5" min="0.1" max="50" step="0.1">
+                    <input class="form-control" type="number" id="stopLoss" value="4" min="0.1" max="50" step="0.1">
                     <span class="input-group-text" style="background:var(--card);border-color:var(--border);color:var(--muted);">%</span>
                   </div>
                   <div class="small-muted mt-1" style="font-size:.68rem;">Absolute floor below buy price</div>
@@ -685,12 +685,12 @@
                 </div>
                 <div class="col-6">
                   <label class="form-label" title="Maximum number of stocks the AI can hold at once. Capital is split across these slots.">Max Positions</label>
-                  <input class="form-control" type="number" id="maxPositions" value="5" min="1" max="50">
+                  <input class="form-control" type="number" id="maxPositions" value="8" min="1" max="50">
                   <div class="small-muted mt-1" style="font-size:.68rem;">Open slots at once</div>
                 </div>
                 <div class="col-6">
                   <label class="form-label">Scan Interval (sec)</label>
-                  <input class="form-control" type="number" id="scanInterval" value="15" min="5" max="300">
+                  <input class="form-control" type="number" id="scanInterval" value="60" min="60" max="300">
                   <div class="small-muted mt-1" style="font-size:.68rem;">How often to scan</div>
                 </div>
                 <div class="col-6">
@@ -700,7 +700,7 @@
                 </div>
                 <div class="col-6">
                   <label class="form-label">Max Trades/Hour</label>
-                  <input class="form-control" type="number" id="maxTrades" value="30" min="1" max="200">
+                  <input class="form-control" type="number" id="maxTrades" value="20" min="1" max="200">
                 </div>
                 <div class="col-6">
                   <label class="form-label">Order Qty (fixed mode)</label>
@@ -759,17 +759,17 @@
                 </div>
                 <div class="col-4">
                   <label class="form-label" title="RSI must be below this value to trigger a BUY. Lower = fewer but better entries. Default 50 catches dips.">RSI Buy Max <i class="fa-solid fa-circle-info fa-xs" style="color:var(--muted)"></i></label>
-                  <input class="form-control" type="number" id="rsiBuyMax" value="50" min="20" max="80" step="1">
+                  <input class="form-control" type="number" id="rsiBuyMax" value="60" min="20" max="80" step="1">
                   <div class="small-muted mt-1" style="font-size:.68rem;">&lt;30=oversold · &lt;50=dip · &lt;70=loose</div>
                 </div>
                 <div class="col-4">
                   <label class="form-label" title="RSI must be above this value to trigger a SELL. Higher = let winners run longer.">RSI Sell Min <i class="fa-solid fa-circle-info fa-xs" style="color:var(--muted)"></i></label>
-                  <input class="form-control" type="number" id="rsiSellMin" value="70" min="50" max="95" step="1">
+                  <input class="form-control" type="number" id="rsiSellMin" value="62" min="50" max="95" step="1">
                   <div class="small-muted mt-1" style="font-size:.68rem;">70+ = overbought zone</div>
                 </div>
                 <div class="col-4">
                   <label class="form-label" title="Minimum % spread between SMA20 and SMA50 before a golden cross counts. Filters out weak, razor-thin crossovers.">SMA Spread Min % <i class="fa-solid fa-circle-info fa-xs" style="color:var(--muted)"></i></label>
-                  <input class="form-control" type="number" id="smaSpreadMin" value="0.1" min="0" max="5" step="0.05">
+                  <input class="form-control" type="number" id="smaSpreadMin" value="0.0" min="0" max="5" step="0.05">
                   <div class="small-muted mt-1" style="font-size:.68rem;">0.1% filters noise crossovers</div>
                 </div>
                 <div class="col-12">
@@ -3000,12 +3000,12 @@
       tradeHealthThresholdMinutes = thresholdMinutes;
       const settings = {
         // ── Core execution ──────────────────────────────────────────────────
-        trailing_stop_pct:  parseFloat(document.getElementById('trailingStop').value)    || 3,
-        loss_threshold:     parseFloat(document.getElementById('stopLoss').value)         || 5,
-        max_trades_per_hour:parseInt(document.getElementById('maxTrades').value)          || 30,
-        poll_seconds:       parseInt(document.getElementById('scanInterval').value)       || 15,
+        trailing_stop_pct:  parseFloat(document.getElementById('trailingStop').value)    || 2.2,
+        loss_threshold:     parseFloat(document.getElementById('stopLoss').value)         || 4,
+        max_trades_per_hour:parseInt(document.getElementById('maxTrades').value)          || 20,
+        poll_seconds:       parseInt(document.getElementById('scanInterval').value)       || 60,
         initial_capital:    parseFloat(document.getElementById('initialCapital').value)   || 0,
-        max_positions:      parseInt(document.getElementById('maxPositions').value)       || 5,
+        max_positions:      parseInt(document.getElementById('maxPositions').value)       || 8,
         scan_all_market:    document.getElementById('scanAllMarket').checked,
         trade_health_threshold_minutes: thresholdMinutes,
         qty:                document.getElementById('defaultQty').value,
@@ -3016,9 +3016,9 @@
         min_positions:      parseInt(document.getElementById('minPositions').value)        || 5,
         risk_per_trade_usd: parseFloat(document.getElementById('riskPerTradeUSD').value)  || 0,
         // ── Signal quality filters ───────────────────────────────────────────
-        rsi_buy_max:        parseFloat(document.getElementById('rsiBuyMax').value)        || 50,
-        rsi_sell_min:       parseFloat(document.getElementById('rsiSellMin').value)       || 70,
-        sma_spread_min:     parseFloat(document.getElementById('smaSpreadMin').value)     || 0.1,
+        rsi_buy_max:        parseFloat(document.getElementById('rsiBuyMax').value)        || 60,
+        rsi_sell_min:       parseFloat(document.getElementById('rsiSellMin').value)       || 62,
+        sma_spread_min:     (function(v){ v = parseFloat(document.getElementById('smaSpreadMin').value); return isNaN(v) ? 0 : v; })(),
         // ── Rocket breakout mode ─────────────────────────────────────────────
         rocket_breakout_enabled:              document.getElementById('rocketBreakoutEnabled').checked,
         rocket_breakout_min_day_change_pct:   parseFloat(document.getElementById('rocketBreakoutMinDayChange').value) || 12,

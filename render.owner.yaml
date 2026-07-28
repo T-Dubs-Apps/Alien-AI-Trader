@@ -130,12 +130,19 @@ services:
         value: AAPL,GOOG,TSLA,MSFT,AMZN
         sync: false
       # -- Scan & execution -------------------------------------------------
+      # These three are throttles that protect the Alpaca API. The engine hard-
+      # clamps each (POLL_SECONDS floored at 60, SCAN_WORKERS capped at 2,
+      # MARKET_SCAN_CANDIDATES capped at 10), so values beyond those limits do
+      # nothing except mislead. They are set to the effective safe ceilings here.
       - key: POLL_SECONDS
-        value: "10"         # aggressive default: faster scans for higher turnover
+        value: "60"         # scan cadence; engine floor is 60s (steady API usage)
         sync: false
       - key: SCAN_WORKERS
-        value: "10"
+        value: "2"          # parallel fetch threads; engine caps this at 2
         sync: false
+      # Stops are WHOLE PERCENTS here: 2.2 = 2.2% trailing, 4.0 = 4% hard stop.
+      # (The engine normalizes either a percent like 2.2 or a legacy fraction like
+      #  0.022 to the same internal fraction — see TradingEngine._pct_env.)
       - key: TRAILING_STOP_PCT
         value: "2.2"
         sync: false
@@ -149,7 +156,7 @@ services:
         value: "true"       # active default: include full-market momentum candidates
         sync: false
       - key: MARKET_SCAN_CANDIDATES
-        value: "40"
+        value: "10"         # full-market momentum names per cycle; engine caps at 10
         sync: false
       - key: MARKET_MIN_PRICE
         value: "0.50"       # include sub-$1 names while avoiding extreme microcap noise
