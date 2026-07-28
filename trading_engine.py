@@ -51,6 +51,35 @@ class TradingEngine:
             s = s[1:-1].strip()
         return s
 
+    @staticmethod
+    def _pct_env(name: str, default_percent: float) -> float:
+        """Read a stop/trailing percentage env var and return it as a FRACTION.
+
+        The dashboard and the settings API speak whole percents (e.g. 2.2 = 2.2%),
+        but this engine compares against a fraction (0.022). Historically the boot
+        read here divided nothing, so a value like TRAILING_STOP_PCT=2.2 was taken
+        literally as 220% — effectively disabling the stop until the first live
+        settings poll. This normalizer accepts either convention and always yields
+        a sane fraction:
+
+            2.2  -> 0.022   (whole percent, the dashboard/manifest convention)
+            4    -> 0.04
+            0.03 -> 0.03    (legacy fraction convention, unchanged)
+
+        Anything >= 1 is treated as a whole percent; anything below 1 is treated as
+        an already-normalized fraction. A missing/blank/invalid value falls back to
+        default_percent (given as a whole percent, e.g. 5.0 for a 5% stop).
+        """
+        raw = os.environ.get(name)
+        try:
+            value = float(raw) if raw not in (None, "") else float(default_percent)
+        except (TypeError, ValueError):
+            value = float(default_percent)
+        if value <= 0:
+            value = float(default_percent)
+        fraction = (value / 100.0) if value >= 1.0 else value
+        return max(0.001, fraction)
+
     def _calc_macd(self, closes: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9):
         if len(closes) < slow + signal:
             return None, None
@@ -118,8 +147,10 @@ class TradingEngine:
         self.auto_trade = True   # default ON; dashboard can override
 
         # ── Risk controls (live-updateable from dashboard UI) ──
-        self.loss_threshold    = float(os.environ.get("LOSS_THRESHOLD",    "0.05"))  # 5% absolute floor
-        self.trailing_stop_pct = float(os.environ.get("TRAILING_STOP_PCT", "0.03"))  # 3% drop from peak
+        # Read as whole percent OR legacy fraction; always stored as a fraction.
+        # (2.2 -> 0.022, 4 -> 0.04, 0.05 -> 0.05). See _pct_env for the rationale.
+        self.loss_threshold    = self._pct_env("LOSS_THRESHOLD",    5.0)  # 5% absolute floor
+        self.trailing_stop_pct = self._pct_env("TRAILING_STOP_PCT", 3.0)  # 3% drop from peak
 
         # Forecast-based early exit: sell before trailing stop fires when climb peaks
         self.forecast_exit_enabled = os.environ.get("FORECAST_EXIT_ENABLED", "true").lower() == "true"

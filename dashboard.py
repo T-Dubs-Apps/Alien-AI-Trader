@@ -1047,14 +1047,41 @@ _RUN_SECONDS     = int(os.environ.get("RUN_SECONDS",             "21540"))
 _LADDER_INTERVAL = int(os.environ.get("LADDER_INTERVAL",         "120"))
 _HEARTBEAT_SECS  = int(os.environ.get("HEARTBEAT_EVERY_SECONDS", "10"))
 
+def _pct_setting_env(name: str, default_percent: float) -> float:
+    """Read a stop/trailing percentage env var and return it as a WHOLE PERCENT.
+
+    The settings UI, the stored settings, and the /api/settings/trading payload
+    all speak whole percents (e.g. 2.2 = 2.2%); the engine divides by 100 when it
+    applies them. This mirrors TradingEngine._pct_env so a value entered in either
+    convention is displayed and forwarded consistently:
+
+        2.2  -> 2.2    (whole percent — dashboard/manifest convention)
+        4    -> 4.0
+        0.03 -> 3.0    (legacy fraction promoted to percent)
+
+    Values >= 1 are treated as whole percents; values below 1 are treated as a
+    fraction and promoted to percent. Blank/invalid falls back to default_percent.
+    """
+    raw = os.environ.get(name)
+    try:
+        value = float(raw) if raw not in (None, "") else float(default_percent)
+    except (TypeError, ValueError):
+        value = float(default_percent)
+    if value <= 0:
+        value = float(default_percent)
+    return value if value >= 1.0 else value * 100.0
+
+
 # In-memory live trading settings — the engine polls this endpoint every cycle
 _trading_settings: dict = {
     # ── Auto-trade master switch (toggled from UI) ───────────────────────────
     "auto_trade":          True,   # True = engine executes buys/sells autonomously
     # ── Core scan / execution settings ──────────────────────────────────────
-    "poll_seconds":        int(os.environ.get("POLL_SECONDS",        "15")),
-    "trailing_stop_pct":   float(os.environ.get("TRAILING_STOP_PCT", "3.0")),
-    "loss_threshold":      float(os.environ.get("LOSS_THRESHOLD",    "5.0")),
+    # Floor matches the engine's hard minimum (max(60, ...)) so the UI never
+    # implies a faster scan cadence than Alpaca can safely sustain.
+    "poll_seconds":        max(60, int(os.environ.get("POLL_SECONDS",  "60"))),
+    "trailing_stop_pct":   _pct_setting_env("TRAILING_STOP_PCT", 3.0),
+    "loss_threshold":      _pct_setting_env("LOSS_THRESHOLD",    5.0),
     "max_trades_per_hour": int(os.environ.get("MAX_TRADES_PER_HOUR", "30")),
     "scan_all_market":     os.environ.get("SCAN_ALL_MARKET", "false").lower() == "true",
     "max_positions":       int(os.environ.get("MAX_POSITIONS",       "5")),
