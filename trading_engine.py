@@ -155,6 +155,16 @@ class TradingEngine:
         # Forecast-based early exit: sell before trailing stop fires when climb peaks
         self.forecast_exit_enabled = os.environ.get("FORECAST_EXIT_ENABLED", "true").lower() == "true"
 
+        # ── Soft entry-gate switches (default ON = unchanged behavior) ──────────
+        # These two gates can quietly filter out otherwise-valid entries. Set to
+        # false to relax them (useful for confirming whether they are the reason
+        # the engine is not buying). Hard stops, caps and reconciliation are NOT
+        # affected by these switches.
+        #   SENTIMENT_GATE_ENABLED=false → don't turn a BUY into HOLD on negative news.
+        #   FORECAST_GATE_ENABLED=false  → don't require a forecast-up on high-risk entries.
+        self.sentiment_gate_enabled = os.environ.get("SENTIMENT_GATE_ENABLED", "true").lower() == "true"
+        self.forecast_gate_enabled  = os.environ.get("FORECAST_GATE_ENABLED",  "true").lower() == "true"
+
         # Scan interval (live-configurable from UI)
         self.poll_seconds = max(60, int(os.environ.get("POLL_SECONDS", "60")))
 
@@ -1741,8 +1751,8 @@ class TradingEngine:
         sentiment = get_symbol_sentiment(symbol)
         signal["sentiment_score"] = sentiment["sentiment_score"]
         signal["sentiment_headlines"] = sentiment["headlines"]
-        # Block BUY if sentiment is negative
-        if signal["verdict"] == "BUY" and sentiment["sentiment_score"] < 0:
+        # Block BUY if sentiment is negative (unless the sentiment gate is disabled)
+        if self.sentiment_gate_enabled and signal["verdict"] == "BUY" and sentiment["sentiment_score"] < 0:
             signal["verdict"] = "HOLD"
             signal["sentiment_blocked"] = True
         # If mode is 'AI_MODEL', override verdict with ML model prediction
@@ -1761,6 +1771,8 @@ class TradingEngine:
             # Only enter if we have an open position slot
             if signal["verdict"] == "BUY" and len(self.current_holdings) < self.max_positions:
                 forecast_required, forecast_reasons = self._forecast_required_for_entry(signal, price)
+                if not self.forecast_gate_enabled:
+                    forecast_required = False
                 if forecast_required and signal.get("forecast_direction") != "up":
                     signal["verdict"] = "HOLD"
                     signal["forecast_blocked"] = True

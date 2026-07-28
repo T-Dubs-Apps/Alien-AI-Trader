@@ -4156,12 +4156,48 @@ else:
           "its control endpoints are OPEN to anyone with the URL. Set DASHBOARD_PASSWORD "
           "in your Render env vars to lock it down.")
 
+def _keep_alive_loop() -> None:
+    """Keep a free-tier host awake so the in-process trading engine never stops
+    scanning. Render (and similar) spin a free web service down after ~15 min of
+    no INBOUND traffic — which suspends the engine thread and means it can miss
+    entries for long stretches. Pinging our own PUBLIC url on an interval creates
+    real inbound traffic and resets that idle timer.
+
+    Pinging loopback (127.0.0.1/localhost) does NOT count as inbound traffic, so
+    this only helps when DASHBOARD_BASE_URL is the public https URL. On a paid
+    instance (no spin-down) this is harmless. Disable with KEEP_ALIVE_ENABLED=false.
+    """
+    import requests as _rq
+    base = (os.environ.get("DASHBOARD_BASE_URL") or os.environ.get("DASHBOARD_URL") or "").strip().rstrip("/")
+    interval = max(60, int(os.environ.get("KEEP_ALIVE_INTERVAL_SECONDS", "600")))
+    if (not base) or base.startswith("http://127.0.0.1") or "localhost" in base:
+        print("[KEEPALIVE] No public DASHBOARD_BASE_URL set — self-ping disabled. "
+              "On free tier the service will still spin down (and the engine stops "
+              "scanning); set DASHBOARD_BASE_URL to your public https URL to prevent it.")
+        return
+    url = base + "/health"
+    print(f"[KEEPALIVE] Self-ping enabled: GET {url} every {interval}s to prevent free-tier spin-down.")
+    while True:
+        try:
+            _rq.get(url, timeout=10)
+        except Exception:
+            pass
+        time.sleep(interval)
+
+
 if BACKUP_ENABLED:
     _backup_thread = threading.Thread(
         target=_backup_loop, daemon=True, name="StateBackup"
     )
     _backup_thread.start()
     print(f"[BACKUP] Periodic snapshots enabled (every {BACKUP_INTERVAL_SECONDS}s, keep {BACKUP_RETENTION}).")
+
+if (os.environ.get("KEEP_ALIVE_ENABLED", "true").lower() == "true"
+        and os.environ.get("DISABLE_ENGINE_AUTOSTART") != "1"):
+    _keepalive_thread = threading.Thread(
+        target=_keep_alive_loop, daemon=True, name="KeepAlive"
+    )
+    _keepalive_thread.start()
 
 if os.environ.get("DISABLE_ENGINE_AUTOSTART") != "1":
     # Independent watchdog: keeps last_heartbeat fresh even if supervisor crashes.
