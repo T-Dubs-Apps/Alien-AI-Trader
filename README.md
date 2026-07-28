@@ -43,6 +43,43 @@ Then run `LAUNCH.bat` or `INSTALL.ps1`.
 
 ---
 
+## 🧭 Cloud or Your PC? — Which Should You Run?
+
+There are two ways to run Alien AI Trader. **New users should start on their own PC.**
+
+| | 💻 **On your PC** (recommended to start) | ☁️ **On Render** (cloud, 24/7) |
+|---|---|---|
+| **It actually runs** | Yes — while your PC is on, the engine scans and trades **non-stop**. Easiest way to watch it buy and sell. | Yes, around the clock — **but** the free tier **sleeps after ~15 min idle**, which pauses trading. |
+| **Keeping it awake** | Nothing to do. | Needs a **paid instance**, or set `DASHBOARD_BASE_URL` so the built-in **keep-alive** self-ping holds it open. |
+| **Cost / accounts** | Free. No hosting account. | Free tier available; paid removes spin-down. |
+| **Your keys** | Never leave your computer. | Stored in your own private Render service. |
+| **Best for** | Trying it out, seeing it work, full control. | Leaving it running long-term with your PC off. |
+
+> **Why the PC is best for a new user:** the trading engine runs *inside* the app process. On a home PC that process runs continuously, so the AI keeps scanning and can actually place trades you can watch. On Render's **free** tier the service spins down when idle and the engine stops — so a brand-new user is far more likely to see it work by running it locally first, then moving to Render (paid, or with the keep-alive) once they're happy.
+
+### 🔗 Links
+
+| What | Link |
+|------|------|
+| **Get the Trader** (choose Cloud **or** PC — has everything) | `https://alien-ai-trader-dashboard.onrender.com/get` |
+| **Trader on your PC** (download ZIP) | `https://github.com/T-Dubs-Apps/Alien-AI-Trader/archive/refs/heads/main.zip` |
+| **Trader on Render** (deploy your own cloud copy) | `https://render.com/deploy?repo=https://github.com/T-Dubs-Apps/Alien-AI-Trader` |
+| **Trader on GitHub** (source) | `https://github.com/T-Dubs-Apps/Alien-AI-Trader` |
+
+---
+
+## 🆕 What's New — July 2026
+
+- **Autonomous buying, unblocked.** Fixed the causes of the engine not buying on its own: the impossible VWAP confluence gate, a dead Alpha Vantage bars fallback, and a free-tier spin-down that put the engine to sleep. Added a **keep-alive** self-ping (`KEEP_ALIVE_ENABLED`, needs `DASHBOARD_BASE_URL`).
+- **Stops actually apply.** `LOSS_THRESHOLD` / `TRAILING_STOP_PCT` now accept a whole percent *or* a fraction (`4.0` and `0.04` both mean 4%), closing a boot-time window where stops read as 400%/220%.
+- **Market scan on by default.** `SCAN_ALL_MARKET` now defaults to `true`, with the engine's built-in Alpaca throttles (workers capped at 2, candidates at 10, 60s floor).
+- **Candlesticks page no longer rate-limits.** `/api/candles` is cached per symbol/timeframe and serves the last good bars on a `429` instead of the old "too many requests" error; the LIVE view pauses while the tab is hidden.
+- **Deploy on Render without errors.** New users only need to enter `DASHBOARD_PASSWORD` — `ALLOWED_ORIGINS` and `ADMIN_API_TOKEN` are no longer fatal (they have safe fallbacks and `ADMIN_API_TOKEN` is auto-generated).
+- **New tuning switches.** `SENTIMENT_GATE_ENABLED` and `FORECAST_GATE_ENABLED` let you relax the two soft entry gates if the engine is being too picky.
+- **Diagnostic tool.** `python diagnose_no_buy.py --market` prints, per stock, exactly which gate is blocking a buy (read-only, never trades). Needs valid Alpaca paper keys.
+
+---
+
 ## 🚀 Getting Started — 4 Simple Steps
 
 > **Total time: about 5–10 minutes (most of it waiting for packages to download)**
@@ -489,9 +526,9 @@ keep API usage predictable for most users:
 
 1. `TRADING_MODE=paper` and `LIVE_TRADING_ENABLED=false`
 2. `MARKET_HOURS_ONLY=true` (strategy loop pauses when market is closed)
-3. `POLL_SECONDS=60` (steadier API usage than 15/30 second loops)
-4. `SCAN_ALL_MARKET=false` initially (turn on only after validation)
-5. `MAX_TRADES_PER_HOUR=6` (reduces overtrading and runaway behavior)
+3. `POLL_SECONDS=60` (steadier API usage than 15/30 second loops; this is also the engine's hard floor)
+4. `SCAN_ALL_MARKET=true` (full-market momentum scanning is now **on by default**; the engine caps scan workers at 2 and candidates at 10 so it stays within Alpaca's limits)
+5. `MAX_TRADES_PER_HOUR=20` (throttle; still well under burst limits)
 6. `RUN_SECONDS=21540` (5h59m recycle keeps sessions healthy while reconciling positions on restart)
 
 Why this profile works:
@@ -531,13 +568,18 @@ Why this profile works:
 | `INITIAL_CAPITAL` | `0` | Starting capital $ (0 = fixed 1-share mode) |
 | `RISK_PER_TRADE_PCT` | `2.0` | % of capital risked per trade |
 | `MAX_POSITION_PCT` | `20.0` | Max % in any single stock |
-| `TRAILING_STOP_PCT` | `3.0` | % drop from peak before selling |
-| `LOSS_THRESHOLD` | `5.0` | % drop from buy price before stop-loss |
+| `TRAILING_STOP_PCT` | `3.0` | % drop from peak before selling. **Accepts a whole percent OR a fraction** — `2.2` and `0.022` both mean 2.2%. |
+| `LOSS_THRESHOLD` | `5.0` | % drop from buy price before stop-loss. Same percent-or-fraction rule as above. |
 | `FORECAST_EXIT_ENABLED` | `true` | Sell early on momentum reversal |
 | `RUN_SECONDS` | `21540` | Session length — 5h 59m (under API limits) |
-| `MAX_TRADES_PER_HOUR` | `6` | Trade throttle (recommended baseline) |
+| `MAX_TRADES_PER_HOUR` | `20` | Trade throttle |
 | `MARKET_HOURS_ONLY` | `true` | Pause strategy loop outside market hours |
-| `SCAN_ALL_MARKET` | `false` | Scan all US equities for momentum movers |
+| `SCAN_ALL_MARKET` | `true` | Scan all US equities for momentum movers (**on by default**) |
+| `SENTIMENT_GATE_ENABLED` | `true` | Blocks a buy on negative news. Set `false` to relax if the engine isn't entering. |
+| `FORECAST_GATE_ENABLED` | `true` | Requires an up-forecast on high-risk entries. Set `false` to relax. |
+| `KEEP_ALIVE_ENABLED` | `true` | Self-pings your public URL so a free-tier host doesn't spin down and stop trading. Needs `DASHBOARD_BASE_URL` set to your public URL. |
+| `KEEP_ALIVE_INTERVAL_SECONDS` | `600` | How often the keep-alive ping fires (seconds). |
+| `DASHBOARD_BASE_URL` | *(unset)* | Your public app URL (e.g. `https://your-app.onrender.com`). Required for the keep-alive; also used for internal links. |
 
 ---
 
