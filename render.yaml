@@ -69,6 +69,12 @@ services:
       - key: FLASK_SECRET
         generateValue: true
 
+      # Admin token for sensitive ops endpoints, generated uniquely for you.
+      # Auto-set (never prompted), so it hardens those endpoints without adding
+      # a step. If you don't have it, they still work behind your dashboard login.
+      - key: ADMIN_API_TOKEN
+        generateValue: true
+
       # Boot mode. The real control is the in-app Paper↔Live toggle, which is
       # license-gated. Keeping this 'paper' means every deployment starts safe.
       - key: TRADING_MODE

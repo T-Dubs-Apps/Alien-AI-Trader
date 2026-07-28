@@ -3740,7 +3740,9 @@
       if(liveTimer){ clearInterval(liveTimer); liveTimer=null; }
       loadCandles(symbol, tf);
       if(tf==='live'){
-        liveTimer=setInterval(()=>{ if(currentSymbol) loadCandles(currentSymbol, 'live'); }, 15000);
+        // Skip refreshes while the tab is hidden — no point spending Alpaca calls
+        // on a chart nobody is looking at.
+        liveTimer=setInterval(()=>{ if(currentSymbol && !document.hidden) loadCandles(currentSymbol, 'live'); }, 15000);
       }
     }
     function stopLive(){ if(liveTimer){ clearInterval(liveTimer); liveTimer=null; } }
@@ -3787,12 +3789,18 @@
           document.getElementById('candleLastPrice').textContent = '$' + Number(last.close).toFixed(2);
           const meta = (TF.find(t=>t.id===tf) || {});
           status.textContent = j.count + ' candles · ' + (meta.bars || tf)
-                             + (j.intraday ? ' · times in US market time (ET)' : '');
+                             + (j.intraday ? ' · times in US market time (ET)' : '')
+                             + (j.stale ? ' · cached (rate-limited)' : (j.cached ? ' · cached' : ''));
         } else {
           if(tf!=='live') candleSeries.setData([]);   // keep last live frame if a refresh comes back empty
-          status.textContent = (tf==='live')
-            ? 'Live: waiting for intraday bars (free feed can lag ~15 min). Auto-refreshing…'
-            : ((j.message || 'No data available') + ' (verify Alpaca data keys).');
+          if (j.rate_limited) {
+            // A 429 is NOT a key problem — the server already worded it correctly.
+            status.textContent = j.message || 'Alpaca rate limit reached — please wait a moment and try again.';
+          } else {
+            status.textContent = (tf==='live')
+              ? 'Live: waiting for intraday bars (free feed can lag ~15 min). Auto-refreshing…'
+              : (j.message || 'No data available for this symbol/timeframe.');
+          }
         }
       } catch(e){
         status.textContent = 'Error loading candles: ' + e.message;

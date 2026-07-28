@@ -369,20 +369,27 @@ def _enforce_production_security_baseline() -> None:
     if not _strict_guard_enabled():
         return
 
-    missing: List[str] = []
+    # DASHBOARD_PASSWORD is the ONE hard requirement: without it the public Render
+    # URL would let a stranger place orders. ALLOWED_ORIGINS and ADMIN_API_TOKEN
+    # have SAFE fallbacks (empty origins = same-origin only; no admin token =
+    # admin endpoints fall back to the dashboard login session), so they are
+    # recommended for extra hardening but must NEVER block a new user's first
+    # deploy — the blueprint promises "set a password and go", and this honors it.
     if not _normalize_dashboard_password(DASHBOARD_PASSWORD):
-        missing.append("DASHBOARD_PASSWORD")
-    if not origins:
-        missing.append("ALLOWED_ORIGINS")
-    if not _normalize_dashboard_password(ADMIN_API_TOKEN):
-        missing.append("ADMIN_API_TOKEN")
-
-    if missing:
         raise RuntimeError(
-            "Refusing to start in production with insecure configuration. "
-            f"Missing required env var(s): {', '.join(missing)}. "
-            "Set required values or disable STRICT_PRODUCTION_GUARDS only for local development."
+            "Refusing to start in production without DASHBOARD_PASSWORD. Your Render "
+            "URL is public; set a dashboard password so only you can reach the "
+            "controls. (Disable STRICT_PRODUCTION_GUARDS only for local development.)"
         )
+
+    recommended: List[str] = []
+    if not origins:
+        recommended.append("ALLOWED_ORIGINS (running same-origin only, which is safe)")
+    if not _normalize_dashboard_password(ADMIN_API_TOKEN):
+        recommended.append("ADMIN_API_TOKEN (admin endpoints use your dashboard login instead)")
+    if recommended:
+        print("[SECURITY] Started with safe defaults for: " + "; ".join(recommended)
+              + ". Set these for stricter hardening, but they are not required.")
 
     # Validate explicit origins. In strict mode, production origins must be
     # HTTPS; localhost/dev loopback is allowed for local tooling and testing.
@@ -1137,7 +1144,7 @@ _trading_settings: dict = {
     "trailing_stop_pct":   _pct_setting_env("TRAILING_STOP_PCT", 3.0),
     "loss_threshold":      _pct_setting_env("LOSS_THRESHOLD",    5.0),
     "max_trades_per_hour": int(os.environ.get("MAX_TRADES_PER_HOUR", "30")),
-    "scan_all_market":     os.environ.get("SCAN_ALL_MARKET", "false").lower() == "true",
+    "scan_all_market":     os.environ.get("SCAN_ALL_MARKET", "true").lower() == "true",
     "max_positions":       int(os.environ.get("MAX_POSITIONS",       "5")),
     "initial_capital":     float(os.environ.get("INITIAL_CAPITAL",   "0")),
     # ── Position sizing / risk controls ─────────────────────────────────────
@@ -2116,8 +2123,35 @@ footer a{color:#60a5fa;text-decoration:none}
     <div class="sub">AI-powered stock trading on autopilot &mdash; scans, buys the climb, sells the peak.</div>
   </div>
 
-  <a class="dl-btn" href="__DEPLOY__" target="_blank" rel="noopener">&#9729;&#65039; Deploy Your Personal Trader on Render</a>
-  <div class="dl-sub">Free &middot; runs in the cloud 24/7 (no PC needed) &middot; starts in safe <b>paper mode</b> (practice money)</div>
+  <div class="card">
+    <h2>Two ways to run it &mdash; which is right for you?</h2>
+    <div class="secondary" style="align-items:stretch">
+      <div style="flex:1 1 240px;background:#0a1220;border:1px solid var(--green);border-radius:10px;padding:14px">
+        <div style="font-weight:800;color:var(--green2)">&#128187; On your PC &mdash; best to start</div>
+        <ul style="margin:8px 0 0 18px;color:var(--muted);font-size:.86rem;line-height:1.5">
+          <li><b style="color:var(--text)">It actually runs.</b> While your PC is on, the AI scans and trades non-stop &mdash; the surest way to watch it buy and sell.</li>
+          <li>Nothing to host, no cloud account, completely free.</li>
+          <li>Your keys never leave your computer.</li>
+          <li>Double-click to launch &mdash; set up in minutes.</li>
+        </ul>
+      </div>
+      <div style="flex:1 1 240px;background:#0a1220;border:1px solid var(--border);border-radius:10px;padding:14px">
+        <div style="font-weight:800;color:#93c5fd">&#9729;&#65039; On Render (cloud) &mdash; 24/7 later</div>
+        <ul style="margin:8px 0 0 18px;color:var(--muted);font-size:.86rem;line-height:1.5">
+          <li>Runs around the clock even with your PC off.</li>
+          <li>Best once you're ready to leave it running long-term.</li>
+          <li><b style="color:var(--text)">Heads-up:</b> the free tier sleeps when idle, which pauses trading. A paid instance (or a public URL for the built-in keep-alive) keeps it awake.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="dl-sub" style="margin-top:12px">New here? <b>Start on your PC</b> to see it trade, then move to Render for 24/7 once you're happy with it.</div>
+  </div>
+
+  <a class="dl-btn" href="__ZIP__">&#128187; Get the Trader for Your PC &mdash; Recommended</a>
+  <div class="dl-sub">Free &middot; runs whenever your PC is on &middot; starts in safe <b>paper mode</b> (practice money)</div>
+
+  <a class="dl-btn" href="__DEPLOY__" target="_blank" rel="noopener" style="background:linear-gradient(135deg,#60a5fa,#2563eb);color:#04122a;box-shadow:0 8px 30px rgba(37,99,235,.35);border-color:#1d4ed8">&#9729;&#65039; Or Deploy on Render (Cloud, 24/7)</a>
+  <div class="dl-sub">Free &middot; runs in the cloud &middot; free tier sleeps when idle (see note above)</div>
 
   <div class="card">
     <h2>How it works &mdash; 4 easy steps</h2>
@@ -2978,11 +3012,31 @@ def api_quotes():
     return jsonify(out), 200
 
 
+# Candlesticks page cache: {(symbol, tf_key): (payload_dict, fetched_at)}.
+# The chart shares one Alpaca account/rate-limit with the trading engine and the
+# LIVE view refetches every 15s, so uncached calls quickly trip HTTP 429
+# ("too many requests"). Historical frames barely change intraday, so they are
+# cached for minutes; intraday/live frames for seconds. On a rate limit we serve
+# the last good bars instead of showing an error.
+_candles_cache: "dict[str, tuple]" = {}
+_CANDLES_TTL = {
+    "live": 15, "1d": 20, "5d": 45, "1mo": 120,   # intraday: seconds/low minutes
+    "6mo": 900, "1y": 900, "5y": 1800, "max": 1800,  # historical: 15-30 min
+}
+_CANDLES_TTL_DEFAULT = 300
+
+
+def _is_rate_limit_error(msg: str) -> bool:
+    m = (msg or "").lower()
+    return "429" in m or "too many request" in m or "rate limit" in m
+
+
 @app.route("/api/candles", methods=["GET"])
 def api_candles():
     """OHLC candles for the Candlesticks page — one symbol, selectable timeframe.
     Read-only market data (no orders). Fails gracefully so the chart can show a
-    message instead of breaking. Same account/feed the rest of the app uses."""
+    message instead of breaking. Same account/feed the rest of the app uses.
+    Cached per (symbol, timeframe) to stay well under Alpaca's rate limit."""
     from alpaca_trade_api.rest import TimeFrame, TimeFrameUnit
     symbol = (request.args.get("symbol", "") or "").strip().upper()
     tf_key = (request.args.get("timeframe", "day") or "day").strip().lower()
@@ -3020,8 +3074,22 @@ def api_candles():
     tf_key = LEGACY.get(tf_key, tf_key)
     tf, days_back, limit, intraday, keep_last = TF.get(tf_key, TF["1y"])
 
+    # ── Serve from cache when fresh (keeps us under Alpaca's rate limit) ──────
+    cache_key = f"{symbol}:{tf_key}"
+    ttl = _CANDLES_TTL.get(tf_key, _CANDLES_TTL_DEFAULT)
+    now_ts = time.time()
+    cached = _candles_cache.get(cache_key)
+    if cached and (now_ts - cached[1]) < ttl:
+        payload = dict(cached[0])
+        payload["cached"] = True
+        return jsonify(payload), 200
+
     client = _active_alpaca()
     if not client:
+        # No client, but a prior good pull may still be usable.
+        if cached:
+            payload = dict(cached[0]); payload["cached"] = True; payload["stale"] = True
+            return jsonify(payload), 200
         return jsonify({"status": "error", "candles": [],
                         "message": "Market data client not configured (set Alpaca keys)."}), 200
 
@@ -3055,13 +3123,35 @@ def api_candles():
     if keep_last and len(candles) > keep_last:
         candles = candles[-keep_last:]
 
-    return jsonify({
+    # ── On empty/rate-limited fetch, serve the last good bars if we have them ──
+    if not candles and cached:
+        payload = dict(cached[0])
+        payload["cached"] = True
+        payload["stale"] = True
+        payload["rate_limited"] = _is_rate_limit_error(err)
+        payload["message"] = (
+            "Alpaca rate limit reached — showing last cached data. It will refresh shortly."
+            if _is_rate_limit_error(err) else (err or payload.get("message"))
+        )
+        return jsonify(payload), 200
+
+    payload = {
         "status": "ok" if candles else "empty",
         "symbol": symbol, "timeframe": tf_key, "count": len(candles),
         "intraday": intraday,
+        "cached": False,
+        "rate_limited": (not candles) and _is_rate_limit_error(err),
         "candles": candles,
-        "message": None if candles else (err or "No bars returned for this symbol/timeframe."),
-    }), 200
+        "message": None if candles else (
+            "Alpaca rate limit reached — please wait a moment and try again."
+            if _is_rate_limit_error(err)
+            else (err or "No bars returned for this symbol/timeframe.")
+        ),
+    }
+    # Only cache successful pulls; never cache an empty/error result.
+    if candles:
+        _candles_cache[cache_key] = (payload, now_ts)
+    return jsonify(payload), 200
 
 
 @app.route("/api/stockinfo", methods=["GET"])
