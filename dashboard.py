@@ -3024,6 +3024,9 @@ _CANDLES_TTL = {
     "6mo": 900, "1y": 900, "5y": 1800, "max": 1800,  # historical: 15-30 min
 }
 _CANDLES_TTL_DEFAULT = 300
+# Hard cap so the cache can't grow without bound (full-market scanning means many
+# distinct symbols can be charted). When exceeded, the oldest entries are dropped.
+_CANDLES_CACHE_MAX = 300
 
 
 def _is_rate_limit_error(msg: str) -> bool:
@@ -3151,6 +3154,10 @@ def api_candles():
     # Only cache successful pulls; never cache an empty/error result.
     if candles:
         _candles_cache[cache_key] = (payload, now_ts)
+        # Evict oldest entries if the cache grows past its cap.
+        if len(_candles_cache) > _CANDLES_CACHE_MAX:
+            for old_key in sorted(_candles_cache, key=lambda k: _candles_cache[k][1])[:-_CANDLES_CACHE_MAX]:
+                _candles_cache.pop(old_key, None)
     return jsonify(payload), 200
 
 
