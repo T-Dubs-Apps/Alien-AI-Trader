@@ -275,7 +275,9 @@ class TradingEngine:
         self.rocket_breakout_lookback_bars = int(os.environ.get("ROCKET_BREAKOUT_LOOKBACK_BARS", "20"))
 
         # ── Full-market scan ──
-        self.scan_all_market         = os.environ.get("SCAN_ALL_MARKET", "true").lower() == "true"
+        # Default OFF — full-market scanning overwhelms the free Alpaca data plan's
+        # rate limit (429s starve every data call). Enable only on a paid data plan.
+        self.scan_all_market         = os.environ.get("SCAN_ALL_MARKET", "false").lower() == "true"
         self._market_scan_candidates = max(1, min(10, int(os.environ.get("MARKET_SCAN_CANDIDATES", "10"))))
 
         # Trailing-stop high-water marks: {symbol: highest_price_since_buy}

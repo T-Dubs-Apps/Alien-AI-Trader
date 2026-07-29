@@ -1144,7 +1144,11 @@ _trading_settings: dict = {
     "trailing_stop_pct":   _pct_setting_env("TRAILING_STOP_PCT", 3.0),
     "loss_threshold":      _pct_setting_env("LOSS_THRESHOLD",    5.0),
     "max_trades_per_hour": int(os.environ.get("MAX_TRADES_PER_HOUR", "30")),
-    "scan_all_market":     os.environ.get("SCAN_ALL_MARKET", "true").lower() == "true",
+    # Default OFF: full-market scanning fetches dozens of symbols per cycle, which
+    # exceeds the FREE Alpaca data plan's ~200 req/min limit and rate-limits (429)
+    # every data call — starving even the watchlist. Turn it on only with a paid
+    # Alpaca data subscription, or curate a wider STOCK_LIST instead.
+    "scan_all_market":     os.environ.get("SCAN_ALL_MARKET", "false").lower() == "true",
     "max_positions":       int(os.environ.get("MAX_POSITIONS",       "5")),
     "initial_capital":     float(os.environ.get("INITIAL_CAPITAL",   "0")),
     # ── Position sizing / risk controls ─────────────────────────────────────
@@ -1384,7 +1388,7 @@ def _apply_pro_gating(resp: dict) -> None:
 # ---- Quote cache (prevents hammering APIs) ----
 _quote_cache: Dict[str, Dict[str, Any]] = {}   # sym -> {data, fetched_at}
 _quote_cache_lock = Lock()
-QUOTE_CACHE_TTL = int(os.environ.get("QUOTE_CACHE_TTL", "8"))  # seconds
+QUOTE_CACHE_TTL = int(os.environ.get("QUOTE_CACHE_TTL", "30"))  # seconds — higher = fewer Alpaca calls from browser polling
 
 
 @app.before_request
