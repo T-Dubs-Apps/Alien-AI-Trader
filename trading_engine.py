@@ -866,8 +866,14 @@ class TradingEngine:
         profile = self._risk_profile_for_level(raw_level)
         level = int(round(float(raw_level)))
         signature = (level,) + tuple(profile[k] for k in sorted(profile))
-        if signature == self._risk_profile_signature:
-            return
+        # Re-apply the confirmed profile on EVERY poll. The earlier version
+        # returned here whenever the level was unchanged, but _poll_live_settings
+        # copies the dashboard's individual fields (rsi_buy_max, sma_spread_min,
+        # rocket_*, forecast_*) into the engine just before calling this — so
+        # skipping re-application let those defaults silently revert a confirmed
+        # level-8 profile back to ~level-5 pickiness about one cycle after it was
+        # set. Only the user-facing alert below is gated on an actual change.
+        changed = signature != self._risk_profile_signature
 
         self.risk_per_trade_pct = max(0.1, float(profile["risk_per_trade_pct"]))
         self.max_position_pct = max(1.0, float(profile["max_position_pct"]))
@@ -887,14 +893,15 @@ class TradingEngine:
         self.risk_profile_level = level
         self.risk_profile_name = str(profile["name"])
         self._risk_profile_signature = signature
-        self.send_alert(
-            f"RISK PROFILE CONFIRMED: level {level}/10 — {self.risk_profile_name}. "
-            f"Entry sizing is {self.risk_per_trade_pct:.2f}% risk/trade, "
-            f"maximum {self.max_position_pct:.1f}% per position, spread across "
-            f"at least {self.min_positions} positions. Existing holdings and all "
-            f"sell protections remain active.",
-            level="warn" if level >= 8 else "info",
-        )
+        if changed:
+            self.send_alert(
+                f"RISK PROFILE CONFIRMED: level {level}/10 — {self.risk_profile_name}. "
+                f"Entry sizing is {self.risk_per_trade_pct:.2f}% risk/trade, "
+                f"maximum {self.max_position_pct:.1f}% per position, spread across "
+                f"at least {self.min_positions} positions. Existing holdings and all "
+                f"sell protections remain active.",
+                level="warn" if level >= 8 else "info",
+            )
 
     def _poll_live_settings(self):
         """
@@ -1654,17 +1661,35 @@ class TradingEngine:
             # upper-band ceiling; the VWAP anti-chase guard still blocks badly
             # stretched prices, so we buy uptrend dips instead of only perfect
             # mid-band setups. Levels 1–7 keep the full confluence unchanged.
-            _aggressive_entry = (self.risk_profile_level or 0) >= 8
+            _level = self.risk_profile_level or 5
+            _aggressive_entry = _level >= 8
             _upper_band_ok = True if _aggressive_entry else price_below_upper
-            if (
+            # The slider progressively loosens the entry gate at the top so the
+            # bot actually takes trades. MACD confirmation is required through
+            # level 8 but dropped at 9-10. All sell protections, the trailing
+            # stop, and the hard loss threshold are unchanged in every mode.
+            _macd_ok = (macd > macd_signal) if _level <= 8 else True
+            trend_entry = (
                 golden_cross and
                 rsi < self.rsi_buy_max and
-                macd > macd_signal and
+                _macd_ok and
                 price_above_lower and _upper_band_ok and
                 price_not_overextended
-            ):
+            )
+            # Drastic-drop dip entry (levels >= 8): buy a genuine pullback —
+            # clearly oversold RSI while trading at or below VWAP — regardless of
+            # the golden cross or MACD. The oversold line widens with the slider
+            # (8 -> 34, 9 -> 37, 10 -> 40). price <= vwap ensures we buy a
+            # discount, never chase; stop-loss/trailing still protect the entry.
+            dip_entry = False
+            if _aggressive_entry:
+                _oversold_line = 34.0 + (_level - 8) * 3.0
+                dip_entry = (rsi < _oversold_line and price <= vwap)
+            if trend_entry or dip_entry:
                 signal["verdict"] = "BUY"
                 signal["spread_pct"] = round(spread_pct, 3)
+                if dip_entry and not trend_entry:
+                    signal["dip_entry"] = True
                 if _aggressive_entry and not price_below_upper:
                     signal["aggressive_entry"] = True
             # SELL: any trigger fires. In aggressive mode we intentionally buy
@@ -1816,7 +1841,11 @@ class TradingEngine:
         signal["sentiment_score"] = sentiment["sentiment_score"]
         signal["sentiment_headlines"] = sentiment["headlines"]
         # Block BUY if sentiment is negative (unless the sentiment gate is disabled)
-        if self.sentiment_gate_enabled and signal["verdict"] == "BUY" and sentiment["sentiment_score"] < 0:
+        # Sentiment veto softens as the slider rises: mildly negative news no
+        # longer blocks aggressive entries (8: < -0.3, 9: < -0.6, 10: off).
+        _sent_lvl = self.risk_profile_level or 5
+        _sent_floor = 0.0 if _sent_lvl < 8 else (-0.3 if _sent_lvl == 8 else (-0.6 if _sent_lvl == 9 else -1.01))
+        if self.sentiment_gate_enabled and signal["verdict"] == "BUY" and sentiment["sentiment_score"] < _sent_floor:
             signal["verdict"] = "HOLD"
             signal["sentiment_blocked"] = True
         # If mode is 'AI_MODEL', override verdict with ML model prediction
@@ -1835,7 +1864,9 @@ class TradingEngine:
             # Only enter if we have an open position slot
             if signal["verdict"] == "BUY" and len(self.current_holdings) < self.max_positions:
                 forecast_required, forecast_reasons = self._forecast_required_for_entry(signal, price)
-                if not self.forecast_gate_enabled:
+                # Very aggressive levels (>= 9) waive the forecast-UP requirement so
+                # oversold dip entries aren't blocked waiting on a bullish forecast.
+                if not self.forecast_gate_enabled or (self.risk_profile_level or 5) >= 9:
                     forecast_required = False
                 if forecast_required and signal.get("forecast_direction") != "up":
                     signal["verdict"] = "HOLD"
@@ -1871,6 +1902,10 @@ class TradingEngine:
                 # Check ladder approval if scanner is attached
                 # is_ladder_approved is attached by integrate_ladder_with_engine()
                 ladder_check = getattr(self, 'is_ladder_approved', None)
+                # Aggressive slider levels (>= 8) take any qualifying signal rather
+                # than only the ladder's top tier, so entries are not starved.
+                if (self.risk_profile_level or 5) >= 8:
+                    ladder_check = None
                 if ladder_check and not ladder_check(symbol):
                     entry = getattr(self, 'ladder_scanner', None)
                     score = entry._ladder.get(symbol.upper()) if entry else None
