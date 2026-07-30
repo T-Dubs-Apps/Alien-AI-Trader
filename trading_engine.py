@@ -1645,21 +1645,38 @@ class TradingEngine:
             # Forecast is enforced later only when entry is high-risk
             # (capital-intensive / volatile / illiquid) so the bot can still
             # take valid low-risk entries instead of over-filtering.
+            # Risk-scaled entry strictness. The risk slider is meant to control
+            # "how picky the AI is about entries", but until now it only nudged
+            # thresholds — the 6-way AND below stayed fixed, so a strong uptrend
+            # (which is exactly what the golden cross selects for) that rides the
+            # UPPER Bollinger band failed `price_below_upper` and almost never
+            # bought. At the most aggressive CONFIRMED levels (>= 8) we drop that
+            # upper-band ceiling; the VWAP anti-chase guard still blocks badly
+            # stretched prices, so we buy uptrend dips instead of only perfect
+            # mid-band setups. Levels 1–7 keep the full confluence unchanged.
+            _aggressive_entry = (self.risk_profile_level or 0) >= 8
+            _upper_band_ok = True if _aggressive_entry else price_below_upper
             if (
                 golden_cross and
                 rsi < self.rsi_buy_max and
                 macd > macd_signal and
-                price_above_lower and price_below_upper and
+                price_above_lower and _upper_band_ok and
                 price_not_overextended
             ):
                 signal["verdict"] = "BUY"
                 signal["spread_pct"] = round(spread_pct, 3)
-            # SELL: any trigger fires
+                if _aggressive_entry and not price_below_upper:
+                    signal["aggressive_entry"] = True
+            # SELL: any trigger fires. In aggressive mode we intentionally buy
+            # positions that ride the upper band, so touching the upper band alone
+            # is NOT a sell there (that would be an instant round-trip) — we exit
+            # on an actual trend/momentum reversal instead. Trailing stop and hard
+            # loss threshold remain active in every mode and are unaffected.
             elif (
                 death_cross or
                 rsi > self.rsi_sell_min or
                 macd < macd_signal or
-                price >= boll_upper
+                (price >= boll_upper and not _aggressive_entry)
             ):
                 signal["verdict"] = "SELL"
                 signal["spread_pct"] = round(spread_pct, 3)
