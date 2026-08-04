@@ -1180,6 +1180,9 @@ _ai_trader_enabled = True
 _engine: "TradingEngine | None" = None
 _ladder: "PortfolioLadderScanner | None" = None
 _supervisor_thread: "threading.Thread | None" = None
+# Guards supervisor (re)starts so the boot path and the watchdog can never race
+# into spawning two supervisor threads (two concurrent trading loops).
+_supervisor_lock = Lock()
 _RUN_SECONDS     = int(os.environ.get("RUN_SECONDS",             "21540"))
 _LADDER_INTERVAL = int(os.environ.get("LADDER_INTERVAL",         "120"))
 _HEARTBEAT_SECS  = int(os.environ.get("HEARTBEAT_EVERY_SECONDS", "10"))
@@ -4770,18 +4773,32 @@ def _engine_preflight_error() -> str:
     return ""
 
 
+def _ensure_supervisor() -> bool:
+    """Start the engine supervisor iff it isn't already running. Lock-guarded and
+    idempotent so the boot path and the watchdog can't spawn duplicate supervisor
+    threads (two trading loops). Returns True only when it actually started one."""
+    global _supervisor_thread
+    with _supervisor_lock:
+        if _supervisor_thread is not None and _supervisor_thread.is_alive():
+            return False
+        _supervisor_thread = threading.Thread(
+            target=_engine_supervisor, daemon=True, name="EngineSupervisor"
+        )
+        _supervisor_thread.start()
+        return True
+
+
 def _heartbeat_watchdog() -> None:
     """Independent thread: refreshes last_heartbeat every 10 s so the heartbeat
     never goes stale even if the supervisor or session thread crashes.
     This is the ONLY place that guarantees liveness of the status endpoint."""
-    global _supervisor_thread
     while True:
         try:
             _worker_status["last_heartbeat"] = int(time.time())
-            # If supervisor is not running (or never started), recover it.
+            # Recover the supervisor only if it actually died. _ensure_supervisor
+            # is idempotent, so no restart (or log) happens on a healthy boot.
             if os.environ.get("DISABLE_ENGINE_AUTOSTART") != "1":
-                need_restart = (_supervisor_thread is None) or (not _supervisor_thread.is_alive())
-                if need_restart:
+                if _ensure_supervisor():
                     _worker_status.update({
                         "running": False,
                         "state": "starting",
@@ -4793,10 +4810,6 @@ def _heartbeat_watchdog() -> None:
                     except Exception:
                         pass
                     print("[ENGINE] Supervisor was not alive; restarting supervisor thread.")
-                    _supervisor_thread = threading.Thread(
-                        target=_engine_supervisor, daemon=True, name="EngineSupervisor"
-                    )
-                    _supervisor_thread.start()
         except Exception:
             pass
         time.sleep(10)
@@ -4952,16 +4965,15 @@ if (os.environ.get("KEEP_ALIVE_ENABLED", "true").lower() == "true"
     _keepalive_thread.start()
 
 if os.environ.get("DISABLE_ENGINE_AUTOSTART") != "1":
+    # Start the supervisor FIRST (and assign _supervisor_thread) so the watchdog's
+    # first pass sees a live supervisor and doesn't spuriously "restart" it.
+    if _ensure_supervisor():
+        print("[DASHBOARD] Trading engine supervisor started.")
     # Independent watchdog: keeps last_heartbeat fresh even if supervisor crashes.
     _watchdog_thread = threading.Thread(
         target=_heartbeat_watchdog, daemon=True, name="HeartbeatWatchdog"
     )
     _watchdog_thread.start()
-    _supervisor_thread = threading.Thread(
-        target=_engine_supervisor, daemon=True, name="EngineSupervisor"
-    )
-    _supervisor_thread.start()
-    print("[DASHBOARD] Trading engine supervisor started.")
 else:
     print("[DASHBOARD] Engine autostart disabled (DISABLE_ENGINE_AUTOSTART=1).")
 
