@@ -770,23 +770,26 @@ class TradingEngine:
             return
         self.evaluate(symbol, price)
 
-        # Emit one live-feed action for every completed symbol scan.
+        # Emit one live-feed line for every completed symbol scan, in a compact,
+        # uniform format so the feed reads like a ledger of outcomes:
+        #   HOLD  -> "SCAN GOOG:  $374.57"      (no tag between colon and price)
+        #   BUY   -> "SCAN TSLA: BUY $324.88"
+        #   SELL  -> "SCAN MSFT: SELL signal $494.65"
+        # BUY_BLOCKED is a buy signal that did NOT execute, so it's tagged
+        # "BUY blocked" rather than "BUY" — nothing was actually bought.
         try:
             with self.lock:
                 snap = dict(self._symbol_signals.get(symbol) or {})
             verdict = str(snap.get("verdict") or "HOLD").upper()
-            if verdict == "BUY_BLOCKED":
-                msg = f"SCAN {symbol}: BUY signal blocked (auto-trade OFF) @ ${price:.2f}"
-                action = "hold"
-            elif verdict == "BUY":
-                msg = f"SCAN {symbol}: BUY signal @ ${price:.2f}"
-                action = "scan"
+            if verdict == "BUY":
+                tag, action = "BUY", "buy"
+            elif verdict == "BUY_BLOCKED":
+                tag, action = "BUY blocked", "hold"
             elif verdict == "SELL":
-                msg = f"SCAN {symbol}: SELL signal @ ${price:.2f}"
-                action = "scan"
+                tag, action = "SELL signal", "sell"
             else:
-                msg = f"SCAN {symbol}: HOLD @ ${price:.2f}"
-                action = "hold"
+                tag, action = "", "hold"
+            msg = f"SCAN {symbol}: {tag} ${price:.2f}"
             self.emit_activity(action=action, message=msg, symbol=symbol, level="info")
         except Exception:
             pass

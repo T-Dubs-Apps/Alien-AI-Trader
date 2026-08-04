@@ -2052,27 +2052,26 @@
       const line = document.createElement('div');
       const action = String(evt.action || '').toLowerCase();
       const level = String(evt.level || '').toLowerCase();
-      // Per-cycle scan summary: always shown, no symbol chip — it mirrors the
-      // Render logs so the feed's breadth matches the backend scan.
-      const isCycle = (action === 'scan_cycle');
-      const sym = isCycle ? '' : (normalizeSymbol(evt.symbol || '') || inferSymbolFromFeedMessage(evt.message || ''));
       const msg = String(evt.message || '').trim();
       const ts  = evt.time ? tsFromEpoch(evt.time) : tsNow();
+      // Per-cycle scan summary: always shown, no symbol chip — mirrors the logs.
+      const isCycle = (action === 'scan_cycle');
+      // Per-symbol scan lines already read "SCAN SYMBOL: … $price", so render
+      // them verbatim (no separate symbol chip) and never filter them — the user
+      // wants every scan (hold / buy / sell) visible as a running ledger.
+      const isScanLine = /^SCAN\s+[A-Z.\-]{1,8}:/i.test(msg);
+      const sym = (isCycle || isScanLine) ? '' : (normalizeSymbol(evt.symbol || '') || inferSymbolFromFeedMessage(msg));
 
-      // Keep watchlist symbols out of passive chatter in Live Feed.
-      // Show them only for actionable trader events.
-      if (!isCycle && sym && (isWatchlistSymbol(sym) || isEngineTrackedSymbol(sym))) {
+      // Non-scan watchlist chatter stays filtered to actionable events only.
+      if (!isCycle && !isScanLine && sym && (isWatchlistSymbol(sym) || isEngineTrackedSymbol(sym))) {
         if (!isActionableFeedEvent(action, level, msg)) return;
       }
 
       let klass = 'feed-line';
-      if (isCycle) {
-        klass += ' cycle-line';
-      } else if (level === 'warn' || level === 'alert' || action.includes('stop') || action === 'sell') {
-        klass += ' warn-line';
-      } else if (action === 'buy' || action === 'scan' || action === 'hold') {
-        klass += ' up-line';
-      }
+      if (isCycle) klass += ' cycle-line';
+      else if (action === 'sell' || level === 'warn' || level === 'alert' || action.includes('stop')) klass += ' warn-line';
+      else if (action === 'buy') klass += ' up-line';
+      // holds / blocked stay neutral (default text color)
       line.className = klass;
       line.innerHTML = `<span class="ts">${ts}</span>${sym ? `<span class="sym">${escHtml(sym)}</span>` : ''}<span class="msg">${escHtml(msg || 'Engine activity')}</span>`;
       el.appendChild(line);
