@@ -208,6 +208,9 @@
     .feed-line.up-line   .msg { color: var(--up); }
     .feed-line.down-line .msg { color: var(--down); }
     .feed-line.warn-line .msg { color: var(--warn); }
+    /* Per-cycle scan summary — dim, italic divider so it's clearly a system line */
+    .feed-line.cycle-line { border-top: 1px solid rgba(255,255,255,.08); margin-top: 2px; }
+    .feed-line.cycle-line .msg { color: var(--accent2); font-style: italic; opacity: .85; }
 
     /* ── NOTIFICATIONS ── */
     .notif-list { max-height: 340px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
@@ -1609,6 +1612,12 @@
     function tsNow() {
       return new Date().toLocaleTimeString('en-US',{hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit'});
     }
+    // Format an epoch-seconds timestamp (used so replayed backlog events show the
+    // time they actually happened, not the moment the page reconnected).
+    function tsFromEpoch(sec) {
+      try { return new Date(Number(sec) * 1000).toLocaleTimeString('en-US',{hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit'}); }
+      catch { return tsNow(); }
+    }
 
     // ═══════════════════════════════════════════
     //  RSI BADGE
@@ -2043,23 +2052,29 @@
       const line = document.createElement('div');
       const action = String(evt.action || '').toLowerCase();
       const level = String(evt.level || '').toLowerCase();
-      const sym = normalizeSymbol(evt.symbol || '') || inferSymbolFromFeedMessage(evt.message || '');
+      // Per-cycle scan summary: always shown, no symbol chip — it mirrors the
+      // Render logs so the feed's breadth matches the backend scan.
+      const isCycle = (action === 'scan_cycle');
+      const sym = isCycle ? '' : (normalizeSymbol(evt.symbol || '') || inferSymbolFromFeedMessage(evt.message || ''));
       const msg = String(evt.message || '').trim();
+      const ts  = evt.time ? tsFromEpoch(evt.time) : tsNow();
 
       // Keep watchlist symbols out of passive chatter in Live Feed.
       // Show them only for actionable trader events.
-      if (sym && (isWatchlistSymbol(sym) || isEngineTrackedSymbol(sym))) {
+      if (!isCycle && sym && (isWatchlistSymbol(sym) || isEngineTrackedSymbol(sym))) {
         if (!isActionableFeedEvent(action, level, msg)) return;
       }
 
       let klass = 'feed-line';
-      if (level === 'warn' || level === 'alert' || action.includes('stop') || action === 'sell') {
+      if (isCycle) {
+        klass += ' cycle-line';
+      } else if (level === 'warn' || level === 'alert' || action.includes('stop') || action === 'sell') {
         klass += ' warn-line';
       } else if (action === 'buy' || action === 'scan' || action === 'hold') {
         klass += ' up-line';
       }
       line.className = klass;
-      line.innerHTML = `<span class="ts">${tsNow()}</span>${sym ? `<span class="sym">${escHtml(sym)}</span>` : ''}<span class="msg">${escHtml(msg || 'Engine activity')}</span>`;
+      line.innerHTML = `<span class="ts">${ts}</span>${sym ? `<span class="sym">${escHtml(sym)}</span>` : ''}<span class="msg">${escHtml(msg || 'Engine activity')}</span>`;
       el.appendChild(line);
       while (el.children.length > 200) el.removeChild(el.firstChild);
     }

@@ -13,6 +13,7 @@ import threading
 import time
 import zipfile
 import requests
+from collections import deque
 from datetime import datetime, timedelta, timezone
 from threading import Lock
 from typing import Dict, Any, List
@@ -4258,6 +4259,10 @@ def on_connect():
     emit("notifications_init", {"notifications": _notifications[-50:]})
     emit("trading_settings", _settings_response())
     emit("ladder_update", {"ladder": _ladder_top20})
+    # Replay recent engine activity so a fresh page / refresh isn't blank and the
+    # feed reflects the backend's scan history instead of starting from nothing.
+    for _evt in list(_activity_buffer):
+        emit("engine_activity", _evt)
 
 
 # ── Integrated trading engine (replaces separate worker.py process) ─────
@@ -4282,6 +4287,12 @@ def _engine_alert(message: str, level: str = "info", symbol: str = "") -> None:
         pass
 
 
+# Recent engine-activity events, kept server-side so a page load / refresh can
+# replay them (the live feed is otherwise fire-and-forget with no history).
+# maxlen mirrors the browser's 200-row feed cap.
+_activity_buffer: "deque[dict]" = deque(maxlen=200)
+
+
 def _engine_activity(action: str, message: str, symbol: str = "", level: str = "info") -> None:
     """Push lightweight engine actions to the live feed without creating notifications."""
     evt = {
@@ -4291,6 +4302,7 @@ def _engine_activity(action: str, message: str, symbol: str = "", level: str = "
         "symbol": str(symbol or ""),
         "message": str(message or ""),
     }
+    _activity_buffer.append(evt)
     try:
         socketio.emit("engine_activity", evt)
     except Exception:

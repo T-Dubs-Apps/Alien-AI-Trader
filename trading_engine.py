@@ -421,6 +421,10 @@ class TradingEngine:
         self._market_candidates_cache: Tuple[List[str], float] = ([], 0.0)
         self._market_candidates_ttl = int(os.environ.get("MARKET_CANDIDATES_TTL", "600"))  # 10 min
         self._market_candidate_cursor = 0   # rotation position within the pool
+        # Per-cycle scan stats, surfaced in the cycle summary so the live feed and
+        # the Render logs report the same breadth. (universe swept, rotation window)
+        self._last_universe_count = 0
+        self._last_window = (0, 0, 0)   # (start_index, window_size, live_pool_size)
 
         # Data-issue alert throttle: prevents notification spam when a symbol's
         # market data feed is unavailable for multiple scan cycles.
@@ -694,6 +698,7 @@ class TradingEngine:
                 self._check_portfolio_shield()
             self._maybe_heartbeat(message="scan-start")
             symbols = list(self.stock_list)
+            candidates: List[str] = []
 
             # Market-wide scan: pull top momentum movers and add to this cycle's queue
             if self.scan_all_market:
@@ -711,6 +716,30 @@ class TradingEngine:
                         except Exception as exc:
                             sym = futures[future]
                             self.send_alert(f"Scan error for {sym}: {exc}", level="warn")
+
+            # Per-cycle scan summary — identical numbers to the logs (stdout) and
+            # the live feed, so the two views agree and the rotation is visible.
+            # print() goes straight to stdout (Render logs) WITHOUT send_alert's
+            # push routing, so this can't spam a notification every cycle.
+            try:
+                if self.scan_all_market:
+                    pool_len = len(self._market_candidates_cache[0])
+                    start, win_n, live_n = self._last_window
+                    summary = (
+                        f"SCAN CYCLE: swept {self._last_universe_count} universe, "
+                        f"{pool_len} qualified · evaluated {len(self.stock_list)} watchlist "
+                        f"+ {len(candidates)} candidates "
+                        f"(rotating window: {win_n} from #{start + 1} of {live_n} qualified)"
+                    )
+                else:
+                    summary = (
+                        f"SCAN CYCLE: evaluated {len(self.stock_list)} watchlist "
+                        f"symbol(s) — full-market scan OFF"
+                    )
+                print(f"[SCAN] {summary}")
+                self.emit_activity(action="scan_cycle", message=summary, level="info")
+            except Exception:
+                pass
 
             self._maybe_heartbeat(message="scan-complete")
             time.sleep(self.poll_seconds)
@@ -1076,6 +1105,7 @@ class TradingEngine:
         # call, so a full ~10k sweep is only ~20 cheap calls once per TTL (10 min) —
         # negligible against the daily budget. Cap is env-tunable for safety.
         universe_cap = max(500, int(os.environ.get("MARKET_UNIVERSE_CAP", "12000")))
+        self._last_universe_count = min(len(tradable), universe_cap)
         BATCH = 500
         for i in range(0, min(len(tradable), universe_cap), BATCH):
             batch = tradable[i : i + BATCH]
@@ -1127,6 +1157,7 @@ class TradingEngine:
         start = self._market_candidate_cursor % len(live)
         window = [live[(start + i) % len(live)] for i in range(n)]
         self._market_candidate_cursor = (start + n) % len(live)
+        self._last_window = (start, n, len(live))
         return window
 
     # -----------------------------------------------
