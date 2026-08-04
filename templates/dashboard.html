@@ -2069,11 +2069,16 @@
 
       let klass = 'feed-line';
       if (isCycle) klass += ' cycle-line';
-      else if (action === 'sell' || level === 'warn' || level === 'alert' || action.includes('stop')) klass += ' warn-line';
-      else if (action === 'buy') klass += ' up-line';
-      // holds / blocked stay neutral (default text color)
+      else if (action === 'buy')  klass += ' up-line';    // buy  = green
+      else if (action === 'sell') klass += ' down-line';  // sell = red
+      else if (level === 'warn' || level === 'alert' || action.includes('stop')) klass += ' warn-line';
+      // holds / plain scans stay the default near-white text colour
       line.className = klass;
-      line.innerHTML = `<span class="ts">${ts}</span>${sym ? `<span class="sym">${escHtml(sym)}</span>` : ''}<span class="msg">${escHtml(msg || 'Engine activity')}</span>`;
+      // Strip a duplicated leading symbol so a chip + "SYM …" message doesn't
+      // render as "FCXFCX …" (chip already shows the symbol).
+      let dispMsg = msg;
+      if (sym && dispMsg.toUpperCase().startsWith(sym + ' ')) dispMsg = dispMsg.slice(sym.length + 1);
+      line.innerHTML = `<span class="ts">${ts}</span>${sym ? `<span class="sym">${escHtml(sym)}</span>` : ''}<span class="msg">${escHtml(dispMsg || 'Engine activity')}</span>`;
       el.appendChild(line);
       while (el.children.length > 200) el.removeChild(el.firstChild);
     }
@@ -2160,7 +2165,7 @@
             action: 'notification',
             level: String(note?.level || 'info'),
             symbol: sym,
-            message: `${sym && !msg.startsWith(sym) ? sym + ' ' : ''}${msg}`
+            message: msg
           });
         }
 
