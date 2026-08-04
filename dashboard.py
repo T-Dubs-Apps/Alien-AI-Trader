@@ -1432,7 +1432,7 @@ def _active_alpaca():
 # starting with 'pro' is the Pro plan. Pro unlocks power features; the Safety
 # Shield is intentionally NOT gated — loss protection is free for everyone.
 TRADER_MAX_POSITIONS = 5
-PRO_MAX_POSITIONS    = 15
+PRO_MAX_POSITIONS    = 30
 PRO_ONLY_FEATURES    = ("scan_all_market", "forecast_exit_enabled")
 
 
