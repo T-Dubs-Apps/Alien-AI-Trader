@@ -768,27 +768,28 @@ class TradingEngine:
                 level="warn",
             )
             return
+        # Snapshot holdings BEFORE evaluate so we can tell whether this scan
+        # actually FILLED a trade (evaluate calls buy()/sell() synchronously).
+        with self.lock:
+            _held_before = symbol in self.current_holdings
         self.evaluate(symbol, price)
 
-        # Emit one live-feed line for every completed symbol scan, in a compact,
-        # uniform format so the feed reads like a ledger of outcomes:
-        #   HOLD  -> "SCAN GOOG:  $374.57"      (no tag between colon and price)
-        #   BUY   -> "SCAN TSLA: BUY $324.88"
-        #   SELL  -> "SCAN MSFT: SELL signal $494.65"
-        # BUY_BLOCKED is a buy signal that did NOT execute, so it's tagged
-        # "BUY blocked" rather than "BUY" — nothing was actually bought.
+        # Emit one compact live-feed line per scan, labelled by what ACTUALLY
+        # happened — detected from the change in holdings, NOT the raw signal:
+        #   nothing traded -> "SCAN EXK: $8.38"
+        #   buy filled     -> "SCAN FCX: Bought @ $67.52"
+        #   sell filled    -> "SCAN QBTS: Sold@ $21.54"
+        # Unexecuted buy/sell SIGNALS show as plain scans on purpose, so the feed
+        # isn't flooded with sell-signals on stocks we don't even hold.
         try:
             with self.lock:
-                snap = dict(self._symbol_signals.get(symbol) or {})
-            verdict = str(snap.get("verdict") or "HOLD").upper()
-            if verdict == "BUY":
-                tag, action = "BUY", "buy"
-            elif verdict == "BUY_BLOCKED":
-                tag, action = "BUY blocked", "hold"
-            elif verdict == "SELL":
-                tag, action = "SELL signal", "sell"
+                _held_after = symbol in self.current_holdings
+            if _held_after and not _held_before:
+                tag, action = "Bought @", "buy"
+            elif _held_before and not _held_after:
+                tag, action = "Sold@", "sell"
             else:
-                tag, action = "", "hold"
+                tag, action = "", "scan"
             msg = f"SCAN {symbol}: {tag} ${price:.2f}"
             self.emit_activity(action=action, message=msg, symbol=symbol, level="info")
         except Exception:
