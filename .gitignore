@@ -71,3 +71,9 @@ black_box/
 adam_agent/
 agent ADAM/
 user_cloud/
+
+# Local snapshot zips + personal settings notes — keep out of the public repo
+snapshots/
+trader settings.txt
+more settings.txt*
+Recommended Render Environment Variables and Values.docx

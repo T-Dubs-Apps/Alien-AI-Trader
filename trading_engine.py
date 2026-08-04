@@ -165,8 +165,26 @@ class TradingEngine:
         # ── Risk controls (live-updateable from dashboard UI) ──
         # Read as whole percent OR legacy fraction; always stored as a fraction.
         # (2.2 -> 0.022, 4 -> 0.04, 0.05 -> 0.05). See _pct_env for the rationale.
-        self.loss_threshold    = self._pct_env("LOSS_THRESHOLD",    5.0)  # 5% absolute floor
-        self.trailing_stop_pct = self._pct_env("TRAILING_STOP_PCT", 3.0)  # 3% drop from peak
+        # Defaults tuned for small CASH accounts (< $25k): a wider 8% disaster
+        # floor and a 6% trailing give volatile dip-buys room to work instead of
+        # whipsawing out at tiny below-cost losses. Deployments that set the env
+        # vars keep their own values.
+        self.loss_threshold    = self._pct_env("LOSS_THRESHOLD",    8.0)  # 8% absolute floor
+        self.trailing_stop_pct = self._pct_env("TRAILING_STOP_PCT", 6.0)  # 6% drop from peak
+
+        # Trailing stop ARMS only after a position has risen this far above entry;
+        # before that, only the hard loss_threshold can exit. Combined with the
+        # breakeven floor in evaluate(), this makes the trailing stop a
+        # profit-protector that never itself sells below cost — the hard stop is
+        # the ONLY below-cost exit. Whole percent (3.0 = +3%).
+        self.trailing_activation_pct = max(0.0, float(os.environ.get("TRAILING_ACTIVATION_PCT", "3.0")))
+
+        # Broker account structure: "cash" (default — no PDT, T+1 settlement) or
+        # "margin" (PDT rules apply under $25k). Drives settlement-aware sizing
+        # (see _autodetect_capital) and setup guidance. Live-updateable.
+        self.account_type = str(os.environ.get("ACCOUNT_TYPE", "cash")).strip().lower()
+        if self.account_type not in ("cash", "margin"):
+            self.account_type = "cash"
 
         # Forecast-based early exit: sell before trailing stop fires when climb peaks
         self.forecast_exit_enabled = os.environ.get("FORECAST_EXIT_ENABLED", "true").lower() == "true"
@@ -275,10 +293,17 @@ class TradingEngine:
         self.rocket_breakout_lookback_bars = int(os.environ.get("ROCKET_BREAKOUT_LOOKBACK_BARS", "20"))
 
         # ── Full-market scan ──
-        # Default OFF — full-market scanning overwhelms the free Alpaca data plan's
-        # rate limit (429s starve every data call). Enable only on a paid data plan.
-        self.scan_all_market         = os.environ.get("SCAN_ALL_MARKET", "false").lower() == "true"
-        self._market_scan_candidates = max(1, min(10, int(os.environ.get("MARKET_SCAN_CANDIDATES", "10"))))
+        # Default ON. It USED to overwhelm the free Alpaca plan (429s) because every
+        # cycle evaluated a fresh batch of movers. Now the qualified pool is swept
+        # cheaply (~20 snapshot calls / 10 min) and only a small ROTATING WINDOW is
+        # evaluated per cycle, so per-minute burst stays bounded while coverage
+        # spans the whole market over time. Set SCAN_ALL_MARKET=false to disable.
+        self.scan_all_market         = os.environ.get("SCAN_ALL_MARKET", "true").lower() == "true"
+        # Candidates EVALUATED per cycle (the per-minute rate driver). Default 10
+        # keeps the burst well under Alpaca's free-plan limit; ceiling raised to 50
+        # so operators on a paid plan can widen it. Full-market COVERAGE no longer
+        # depends on this number — the pool is rotated a window at a time (below).
+        self._market_scan_candidates = max(1, min(50, int(os.environ.get("MARKET_SCAN_CANDIDATES", "10"))))
 
         # Trailing-stop high-water marks: {symbol: highest_price_since_buy}
         self._peak_prices: Dict[str, float] = {}
@@ -389,9 +414,13 @@ class TradingEngine:
         self._bars_cache: Dict[str, Tuple[Optional[pd.DataFrame], float]] = {}
         self._bars_cache_ttl = int(os.environ.get("BARS_CACHE_TTL", "1800"))  # 30 min
 
-        # Market candidates cache: avoid calling list_assets every scan cycle
+        # Market candidates cache: avoid calling list_assets every scan cycle.
+        # Now holds the FULL ranked qualified pool (not a top-N slice); a rotating
+        # window of it is handed out each cycle so the whole market is covered over
+        # time without re-scanning the same names.
         self._market_candidates_cache: Tuple[List[str], float] = ([], 0.0)
         self._market_candidates_ttl = int(os.environ.get("MARKET_CANDIDATES_TTL", "600"))  # 10 min
+        self._market_candidate_cursor = 0   # rotation position within the pool
 
         # Data-issue alert throttle: prevents notification spam when a symbol's
         # market data feed is unavailable for multiple scan cycles.
@@ -553,9 +582,20 @@ class TradingEngine:
                 level="warn")
             return
 
+        # For CASH accounts, spend only SETTLED funds. Alpaca's
+        # non_marginable_buying_power already reflects T+1 settlement, so sizing
+        # against it avoids good-faith / free-riding violations that would freeze
+        # a cash account. Margin accounts (or any account missing the field) fall
+        # back to free cash.
+        spendable = cash
+        if self.account_type == "cash":
+            nmbp = _f(getattr(acct, "non_marginable_buying_power", None))
+            if nmbp > 0:
+                spendable = min(cash, nmbp)
+
         with self.lock:
             self.initial_capital    = equity
-            self._available_capital = max(0.0, cash)   # only spend real free cash
+            self._available_capital = max(0.0, spendable)   # settled, spendable cash
             self._capital_hwm       = max(self._capital_hwm, equity)
 
         self.send_alert(
@@ -733,8 +773,9 @@ class TradingEngine:
         # so they do not keep reappearing every scan cycle.
         if issue_lc in ("bars_unavailable", "price_unavailable"):
             self._symbol_skip_until[str(symbol or "").upper()] = now + max(60, self.data_issue_skip_seconds)
-            # Invalidate market-candidate cache so skip list applies immediately.
-            self._market_candidates_cache = ([], 0.0)
+            # No cache nuke: _rotate_candidates filters the skip list at hand-out
+            # time, so a transient bad symbol is skipped without forcing a full
+            # ~20-call market re-sweep (and without resetting rotation progress).
 
         # Full-market scans include many transient candidates. For symbols that
         # are not explicitly tracked by the user (watchlist) and not currently
@@ -963,6 +1004,11 @@ class TradingEngine:
             if "portfolio_stop_buffer" in s: self.portfolio_stop_buffer = max(0.0, float(s["portfolio_stop_buffer"]))
             if "shield_enabled"        in s: self.shield_enabled         = bool(s["shield_enabled"])
             if "min_hold_seconds"      in s: self.min_hold_seconds       = max(0, int(s["min_hold_seconds"]))
+            if "trailing_activation_pct" in s: self.trailing_activation_pct = max(0.0, float(s["trailing_activation_pct"]))
+            if "account_type"          in s:
+                _at = str(s["account_type"]).strip().lower()
+                if _at in ("cash", "margin"):
+                    self.account_type = _at
             # Apply a confirmed slider profile last so its internally consistent
             # values cannot be partially overwritten by stale dashboard fields.
             self._apply_confirmed_risk_profile(s)
@@ -985,9 +1031,13 @@ class TradingEngine:
         10-minute cache: list_assets returns ~10k symbols and barely changes
         during a session — no need to re-fetch every scan cycle.
         """
-        cached_syms, cached_ts = self._market_candidates_cache
+        # The qualified POOL is refreshed at most once per TTL. Between refreshes we
+        # hand out a ROTATING WINDOW of it (see _rotate_candidates) so a different
+        # slice of the market is evaluated each cycle — whole-market coverage over
+        # time — without ever raising the per-cycle API burst that trips the limit.
+        pool, cached_ts = self._market_candidates_cache
         if cached_ts > 0 and (time.time() - cached_ts) < self._market_candidates_ttl:
-            return cached_syms
+            return self._rotate_candidates(pool, max_candidates)
 
         try:
             assets = self.api.list_assets(status="active", asset_class="us_equity")
@@ -1022,8 +1072,12 @@ class TradingEngine:
             min_price = min_price_env
         max_price = min(max_price, max_price_env)
 
+        # Sweep the ENTIRE tradable universe. get_snapshots batches 500 symbols per
+        # call, so a full ~10k sweep is only ~20 cheap calls once per TTL (10 min) —
+        # negligible against the daily budget. Cap is env-tunable for safety.
+        universe_cap = max(500, int(os.environ.get("MARKET_UNIVERSE_CAP", "12000")))
         BATCH = 500
-        for i in range(0, min(len(tradable), 5000), BATCH):
+        for i in range(0, min(len(tradable), universe_cap), BATCH):
             batch = tradable[i : i + BATCH]
             try:
                 snaps = self.api.get_snapshots(batch)
@@ -1051,10 +1105,29 @@ class TradingEngine:
             except Exception:
                 pass
 
+        # Cache the FULL ranked pool (every qualified mover, hottest first) and hand
+        # out the first rotating window now. Subsequent cycles advance the cursor.
         candidates.sort(key=lambda x: x[1], reverse=True)
-        result = [sym for sym, _ in candidates[:max_candidates]]
-        self._market_candidates_cache = (result, time.time())
-        return result
+        pool = [sym for sym, _ in candidates]
+        self._market_candidates_cache = (pool, time.time())
+        self._market_candidate_cursor = 0
+        return self._rotate_candidates(pool, max_candidates)
+
+    def _rotate_candidates(self, pool: List[str], count: int) -> List[str]:
+        """Return the next `count` symbols from the ranked candidate pool, advancing
+        a cursor so successive scan cycles cover DIFFERENT names (whole-market
+        coverage over time) instead of re-scanning the same top movers. Symbols on
+        the temporary skip list (recent data issues) are filtered out here, so a bad
+        symbol is skipped without forcing a full pool rebuild."""
+        now = time.time()
+        live = [s for s in pool if self._symbol_skip_until.get(s, 0.0) <= now]
+        if not live:
+            return []
+        n = min(max(1, count), len(live))
+        start = self._market_candidate_cursor % len(live)
+        window = [live[(start + i) % len(live)] for i in range(n)]
+        self._market_candidate_cursor = (start + n) % len(live)
+        return window
 
     # -----------------------------------------------
     # After-hours portfolio guard (runs 24/7)
@@ -1969,7 +2042,13 @@ class TradingEngine:
             _min_hold_ok = self.min_hold_seconds <= 0 or _hold_secs >= self.min_hold_seconds
 
             # 1. Trailing stop — price fell X% below its peak since purchase → SELL
-            if drop_from_peak >= self.trailing_stop_pct:
+            # Trailing stop ARMS only once the position rose past the activation
+            # threshold, and its trigger is floored at the entry price so the
+            # trailing stop NEVER itself sells below cost. Fresh/volatile dip-buys
+            # get room; the hard loss_threshold below is the only below-cost exit.
+            _armed = peak >= bought_price * (1.0 + self.trailing_activation_pct / 100.0)
+            _trail_floor = max(peak * (1.0 - self.trailing_stop_pct), bought_price)
+            if _armed and price <= _trail_floor:
                 if not self.auto_trade:
                     print(f"[ENGINE] {symbol} TRAILING STOP triggered - auto-trade is OFF, skipping sell.")
                     return
@@ -2396,6 +2475,8 @@ class TradingEngine:
             },
             "trailing_stop_pct": round(self.trailing_stop_pct * 100, 2),
             "loss_threshold":    round(self.loss_threshold * 100, 2),
+            "trailing_activation_pct": round(self.trailing_activation_pct, 2),
+            "account_type":      self.account_type,
             "scan_all_market":   self.scan_all_market,
             "max_positions":     self.max_positions,
             "min_positions":     self.min_positions,

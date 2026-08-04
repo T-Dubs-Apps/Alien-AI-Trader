@@ -915,6 +915,18 @@
                   <input id="setupAlphaKey" class="form-control form-control-sm"
                          autocomplete="off" spellcheck="false" placeholder="Your Alpha Vantage key">
                 </div>
+                <div class="col-md-6">
+                  <label class="form-label small mb-1">
+                    Your Alpaca account type
+                  </label>
+                  <select id="setupAccountType" class="form-select form-select-sm">
+                    <option value="cash">Cash account — recommended (no day-trade limit)</option>
+                    <option value="margin">Margin account (day-trade limit under $25k)</option>
+                  </select>
+                  <div class="small-muted" style="font-size:.68rem;margin-top:3px;">
+                    Cash accounts avoid the Pattern Day Trader freeze; funds settle next day.
+                  </div>
+                </div>
                 <div class="col-md-6 d-flex align-items-end">
                   <button class="btn btn-warning btn-sm w-100" id="setupSaveBtn" style="color:#000;">
                     <i class="fa-solid fa-floppy-disk me-1"></i>Save keys &amp; start trading
@@ -3111,6 +3123,7 @@
         if (s._afterhours_drop != null)   document.getElementById('afterhoursDrop').value     = s._afterhours_drop;
         if (s._rocket_alert    != null)   document.getElementById('rocketAlert').value        = s._rocket_alert;
         if (s._afterhours_on   != null)   document.getElementById('afterhoursProtect').checked = s._afterhours_on;
+        if (s.account_type)               { const _at = document.getElementById('setupAccountType'); if (_at) _at.value = s.account_type; }
       } catch {}
     }
 
@@ -3629,6 +3642,7 @@
       const k  = document.getElementById('setupAlpacaKey').value.trim();
       const s  = document.getElementById('setupAlpacaSecret').value.trim();
       const av = document.getElementById('setupAlphaKey').value.trim();
+      const acct = (document.getElementById('setupAccountType')?.value) || 'cash';
 
       if (!k && !s && !av) {
         out.innerHTML = '<span class="text-warning">⚠ Enter at least one key.</span>';
@@ -3640,7 +3654,7 @@
         const r = await fetch('/api/keys/setup', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ alpaca_key: k, alpaca_secret: s, alpha_vantage_key: av })
+          body: JSON.stringify({ alpaca_key: k, alpaca_secret: s, alpha_vantage_key: av, account_type: acct })
         });
         const d = await r.json();
         if (d.status === 'ok') {

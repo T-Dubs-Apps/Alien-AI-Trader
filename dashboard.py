@@ -238,6 +238,7 @@ LICENSE_SERVER_URL = os.environ.get(
 LICENSE_FILE = os.path.join(DATA_DIR, "license.json")
 TRUSTED_DEVICES_FILE = os.path.join(DATA_DIR, "trusted_devices.json")
 OWNER_FREEZE_FILE = os.path.join(DATA_DIR, "owner_freeze.json")
+SETTINGS_LOCK_FILE = os.path.join(DATA_DIR, "settings_lock.json")
 
 
 def _clean_env_value(name: str, default: str = "") -> str:
@@ -337,6 +338,13 @@ DASHBOARD_PASSWORD = _clean_env_value("DASHBOARD_PASSWORD", "")
 TRUSTED_OWNER_EMAILS_ENV = _clean_env_value("TRUSTED_OWNER_EMAILS", "")
 OWNER_FREEZE_TOKEN = _clean_env_value("OWNER_FREEZE_TOKEN", "")
 ADMIN_API_TOKEN = _clean_env_value("ADMIN_API_TOKEN", "")
+# Settings Lock: when locked, configuration changes (trading settings, risk
+# slider, keys, Paper/Live toggle) are refused UNLESS the request carries a valid
+# owner token — the trader keeps running, but nothing about it can be changed
+# except by the owner. Distinct from OWNER_FREEZE (which halts trading entirely).
+# Initial state from env; runtime state persisted in SETTINGS_LOCK_FILE.
+SETTINGS_LOCKED_DEFAULT = os.environ.get("SETTINGS_LOCKED", "false").strip().lower() == "true"
+_settings_lock_lock = Lock()
 STRICT_PRODUCTION_GUARDS = os.environ.get("STRICT_PRODUCTION_GUARDS", "").strip().lower()
 TRUSTED_DEVICE_COOKIE = "aat_trusted_device"
 OWNER_REAUTH_DAYS_MIN = int(os.environ.get("OWNER_REAUTH_DAYS_MIN", "120"))
@@ -830,6 +838,73 @@ def _owner_freeze_token_ok(supplied: str) -> bool:
         return False
     return hmac.compare_digest(candidate.encode("utf-8"), expected.encode("utf-8"))
 
+
+# ── Settings Lock — owner-only configuration changes ────────────────────────
+def _settings_lock_authorized(supplied: str) -> bool:
+    """True if the supplied token authorizes an owner-only settings change.
+    Accepts OWNER_FREEZE_TOKEN or ADMIN_API_TOKEN (either is an owner secret),
+    constant-time compared. Empty tokens never authorize."""
+    cand = _normalize_dashboard_password(supplied or "")
+    if not cand:
+        return False
+    for secret in (OWNER_FREEZE_TOKEN, ADMIN_API_TOKEN):
+        exp = _normalize_dashboard_password(secret)
+        if exp and hmac.compare_digest(cand.encode("utf-8"), exp.encode("utf-8")):
+            return True
+    return False
+
+
+def _load_settings_lock_state() -> dict:
+    try:
+        if os.path.exists(SETTINGS_LOCK_FILE):
+            with open(SETTINGS_LOCK_FILE, "r") as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    return data
+    except Exception:
+        pass
+    return {"locked": SETTINGS_LOCKED_DEFAULT}
+
+
+def _save_settings_lock_state(data: dict) -> None:
+    try:
+        with open(SETTINGS_LOCK_FILE, "w") as f:
+            json.dump(data, f, indent=2)
+    except Exception:
+        pass
+
+
+def _settings_lock_is_locked() -> bool:
+    with _settings_lock_lock:
+        return bool(_load_settings_lock_state().get("locked", SETTINGS_LOCKED_DEFAULT))
+
+
+def _settings_lock_supplied_token() -> str:
+    """Owner token from the X-Owner-Token header or JSON body of this request."""
+    tok = request.headers.get("X-Owner-Token", "") or ""
+    if not tok:
+        try:
+            body = request.get_json(silent=True) or {}
+            tok = str(body.get("owner_token", "") or "")
+        except Exception:
+            tok = ""
+    return tok
+
+
+def _settings_lock_block(action: str):
+    """Return a 423 response if settings are locked and the request lacks a valid
+    owner token; otherwise None (allowed). The trader keeps trading regardless."""
+    if not _settings_lock_is_locked():
+        return None
+    if _settings_lock_authorized(_settings_lock_supplied_token()):
+        return None
+    return jsonify({
+        "status": "locked",
+        "message": (f"Settings Lock is ON — '{action}' requires the owner token. "
+                    f"The trader keeps running; only the owner can change settings."),
+    }), 423
+
+
 # -- Distribution URLs (used by the shareable Render landing page /get) --------
 # The public repo IS the installation package. The GitHub archive link always
 # serves the latest build, so buyers always download an up-to-date copy.
@@ -1141,14 +1216,22 @@ _trading_settings: dict = {
     # Floor matches the engine's hard minimum (max(60, ...)) so the UI never
     # implies a faster scan cadence than Alpaca can safely sustain.
     "poll_seconds":        max(60, int(os.environ.get("POLL_SECONDS",  "60"))),
-    "trailing_stop_pct":   _pct_setting_env("TRAILING_STOP_PCT", 3.0),
-    "loss_threshold":      _pct_setting_env("LOSS_THRESHOLD",    5.0),
+    # Cash-account defaults (< $25k): wider stops so volatile dip-buys aren't
+    # whipsawed out below cost. Deployments that set the env vars keep their own.
+    "trailing_stop_pct":   _pct_setting_env("TRAILING_STOP_PCT", 6.0),
+    "loss_threshold":      _pct_setting_env("LOSS_THRESHOLD",    8.0),
+    # Trailing stop arms only after +this% (whole percent); floored at cost in the
+    # engine so trailing never sells below cost (hard stop is the disaster floor).
+    "trailing_activation_pct": float(os.environ.get("TRAILING_ACTIVATION_PCT", "3.0")),
+    # Broker account structure: "cash" (default, no PDT) or "margin" (PDT < $25k).
+    "account_type":        str(os.environ.get("ACCOUNT_TYPE", "cash")).strip().lower(),
     "max_trades_per_hour": int(os.environ.get("MAX_TRADES_PER_HOUR", "30")),
-    # Default OFF: full-market scanning fetches dozens of symbols per cycle, which
-    # exceeds the FREE Alpaca data plan's ~200 req/min limit and rate-limits (429)
-    # every data call — starving even the watchlist. Turn it on only with a paid
-    # Alpaca data subscription, or curate a wider STOCK_LIST instead.
-    "scan_all_market":     os.environ.get("SCAN_ALL_MARKET", "false").lower() == "true",
+    # Default ON. Full-market scanning is now rate-safe: the qualified pool is swept
+    # cheaply (~20 snapshot calls / 10 min) and only a small ROTATING WINDOW of it
+    # is evaluated each cycle, so the per-minute burst stays under the free Alpaca
+    # plan's ~200 req/min limit while coverage spans the whole market over time.
+    # Set SCAN_ALL_MARKET=false to fall back to watchlist-only scanning.
+    "scan_all_market":     os.environ.get("SCAN_ALL_MARKET", "true").lower() == "true",
     "max_positions":       int(os.environ.get("MAX_POSITIONS",       "5")),
     "initial_capital":     float(os.environ.get("INITIAL_CAPITAL",   "0")),
     # ── Position sizing / risk controls ─────────────────────────────────────
@@ -1618,6 +1701,47 @@ def owner_freeze_set():
         # Explicit owner unlock clears automatic lock state too.
         _auto_lock.update({"locked": False, "reason": "", "updated_at": int(time.time())})
     _audit_event("owner_freeze_set", {"locked": lock_value, "actor": actor}, actor="owner")
+    return jsonify({"status": "ok", **state}), 200
+
+
+@app.route("/api/settings/lock/status", methods=["GET"])
+def settings_lock_status():
+    with _settings_lock_lock:
+        state = _load_settings_lock_state()
+    # Lock is only meaningful if an owner token exists to unlock it with.
+    has_token = bool(OWNER_FREEZE_TOKEN or ADMIN_API_TOKEN)
+    return jsonify({
+        "locked": bool(state.get("locked", SETTINGS_LOCKED_DEFAULT)),
+        "owner_token_configured": has_token,
+        "updated_at": int(state.get("updated_at", 0) or 0),
+        "updated_by": state.get("updated_by", ""),
+    }), 200
+
+
+@app.route("/api/settings/lock", methods=["POST"])
+def settings_lock_set():
+    """Turn the owner-only Settings Lock on/off. Requires a valid owner token
+    (OWNER_FREEZE_TOKEN or ADMIN_API_TOKEN). Without a configured token the lock
+    cannot be engaged, so no one can ever be locked out with no way back in."""
+    if not (OWNER_FREEZE_TOKEN or ADMIN_API_TOKEN):
+        return jsonify({
+            "status": "error",
+            "message": ("No owner token is configured (set OWNER_FREEZE_TOKEN or "
+                        "ADMIN_API_TOKEN) — the Settings Lock needs one so only you "
+                        "can unlock it."),
+        }), 400
+
+    payload = request.json or {}
+    token = payload.get("token") or payload.get("owner_token") or ""
+    if not _settings_lock_authorized(token):
+        return jsonify({"status": "error", "message": "Invalid owner token."}), 403
+
+    lock_value = bool(payload.get("locked", True))
+    actor = _norm_email(session.get("owner_email") or "") or "owner"
+    with _settings_lock_lock:
+        state = {"locked": lock_value, "updated_at": int(time.time()), "updated_by": actor}
+        _save_settings_lock_state(state)
+    _audit_event("settings_lock_set", {"locked": lock_value, "actor": actor}, actor="owner")
     return jsonify({"status": "ok", **state}), 200
 
 
@@ -3614,6 +3738,9 @@ def update_trading_settings():
     blocked = _owner_freeze_block("trading settings update")
     if blocked:
         return blocked
+    locked = _settings_lock_block("trading settings update")
+    if locked:
+        return locked
     payload = request.json or {}
     _record_anomaly("settings_update")
 
@@ -3714,7 +3841,8 @@ def update_trading_settings():
 
     allowed = {
         # Core execution
-        "poll_seconds", "trailing_stop_pct", "loss_threshold",
+        "poll_seconds", "trailing_stop_pct", "loss_threshold", "trailing_activation_pct",
+        "account_type",
         "max_trades_per_hour", "scan_all_market", "max_positions", "initial_capital",
         # Auto-trade master switch
         "auto_trade",
@@ -3789,6 +3917,9 @@ def save_live_keys():
     blocked = _owner_freeze_block("live key updates")
     if blocked:
         return blocked
+    locked = _settings_lock_block("live key updates")
+    if locked:
+        return locked
     payload = request.json or {}
     k = (payload.get("alpaca_live_key") or "").strip()
     s = (payload.get("alpaca_live_secret") or "").strip()
@@ -4036,6 +4167,9 @@ def keys_setup():
     blocked = _owner_freeze_block("API key setup")
     if blocked:
         return blocked
+    locked = _settings_lock_block("API key setup")
+    if locked:
+        return locked
     limited = _rate_limited("keys_setup", limit=10, window_seconds=300)
     if limited:
         return limited
@@ -4044,6 +4178,12 @@ def keys_setup():
     k  = (payload.get("alpaca_key") or "").strip()
     s  = (payload.get("alpaca_secret") or "").strip()
     av = (payload.get("alpha_vantage_key") or "").strip()
+
+    # Cash vs margin chosen at setup — drives settlement-aware sizing + PDT guidance.
+    acct_type = str(payload.get("account_type", "") or "").strip().lower()
+    if acct_type in ("cash", "margin"):
+        _trading_settings["account_type"] = acct_type
+        _save_settings()
 
     if not k and not s and not av:
         return jsonify({"status": "error",
