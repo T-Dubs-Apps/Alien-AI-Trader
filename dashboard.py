@@ -3733,6 +3733,59 @@ def get_trading_settings():
     return jsonify(_settings_response()), 200
 
 
+@app.route("/api/range_trader/status", methods=["GET"])
+def range_trader_status():
+    """Live Range Trader state. `enabled` is the engine's EPHEMERAL in-memory flag —
+    it always reads OFF after any restart/redeploy because it is never persisted."""
+    eng = _engine
+    if eng is None:
+        return jsonify({"enabled": False, "available": False}), 200
+    return jsonify({
+        "available": True,
+        "enabled":            bool(getattr(eng, "range_trader_enabled", False)),
+        "mode":               getattr(eng, "range_trader_mode", "auto"),
+        "drop_window_min":    getattr(eng, "range_drop_window_min", 120),
+        "buy_on_drop":        getattr(eng, "range_buy_on_drop", 4),
+        "dip_pct":            getattr(eng, "range_dip_pct", 1.0),
+        "after_hours":        bool(getattr(eng, "range_after_hours", False)),
+        "keepalive_sec":      getattr(eng, "range_ui_keepalive_sec", 120),
+    }), 200
+
+
+@app.route("/api/range_trader/toggle", methods=["POST"])
+def range_trader_toggle():
+    """Turn the opt-in Range Trader on/off for THIS session only. Never persisted —
+    it is OFF again on any restart, redeploy, or market close."""
+    blocked = _owner_freeze_block("range trader toggle")
+    if blocked:
+        return blocked
+    eng = _engine
+    if eng is None:
+        return jsonify({"status": "error", "message": "Engine not running yet."}), 503
+    body = request.json or {}
+    raw_on = body.get("on", body.get("enabled", False))
+    on = raw_on if isinstance(raw_on, bool) else str(raw_on).strip().lower() in ("1", "true", "yes", "on")
+    try:
+        eng.set_range_trader(bool(on))
+    except Exception as e:
+        return jsonify({"status": "error", "message": f"Could not toggle: {e}"}), 500
+    return jsonify({"status": "ok", "enabled": bool(getattr(eng, "range_trader_enabled", False))}), 200
+
+
+@app.route("/api/range_trader/ping", methods=["POST"])
+def range_trader_ping():
+    """Keep-alive from the open dashboard. If these stop arriving (browser closed
+    or refreshed), the engine auto-disables the Range Trader within ~2 minutes."""
+    eng = _engine
+    if eng is None:
+        return jsonify({"status": "ok", "enabled": False}), 200
+    try:
+        eng.range_ping()
+    except Exception:
+        pass
+    return jsonify({"status": "ok", "enabled": bool(getattr(eng, "range_trader_enabled", False))}), 200
+
+
 @app.route("/api/settings/trading", methods=["POST"])
 def update_trading_settings():
     global _trading_settings, _MARKET_HOURS_ONLY
@@ -3847,6 +3900,10 @@ def update_trading_settings():
         # Core execution
         "poll_seconds", "trailing_stop_pct", "loss_threshold", "trailing_activation_pct",
         "account_type",
+        # Range Trader CONFIG (persistable). NOTE: "range_trader_enabled" is NOT here
+        # on purpose — the enable flag is ephemeral and only set via /api/range_trader/toggle.
+        "range_trader_mode", "range_drop_window_min", "range_buy_on_drop",
+        "range_dip_pct", "range_after_hours",
         "max_trades_per_hour", "scan_all_market", "max_positions", "initial_capital",
         # Auto-trade master switch
         "auto_trade",

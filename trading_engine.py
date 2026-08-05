@@ -232,6 +232,28 @@ class TradingEngine:
         self.max_gross_exposure_pct = float(os.environ.get("MAX_GROSS_EXPOSURE_PCT", "85.0"))
         self.min_cash_reserve_pct = float(os.environ.get("MIN_CASH_RESERVE_PCT", "10.0"))
 
+        # ── Range Trader (opt-in: buy near a stock's range low, sell near its high) ──
+        # SAFETY CONTRACT:
+        #  • range_trader_enabled is EPHEMERAL — it starts OFF on every engine build
+        #    (a fresh engine is created each session, so it is OFF every market day,
+        #    redeploy, device restart) and is NEVER read from or written to settings,
+        #    so it can never silently come back on.
+        #  • It auto-disables at market close (unless after-hours is opted in) and if
+        #    the dashboard stops checking in (browser closed/refreshed).
+        #  • When OFF it has ZERO effect on normal trading. Stop-loss and the daily
+        #    trade cap always apply.
+        # Everything below except `range_trader_enabled` is ordinary (persistable)
+        # configuration.
+        self.range_trader_enabled    = False   # EPHEMERAL — never loaded/saved
+        self.range_trader_mode       = str(os.environ.get("RANGE_TRADER_MODE", "auto")).strip().lower()  # auto|manual|both
+        self.range_drop_window_min   = max(30, int(os.environ.get("RANGE_DROP_WINDOW_MIN", "120")))       # window, 30-min steps
+        self.range_buy_on_drop       = max(1, int(os.environ.get("RANGE_BUY_ON_DROP", "4")))              # Nth dip to buy (adjustable)
+        self.range_dip_pct           = max(0.1, float(os.environ.get("RANGE_DIP_PCT", "1.0")))            # % pullback = one "drop"
+        self.range_after_hours       = str(os.environ.get("RANGE_AFTER_HOURS", "false")).strip().lower() == "true"
+        self.range_ui_keepalive_sec  = max(60, int(os.environ.get("RANGE_UI_KEEPALIVE_SEC", "120")))
+        self._range_last_ui_ping     = 0.0
+        self._range_state: Dict[str, Dict[str, Any]] = {}   # symbol -> intraday tracking
+
         # Forecast policy: mandatory only when a trade is high-risk to execute
         # without forward confirmation (capital-intensive, volatile, illiquid).
         self.forecast_required_capital_pct = float(os.environ.get("FORECAST_REQUIRED_CAPITAL_PCT", "12.0"))
@@ -693,6 +715,13 @@ class TradingEngine:
         while self.running:
             # Pick up live setting changes pushed from the dashboard UI
             self._poll_live_settings()
+            # Range Trader safety: auto-disable if the market closed (and after-hours
+            # was not opted in) or the dashboard stopped checking in (browser gone).
+            if self.range_trader_enabled:
+                try:
+                    self._range_safety_check()
+                except Exception:
+                    pass
             # Portfolio Safety Shield — halt buys if portfolio drops to threshold
             if self.shield_enabled and self.portfolio_stop_loss > 0:
                 self._check_portfolio_shield()
@@ -744,6 +773,86 @@ class TradingEngine:
             self._maybe_heartbeat(message="scan-complete")
             time.sleep(self.poll_seconds)
 
+    # ── Range Trader (opt-in: buy near the range low, sell near the range high) ──
+    def set_range_trader(self, on: bool) -> None:
+        """Ephemeral master switch. NEVER persisted, so it is OFF again on any
+        restart/redeploy. Turning it off clears intraday tracking."""
+        with self.lock:
+            self.range_trader_enabled = bool(on)
+            self._range_last_ui_ping = time.time() if on else 0.0
+            if not on:
+                self._range_state = {}
+        self.send_alert(
+            f"Range Trader {'ENABLED for this session' if on else 'disabled'} by user.",
+            level="info",
+        )
+
+    def range_ping(self) -> None:
+        """Keep-alive from the dashboard. If pings stop (browser closed/refreshed),
+        the range trader auto-disables so it can never run unattended."""
+        self._range_last_ui_ping = time.time()
+
+    def _range_safety_check(self) -> None:
+        """Auto-disable when the browser stops checking in, or the market closes and
+        after-hours was not opted in. Runs every scan cycle while enabled."""
+        if not self.range_trader_enabled:
+            return
+        now = time.time()
+        reason = None
+        if self._range_last_ui_ping and (now - self._range_last_ui_ping) > self.range_ui_keepalive_sec:
+            reason = "dashboard stopped checking in (browser closed or refreshed)"
+        elif (not self.range_after_hours) and (not self._is_market_open()):
+            reason = "market closed for the day"
+        if reason:
+            with self.lock:
+                self.range_trader_enabled = False
+                self._range_state = {}
+            self.send_alert(f"Range Trader auto-OFF: {reason}.", level="info")
+
+    def _range_evaluate(self, symbol: str, price: float) -> None:
+        """Buy near the low of a stock's intraday range on the Nth dip; sell when it
+        recovers to the top of the range (in profit only). Opt-in; stop-loss and the
+        daily trade cap (enforced inside buy()/sell()) still apply."""
+        if price is None or price <= 0 or not self.auto_trade:
+            return
+        today = time.strftime("%Y-%m-%d")
+        st = self._range_state.get(symbol)
+        if st is None or st.get("date") != today:
+            st = {"date": today, "high": price, "low": price, "pivot": price,
+                  "dips": 0, "in_drop": False, "bought": False}
+            self._range_state[symbol] = st
+
+        # Track the intraday range and count pullbacks ("drops") from local highs.
+        st["high"] = max(st["high"], price)
+        st["low"]  = min(st["low"],  price)
+        if price >= st["pivot"]:
+            st["pivot"] = price
+            st["in_drop"] = False
+        elif not st["in_drop"]:
+            drop_pct = (st["pivot"] - price) / st["pivot"] * 100.0 if st["pivot"] > 0 else 0.0
+            if drop_pct >= self.range_dip_pct:
+                st["dips"] += 1
+                st["in_drop"] = True   # each pullback counts once until price recovers
+
+        held = symbol in self.current_holdings
+
+        # SELL: a range-bought position back at the top of the range, in profit only.
+        # (Never below cost — the hard stop-loss in evaluate() is the only such exit.)
+        if held and st.get("bought"):
+            cost = float(self.current_holdings[symbol].get("price", 0) or 0)
+            if price >= st["high"] * 0.999 and price > cost:
+                self.sell(symbol, price, reason="range_top")
+                st["bought"] = False
+            return
+
+        # BUY: on/after the Nth dip, once price is back near the low of the range.
+        if not held and st["dips"] >= self.range_buy_on_drop and price <= st["low"] * 1.003:
+            self.buy(symbol, price, signal={"range_trader": True, "range_dips": st["dips"],
+                                            "range_low": round(st["low"], 4),
+                                            "range_high": round(st["high"], 4)})
+            if symbol in self.current_holdings:
+                st["bought"] = True
+
     def _scan_symbol(self, symbol: str):
         """Fetch price and evaluate a single symbol (runs in thread pool)."""
         price = self.get_live_price(symbol)
@@ -773,6 +882,15 @@ class TradingEngine:
         with self.lock:
             _held_before = symbol in self.current_holdings
         self.evaluate(symbol, price)
+
+        # Optional Range Trader (opt-in). Runs AFTER the normal evaluate so it can
+        # never override a normal signal, and BEFORE the ledger snapshot so a range
+        # fill still shows as Bought/Sold. Zero effect unless the user enabled it.
+        if self.range_trader_enabled and self.range_trader_mode in ("auto", "both"):
+            try:
+                self._range_evaluate(symbol, price)
+            except Exception:
+                pass
 
         # Emit one compact live-feed line per scan, labelled by what ACTUALLY
         # happened — detected from the change in holdings, NOT the raw signal:
@@ -1047,6 +1165,15 @@ class TradingEngine:
             if "shield_enabled"        in s: self.shield_enabled         = bool(s["shield_enabled"])
             if "min_hold_seconds"      in s: self.min_hold_seconds       = max(0, int(s["min_hold_seconds"]))
             if "trailing_activation_pct" in s: self.trailing_activation_pct = max(0.0, float(s["trailing_activation_pct"]))
+            # Range Trader CONFIG only (persistable). The enable flag is EPHEMERAL
+            # and deliberately NOT read here — it is set only via set_range_trader().
+            if "range_trader_mode" in s:
+                _rm = str(s["range_trader_mode"]).strip().lower()
+                if _rm in ("auto", "manual", "both"): self.range_trader_mode = _rm
+            if "range_drop_window_min" in s: self.range_drop_window_min = max(30, int(s["range_drop_window_min"]))
+            if "range_buy_on_drop"     in s: self.range_buy_on_drop     = max(1, int(s["range_buy_on_drop"]))
+            if "range_dip_pct"         in s: self.range_dip_pct         = max(0.1, float(s["range_dip_pct"]))
+            if "range_after_hours"     in s: self.range_after_hours     = bool(s["range_after_hours"])
             if "account_type"          in s:
                 _at = str(s["account_type"]).strip().lower()
                 if _at in ("cash", "margin"):
@@ -2521,6 +2648,14 @@ class TradingEngine:
             "loss_threshold":    round(self.loss_threshold * 100, 2),
             "trailing_activation_pct": round(self.trailing_activation_pct, 2),
             "account_type":      self.account_type,
+            # Range Trader — enable is ephemeral (reflects the live in-memory state,
+            # always starts OFF); the rest is persistable config.
+            "range_trader_enabled":  self.range_trader_enabled,
+            "range_trader_mode":     self.range_trader_mode,
+            "range_drop_window_min": self.range_drop_window_min,
+            "range_buy_on_drop":     self.range_buy_on_drop,
+            "range_dip_pct":         self.range_dip_pct,
+            "range_after_hours":     self.range_after_hours,
             "scan_all_market":   self.scan_all_market,
             "max_positions":     self.max_positions,
             "min_positions":     self.min_positions,

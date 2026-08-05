@@ -724,6 +724,68 @@
                 </div>
               </div>
 
+              <!-- Range Trader (opt-in) -->
+              <hr style="border-color:var(--border);margin:1rem 0 .75rem">
+              <div class="section-title" style="font-size:.8rem;margin-bottom:.5rem;">
+                <i class="fa-solid fa-arrows-up-down me-1"></i>Range Trader
+                <span class="small-muted ms-1" style="font-size:.68rem;font-weight:400;">— buy low / sell high in a stock's range · opt-in · OFF after any refresh, restart or market close</span>
+              </div>
+              <div class="row g-2">
+                <div class="col-12">
+                  <div class="form-check form-switch mt-1">
+                    <input class="form-check-input" type="checkbox" id="rangeTraderEnable" onchange="toggleRangeTrader()">
+                    <label class="form-check-label" for="rangeTraderEnable">
+                      <strong>Enable Range Trader</strong>
+                      <span class="small-muted ms-1" style="font-size:.72rem;">— turns itself OFF on refresh, restart, and at market close</span>
+                    </label>
+                  </div>
+                </div>
+                <div class="col-6">
+                  <label class="form-label">Mode</label>
+                  <select class="form-select" id="rangeMode" onchange="saveRangeConfig()">
+                    <option value="auto">Auto — scan &amp; trade</option>
+                    <option value="manual">Manual — stocks I pick (Phase 2)</option>
+                    <option value="both">Both</option>
+                  </select>
+                </div>
+                <div class="col-6">
+                  <label class="form-label" title="How far back the range and dip count are measured.">Drop window</label>
+                  <select class="form-select" id="rangeWindow" onchange="saveRangeConfig()">
+                    <option value="30">30 min</option>
+                    <option value="60">1 hour</option>
+                    <option value="90">1½ hours</option>
+                    <option value="120">2 hours</option>
+                    <option value="150">2½ hours</option>
+                    <option value="180">3 hours</option>
+                    <option value="210">3½ hours</option>
+                    <option value="240">4 hours</option>
+                  </select>
+                </div>
+                <div class="col-6">
+                  <label class="form-label" title="Buy once the stock has dipped this many times in the window.">Buy on drop #</label>
+                  <input class="form-control" type="number" id="rangeBuyOnDrop" value="4" min="1" max="50" step="1" onchange="saveRangeConfig()">
+                </div>
+                <div class="col-6">
+                  <label class="form-label" title="A pullback of at least this % from a recent high counts as one drop.">Drop size %</label>
+                  <div class="input-group">
+                    <input class="form-control" type="number" id="rangeDipPct" value="1.0" min="0.1" max="20" step="0.1" onchange="saveRangeConfig()">
+                    <span class="input-group-text" style="background:var(--card);border-color:var(--border);color:var(--muted);">%</span>
+                  </div>
+                </div>
+                <div class="col-12">
+                  <div class="form-check form-switch mt-1">
+                    <input class="form-check-input" type="checkbox" id="rangeAfterHours" onchange="saveRangeConfig()">
+                    <label class="form-check-label" for="rangeAfterHours">
+                      <strong>Also run after-hours</strong>
+                      <span class="small-muted ms-1" style="font-size:.72rem;">— if you trade extended hours; otherwise it stops at market close</span>
+                    </label>
+                  </div>
+                </div>
+                <div class="col-12">
+                  <div id="rangeTraderStatus" class="small-muted" style="font-size:.7rem;"></div>
+                </div>
+              </div>
+
               <!-- Position Sizing & Signal Controls -->
               <hr style="border-color:var(--border);margin:1rem 0 .75rem">
               <div class="section-title" style="font-size:.8rem;margin-bottom:.5rem;">
@@ -3292,6 +3354,83 @@
         .then(() => addFeedSysLine(checked ? '🌐 Scan Entire Market ENABLED' : '🔵 Scan Entire Market DISABLED'))
         .catch(() => addFeedSysLine('⚠ Failed to update Scan Entire Market setting'));
     }
+
+    // ═══════════════════════════════════════════
+    //  RANGE TRADER (opt-in, off by default every session)
+    // ═══════════════════════════════════════════
+    let _rangeKeepAlive = null;
+    function _rangeStartKeepAlive() {
+      if (_rangeKeepAlive) return;
+      // Ping now, then every 30s. If these stop (page closed/refreshed), the
+      // engine auto-disables the Range Trader within ~2 minutes.
+      const ping = () => fetch('/api/range_trader/ping', { method: 'POST' }).catch(() => {});
+      ping();
+      _rangeKeepAlive = setInterval(ping, 30000);
+    }
+    function _rangeStopKeepAlive() {
+      if (_rangeKeepAlive) { clearInterval(_rangeKeepAlive); _rangeKeepAlive = null; }
+    }
+    function _setRangeStatusText(enabled) {
+      const el = document.getElementById('rangeTraderStatus');
+      if (!el) return;
+      el.innerHTML = enabled
+        ? '🟢 Range Trader is ON for this session. It will turn OFF on refresh, restart, or at market close.'
+        : '⚪ Range Trader is OFF (opt-in — it never runs unless you switch it on).';
+    }
+    function toggleRangeTrader() {
+      const on = document.getElementById('rangeTraderEnable').checked;
+      fetch('/api/range_trader/toggle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ on }),
+      })
+        .then(r => r.json())
+        .then(d => {
+          const enabled = !!(d && d.enabled);
+          document.getElementById('rangeTraderEnable').checked = enabled;
+          _setRangeStatusText(enabled);
+          if (enabled) { _rangeStartKeepAlive(); addFeedSysLine('🟢 Range Trader ENABLED (this session only)'); }
+          else { _rangeStopKeepAlive(); addFeedSysLine('⚪ Range Trader disabled'); }
+        })
+        .catch(() => {
+          document.getElementById('rangeTraderEnable').checked = false;
+          _rangeStopKeepAlive();
+          addFeedSysLine('⚠ Could not toggle Range Trader');
+        });
+    }
+    function saveRangeConfig() {
+      const body = {
+        range_trader_mode:     document.getElementById('rangeMode').value,
+        range_drop_window_min: parseInt(document.getElementById('rangeWindow').value, 10) || 120,
+        range_buy_on_drop:     parseInt(document.getElementById('rangeBuyOnDrop').value, 10) || 4,
+        range_dip_pct:         parseFloat(document.getElementById('rangeDipPct').value) || 1.0,
+        range_after_hours:     document.getElementById('rangeAfterHours').checked,
+      };
+      fetch('/api/settings/trading', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }).then(r => r.json()).catch(() => addFeedSysLine('⚠ Failed to save Range Trader settings'));
+    }
+    function loadRangeTrader() {
+      fetch('/api/range_trader/status').then(r => r.json()).then(s => {
+        if (!s) return;
+        const enabled = !!s.enabled;
+        const en = document.getElementById('rangeTraderEnable'); if (en) en.checked = enabled;
+        if (s.mode)             document.getElementById('rangeMode').value       = s.mode;
+        if (s.drop_window_min)  document.getElementById('rangeWindow').value      = String(s.drop_window_min);
+        if (s.buy_on_drop)      document.getElementById('rangeBuyOnDrop').value   = s.buy_on_drop;
+        if (s.dip_pct != null)  document.getElementById('rangeDipPct').value      = s.dip_pct;
+        const ah = document.getElementById('rangeAfterHours'); if (ah) ah.checked = !!s.after_hours;
+        _setRangeStatusText(enabled);
+        if (enabled) _rangeStartKeepAlive(); else _rangeStopKeepAlive();
+      }).catch(() => {});
+    }
+    // Stop pinging the moment the page is hidden/closed so the engine turns the
+    // feature off on its own (browser refresh / close / navigate away).
+    window.addEventListener('beforeunload', _rangeStopKeepAlive);
+    document.addEventListener('visibilitychange', () => { if (document.hidden) _rangeStopKeepAlive(); else loadRangeTrader(); });
+    try { loadRangeTrader(); } catch (e) {}
 
     // ═══════════════════════════════════════════
     //  CLOUD SYNC (USER FILES)
