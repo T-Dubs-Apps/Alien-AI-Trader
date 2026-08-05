@@ -3877,6 +3877,9 @@
       {id:'live',label:'LIVE', bars:'1-minute bars, auto-refreshing'}
     ];
     let chart=null, candleSeries=null, currentTF='1y', currentSymbol=null, inited=false, liveTimer=null;
+    // Remembers the last symbol|timeframe we auto-fit, so live refreshes DON'T
+    // snap the user's zoom/scroll back to "fit all" every cycle.
+    let _lastFitKey=null;
 
     // Intraday bars arrive as UTC epoch seconds, and Lightweight Charts renders
     // epochs in UTC -- so the 9:30am market open was being drawn at 13:30/14:30.
@@ -3955,7 +3958,14 @@
             ? j.candles.map(c => ({...c, time: toMarketTime(c.time)}))
             : j.candles;
           candleSeries.setData(data);
-          chart.timeScale().fitContent();
+          // Only auto-fit on a genuinely new load (symbol or timeframe changed).
+          // On a live auto-refresh of the SAME symbol+timeframe, leave the user's
+          // current zoom/scroll untouched so the graph keeps the size they're viewing.
+          const _fitKey = symbol + '|' + tf;
+          if (_lastFitKey !== _fitKey) {
+            chart.timeScale().fitContent();
+            _lastFitKey = _fitKey;
+          }
           document.getElementById('candleChartEmpty')?.classList.add('d-none');
           const last = data[data.length-1];
           document.getElementById('candleLastPrice').textContent = '$' + Number(last.close).toFixed(2);
