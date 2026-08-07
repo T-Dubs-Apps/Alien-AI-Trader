@@ -425,7 +425,7 @@ class TradingEngine:
 
         # Price cache: {symbol: (price, fetched_at_epoch)}
         self._price_cache: Dict[str, Tuple[Optional[float], float]] = {}
-        self._cache_ttl = max(30, int(os.environ.get("PRICE_CACHE_TTL", "30")))   # seconds
+        self._cache_ttl = max(30, int(os.environ.get("PRICE_CACHE_TTL", "60")))   # seconds (higher = fewer Alpaca calls; free feed is delayed anyway)
         # Briefly cache failed market-data lookups so a temporary Alpaca outage or
         # rate limit does not trigger a retry storm across every worker thread.
         self._price_failure_ttl = max(300, int(os.environ.get("PRICE_FAILURE_TTL", "300")))

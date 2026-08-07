@@ -1482,7 +1482,7 @@ def _apply_pro_gating(resp: dict) -> None:
 # ---- Quote cache (prevents hammering APIs) ----
 _quote_cache: Dict[str, Dict[str, Any]] = {}   # sym -> {data, fetched_at}
 _quote_cache_lock = Lock()
-QUOTE_CACHE_TTL = int(os.environ.get("QUOTE_CACHE_TTL", "30"))  # seconds — higher = fewer Alpaca calls from browser polling
+QUOTE_CACHE_TTL = int(os.environ.get("QUOTE_CACHE_TTL", "60"))  # seconds — higher = fewer Alpaca calls from browser polling (free IEX feed is delayed anyway)
 
 
 @app.before_request
@@ -3001,7 +3001,35 @@ def _fetch_quotes_uncached(symbols: List[str]) -> Dict[str, Any]:
         feed_order.append("iex")
 
     if active_client:
+        # BATCH FIRST: one get_snapshots() call covers ALL symbols at once instead
+        # of one call per symbol — by far the biggest cut to Alpaca request volume
+        # (the free plan's ~200/min cap that was rate-limiting the whole app). The
+        # per-symbol logic below only runs for symbols the batch didn't resolve.
+        try:
+            snaps = active_client.get_snapshots(symbols)
+            for sym, snap in (snaps or {}).items():
+                if snap is None:
+                    continue
+                latest = getattr(snap, "latest_trade", None)
+                daily  = getattr(snap, "daily_bar", None)
+                b_price = _safe_float(getattr(latest, "price", None)) if latest is not None else None
+                b_open  = _safe_float(getattr(daily, "o", None)) if daily is not None else None
+                if b_price is None:
+                    continue
+                b_change = b_change_pct = None
+                if b_open:
+                    b_change = round(b_price - b_open, 4)
+                    b_change_pct = round(b_change / b_open * 100, 4)
+                out[sym] = {
+                    "symbol": sym, "name": _symbol_name(sym),
+                    "price": b_price, "change": b_change, "change_percent": b_change_pct,
+                }
+        except Exception:
+            pass
+
         for sym in symbols:
+            if sym in out and out[sym].get("price") is not None:
+                continue   # already resolved by the batch snapshot above
             try:
                 price = None
                 open_px = None

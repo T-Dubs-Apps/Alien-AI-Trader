@@ -3890,7 +3890,7 @@
     setInterval(refreshSetupState, 30000);
     setInterval(refreshUpdates, 900000);   // 15 min; server-side cache matches
     setInterval(fetchWorkerStatus, 20000);
-    setInterval(refreshQuotesNow, 8000);   // fast fallback refresh
+    setInterval(refreshQuotesNow, 20000);  // fallback refresh; socket pushes real-time, and the free feed is delayed — no need to hammer
   </script>
 
   <!-- ═══════════════ CANDLESTICKS PAGE ═══════════════ -->
@@ -3949,7 +3949,7 @@
       if(tf==='live'){
         // Skip refreshes while the tab is hidden — no point spending Alpaca calls
         // on a chart nobody is looking at.
-        liveTimer=setInterval(()=>{ if(currentSymbol && !document.hidden) loadCandles(currentSymbol, 'live'); }, 15000);
+        liveTimer=setInterval(()=>{ if(currentSymbol && !document.hidden) loadCandles(currentSymbol, 'live'); }, 45000);
       }
     }
     function stopLive(){ if(liveTimer){ clearInterval(liveTimer); liveTimer=null; } }
