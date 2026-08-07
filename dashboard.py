@@ -1260,8 +1260,15 @@ _trading_settings: dict = {
     "portfolio_stop_loss":   float(os.environ.get("PORTFOLIO_STOP_LOSS",   "0")),   # 0 = off
     "portfolio_stop_buffer": float(os.environ.get("PORTFOLIO_STOP_BUFFER", "200")),  # recovery gap
     "shield_enabled":        True,
-    # ── 5hr 59min minimum hold rule ───────────────────────────────────────────
-    "min_hold_seconds":      int(os.environ.get("MIN_HOLD_SECONDS", "21540")),  # 5h 59m
+    # ── Minimum hold rule (account-aware) ─────────────────────────────────────
+    # Cash accounts (no PDT limit) default short (300s) so smart "sell high" exits
+    # can fire same-day; margin keeps the long PDT-safe hold (21,540s = 5h59m).
+    # Kept in sync with the engine's account-aware default (trading_engine.py).
+    "min_hold_seconds":      int(os.environ.get(
+        "MIN_HOLD_SECONDS",
+        "300" if str(os.environ.get("ACCOUNT_TYPE", "cash")).strip().lower() == "cash" else "21540")),
+    # ── Take-profit target (opt-in; 0 = off) ──────────────────────────────────
+    "take_profit_pct":       float(os.environ.get("TAKE_PROFIT_PCT", "0")),
     # ── Paper / Live account (buyer-toggled; live is license-gated) ───────────
     # Stored value is the REQUESTED mode. The engine is handed the EFFECTIVE mode
     # via GET /api/settings/trading, which downgrades to paper unless live is
@@ -3909,7 +3916,7 @@ def update_trading_settings():
     allowed = {
         # Core execution
         "poll_seconds", "trailing_stop_pct", "loss_threshold", "trailing_activation_pct",
-        "account_type",
+        "account_type", "take_profit_pct", "min_hold_seconds",
         # Range Trader CONFIG (persistable). NOTE: "range_trader_enabled" is NOT here
         # on purpose — the enable flag is ephemeral and only set via /api/range_trader/toggle.
         "range_trader_mode", "range_drop_window_min", "range_buy_on_drop",

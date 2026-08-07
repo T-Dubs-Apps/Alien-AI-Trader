@@ -679,6 +679,19 @@
                   <div class="small-muted mt-1" style="font-size:.68rem;">Absolute floor below buy price</div>
                 </div>
                 <div class="col-6">
+                  <label class="form-label" title="Sell automatically once a position is up this %. Locks in a gain before any drop. 0 = off.">Take-Profit % <i class="fa-solid fa-circle-info fa-xs" style="color:var(--muted)"></i></label>
+                  <div class="input-group">
+                    <input class="form-control" type="number" id="takeProfitPct" value="0" min="0" max="100" step="0.5">
+                    <span class="input-group-text" style="background:var(--card);border-color:var(--border);color:var(--muted);">%</span>
+                  </div>
+                  <div class="small-muted mt-1" style="font-size:.68rem;">0 = off · lock in this gain</div>
+                </div>
+                <div class="col-6">
+                  <label class="form-label" title="Smallest time to hold before the smart 'sell high' exits (take-profit, forecast, signal) may fire. Emergency stop-loss/trailing always fire. Cash accounts can keep this low; margin should stay 360+ to avoid day-trade flags.">Min Hold (min) <i class="fa-solid fa-circle-info fa-xs" style="color:var(--muted)"></i></label>
+                  <input class="form-control" type="number" id="minHoldMinutes" value="5" min="0" max="600" step="1">
+                  <div class="small-muted mt-1" style="font-size:.68rem;">Cash: low = same-day exits · Margin: 360</div>
+                </div>
+                <div class="col-6">
                   <label class="form-label" title="Starting capital in dollars. The AI sizes positions and reinvests all proceeds automatically. Set to 0 to use fixed ORDER_QTY instead.">Starting Capital $</label>
                   <div class="input-group">
                     <span class="input-group-text" style="background:var(--card);border-color:var(--border);color:var(--muted);">$</span>
@@ -1168,15 +1181,12 @@
                   </div>
                 </div>
                 <div class="col-md-4">
-                  <label class="form-label">5hr 59min Minimum Hold Rule</label>
-                  <div class="form-check form-switch mt-2">
-                    <input class="form-check-input" type="checkbox" id="minHoldToggle" checked>
-                    <label class="form-check-label" for="minHoldToggle">
-                      Hold each position ≥5h 59m before selling
-                    </label>
-                  </div>
-                  <div class="small-muted mt-1" style="font-size:.68rem;">
-                    Prevents rapid day-trading and avoids Pattern Day Trader flagging for accounts under $25K
+                  <label class="form-label">Minimum Hold Rule</label>
+                  <div class="small-muted mt-2" style="font-size:.72rem;">
+                    Now set precisely in <b>Min Hold (min)</b> under Trading Settings above.
+                    Cash accounts can hold briefly for same-day “sell high” exits; margin
+                    accounts should keep it ≥360 min to avoid Pattern Day Trader flagging
+                    under $25K. Emergency stop-loss and trailing stops always fire regardless.
                   </div>
                 </div>
               </div>
@@ -3114,6 +3124,8 @@
         // ── Core execution ──────────────────────────────────────────────────
         trailing_stop_pct:  parseFloat(document.getElementById('trailingStop').value)    || 2.2,
         loss_threshold:     parseFloat(document.getElementById('stopLoss').value)         || 4,
+        take_profit_pct:    parseFloat(document.getElementById('takeProfitPct').value)    || 0,
+        min_hold_seconds:   Math.max(0, Math.round((parseFloat(document.getElementById('minHoldMinutes').value) || 0) * 60)),
         max_trades_per_hour:parseInt(document.getElementById('maxTrades').value)          || 20,
         poll_seconds:       parseInt(document.getElementById('scanInterval').value)       || 60,
         initial_capital:    parseFloat(document.getElementById('initialCapital').value)   || 0,
@@ -3191,6 +3203,8 @@
         // Core execution
         if (s.trailing_stop_pct  != null) document.getElementById('trailingStop').value    = s.trailing_stop_pct;
         if (s.loss_threshold     != null) document.getElementById('stopLoss').value        = s.loss_threshold;
+        if (s.take_profit_pct    != null) document.getElementById('takeProfitPct').value   = s.take_profit_pct;
+        if (s.min_hold_seconds   != null) document.getElementById('minHoldMinutes').value  = Math.round(s.min_hold_seconds / 60);
         if (s.max_trades_per_hour!= null) document.getElementById('maxTrades').value       = s.max_trades_per_hour;
         if (s.poll_seconds       != null) document.getElementById('scanInterval').value    = s.poll_seconds;
         if (s.initial_capital    != null) document.getElementById('initialCapital').value  = s.initial_capital;
@@ -3232,6 +3246,8 @@
       // Core
       if (s.trailing_stop_pct  != null) document.getElementById('trailingStop').value    = s.trailing_stop_pct;
       if (s.loss_threshold     != null) document.getElementById('stopLoss').value        = s.loss_threshold;
+      if (s.take_profit_pct    != null) document.getElementById('takeProfitPct').value   = s.take_profit_pct;
+      if (s.min_hold_seconds   != null) document.getElementById('minHoldMinutes').value  = Math.round(s.min_hold_seconds / 60);
       if (s.max_trades_per_hour!= null) document.getElementById('maxTrades').value       = s.max_trades_per_hour;
       if (s.poll_seconds       != null) document.getElementById('scanInterval').value    = s.poll_seconds;
       if (s.initial_capital    != null) document.getElementById('initialCapital').value  = s.initial_capital;
@@ -3525,8 +3541,7 @@
       const buffer    = parseFloat(document.getElementById('shieldBuffer').value) || 200;
       const enabled   = document.getElementById('shieldEnabled').checked;
       const afterHours = document.getElementById('shieldAfterHours').checked;
-      const minHold   = document.getElementById('minHoldToggle').checked;
-      const cfg = { threshold, buffer, enabled, afterHours, minHold };
+      const cfg = { threshold, buffer, enabled, afterHours };
       localStorage.setItem(SHIELD_KEY, JSON.stringify(cfg));
 
       // Push to engine
@@ -3537,7 +3552,6 @@
           portfolio_stop_loss:   threshold,
           portfolio_stop_buffer: buffer,
           shield_enabled:        enabled,
-          min_hold_seconds:      minHold ? 5 * 3600 + 59 * 60 : 0,
         }),
       })
         .then(r => r.json())
@@ -3577,7 +3591,6 @@
         if (cfg.buffer != null) document.getElementById('shieldBuffer').value = cfg.buffer;
         if (cfg.enabled != null) document.getElementById('shieldEnabled').checked = cfg.enabled;
         if (cfg.afterHours != null) document.getElementById('shieldAfterHours').checked = cfg.afterHours;
-        if (cfg.minHold != null) document.getElementById('minHoldToggle').checked = cfg.minHold;
         updateShieldUI(cfg);
       } catch {}
     }

@@ -476,11 +476,26 @@ class TradingEngine:
         self.shield_enabled        = True
         self.shield_triggered      = False   # True = buys paused until recovery
 
-        # ── 5hr 59min Minimum Hold Rule ────────────────────────────────────────
-        # Don't exit a position until it has been held this many seconds.
-        # Default 21,540 s = 5h 59m. Prevents same-day round-trip (day trade) flagging.
-        # Emergency trailing-stops and hard stop-losses are EXEMPT (always fire).
-        self.min_hold_seconds = int(os.environ.get("MIN_HOLD_SECONDS", "21540"))
+        # ── Minimum Hold Rule (account-aware) ──────────────────────────────────
+        # Don't exit a position until it has been held this many seconds. This
+        # gates the SMART exits (take-profit, forecast, signal) — emergency
+        # trailing-stops and hard stop-losses are EXEMPT and always fire.
+        # The old 5h59m default existed only to avoid Pattern-Day-Trader flags on
+        # MARGIN accounts. CASH accounts have no PDT limit, so a long hold there
+        # just blocks good same-day "sell high" exits for no benefit. So: honor an
+        # explicit MIN_HOLD_SECONDS if set; otherwise default short for cash
+        # (300 s) and keep the long PDT-safe hold for margin (21,540 s = 5h59m).
+        _mh_env = os.environ.get("MIN_HOLD_SECONDS")
+        if _mh_env is not None:
+            self.min_hold_seconds = max(0, int(_mh_env))
+        else:
+            self.min_hold_seconds = 300 if self.account_type == "cash" else 21540
+
+        # ── Take-Profit target (opt-in; 0 = off) ───────────────────────────────
+        # Lock in a defined gain before any drop: once a position is up this %, sell.
+        # Respects the minimum-hold rule (so it stays PDT-safe on margin). The most
+        # reliable "sell high" lever — a bird in the hand. Tradeoff: caps a bigger run.
+        self.take_profit_pct = max(0.0, float(os.environ.get("TAKE_PROFIT_PCT", "0")))
 
         # ── Confirmed risk-slider profile support ───────────────────────────────
         # Backward-compatible by design: unless the dashboard explicitly sends a
@@ -1177,6 +1192,7 @@ class TradingEngine:
             if "portfolio_stop_buffer" in s: self.portfolio_stop_buffer = max(0.0, float(s["portfolio_stop_buffer"]))
             if "shield_enabled"        in s: self.shield_enabled         = bool(s["shield_enabled"])
             if "min_hold_seconds"      in s: self.min_hold_seconds       = max(0, int(s["min_hold_seconds"]))
+            if "take_profit_pct"       in s: self.take_profit_pct        = max(0.0, float(s["take_profit_pct"]))
             if "trailing_activation_pct" in s: self.trailing_activation_pct = max(0.0, float(s["trailing_activation_pct"]))
             # Range Trader CONFIG only (persistable). The enable flag is EPHEMERAL
             # and deliberately NOT read here — it is set only via set_range_trader().
@@ -2255,6 +2271,23 @@ class TradingEngine:
                 )
                 self.sell(symbol, price, reason="stop_loss")
 
+            # 2b. Take-Profit: lock in a defined gain before any drop (0 = off).
+            #     Respects the minimum-hold rule so it stays PDT-safe on margin.
+            elif (
+                self.take_profit_pct > 0 and
+                change_from_buy >= (self.take_profit_pct / 100.0) and
+                _min_hold_ok
+            ):
+                if not self.auto_trade:
+                    print(f"[ENGINE] {symbol} TAKE-PROFIT triggered - auto-trade is OFF, skipping sell.")
+                    return
+                self.send_alert(
+                    f"TAKE-PROFIT: {symbol} hit +{change_from_buy*100:.1f}% "
+                    f"(target {self.take_profit_pct:.1f}%) — locking in the gain @ ${price:.2f}.",
+                    level="info", symbol=symbol,
+                )
+                self.sell(symbol, price, reason="take_profit")
+
             # 3. Forecast-based early exit: momentum peaked — sell before trailing stop fires
             #    Only exits when: forecast flips DOWN + EMA phase is "falling" + in profit
             #    Respects 5hr 59min minimum hold rule.
@@ -2663,6 +2696,8 @@ class TradingEngine:
             "trailing_stop_pct": round(self.trailing_stop_pct * 100, 2),
             "loss_threshold":    round(self.loss_threshold * 100, 2),
             "trailing_activation_pct": round(self.trailing_activation_pct, 2),
+            "take_profit_pct":   round(self.take_profit_pct, 2),
+            "min_hold_seconds":  self.min_hold_seconds,
             "account_type":      self.account_type,
             # Range Trader — enable is ephemeral (reflects the live in-memory state,
             # always starts OFF); the rest is persistable config.
