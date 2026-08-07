@@ -1537,13 +1537,29 @@
     // ═══════════════════════════════════════════
     //  SOCKET.IO  — real-time push from server
     // ═══════════════════════════════════════════
-    const socket = io({ transports: ['websocket', 'polling'] });
+    const socket = io({
+      transports: ['websocket', 'polling'],
+      // Back off instead of hammering reconnects, so a brief drop doesn't storm.
+      reconnectionDelay: 2000,
+      reconnectionDelayMax: 20000,
+      randomizationFactor: 0.5,
+      timeout: 20000,
+    });
 
+    // Debounced connection status: a brief flap (reconnects within 8s) shows
+    // NOTHING. Only a sustained outage prints one line, and one when it recovers.
+    // Trading is never affected — the app auto-falls back to polling either way.
+    let _wsDownTimer = null, _wsShownDown = false;
     socket.on('connect', () => {
-      addFeedSysLine('🟢 WebSocket connected — live push active');
+      if (_wsDownTimer) { clearTimeout(_wsDownTimer); _wsDownTimer = null; }
+      if (_wsShownDown) { addFeedSysLine('🟢 Live connection restored'); _wsShownDown = false; }
     });
     socket.on('disconnect', () => {
-      addFeedSysLine('🔴 WebSocket disconnected — falling back to polling');
+      if (_wsDownTimer || _wsShownDown) return;
+      _wsDownTimer = setTimeout(() => {
+        _wsShownDown = true; _wsDownTimer = null;
+        addFeedSysLine('🟡 Live push paused — trading continues via polling');
+      }, 8000);
     });
     socket.on('worker_status', (data) => {
       renderWorkerStatus(data);

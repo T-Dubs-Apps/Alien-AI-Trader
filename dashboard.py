@@ -1939,7 +1939,7 @@ def support_snapshot():
     live_ok, live_detail = _alpaca_auth_probe(
         live_key, live_secret, "https://api.alpaca.markets") if (live_key and live_secret) else (False, "live keys not set")
 
-    status = dict(_worker_status)
+    status = _client_status()
     last = status.get("last_heartbeat")
     stale = (int(time.time()) - int(last)) if last is not None else None
 
@@ -2001,7 +2001,7 @@ def support_payload():
             "hint": "Live keys are not configured.",
         }
 
-    status = dict(_worker_status)
+    status = _client_status()
     last = status.get("last_heartbeat")
     stale = (int(time.time()) - int(last)) if last is not None else None
 
@@ -2583,7 +2583,7 @@ def worker_heartbeat():
             _ladder_top20 = payload["ladder_top20"]
             socketio.emit("ladder_update", {"ladder": _ladder_top20})
         # Push live worker status to all browser clients
-        socketio.emit("worker_status", _worker_status)
+        socketio.emit("worker_status", _client_status())
         return jsonify({"status": "ok"}), 200
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 400
@@ -2595,9 +2595,19 @@ def get_ladder():
 
 
 @app.route("/api/worker/status", methods=["GET"])   # legacy path, kept for compatibility
+def _client_status() -> dict:
+    """A browser-safe copy of _worker_status. Drops the huge per-symbol `signals`
+    map — with full-market scanning it reached ~356KB, was pushed every ~20s over
+    HTTP and the socket, and blocked the single gevent worker long enough to knock
+    the WebSocket offline. The UI never reads `signals`, so removing it is safe and
+    is the main cause of the disconnect spam. `signals` stays in _worker_status for
+    server-side consumers."""
+    return {k: v for k, v in _worker_status.items() if k != "signals"}
+
+
 @app.route("/api/engine/status", methods=["GET"])
 def worker_status():
-    status = dict(_worker_status)
+    status = _client_status()
     last = status.get("last_heartbeat")
     if last is None:
         status["running"] = False
@@ -4314,14 +4324,15 @@ def on_connect():
     # Reject the live data stream unless logged in (when a password is set).
     if DASHBOARD_PASSWORD and not session.get("dash_authed"):
         return False
-    emit("worker_status", _worker_status)
+    emit("worker_status", _client_status())
     emit("ai_trader_state", {"ai_trader_enabled": _ai_trader_enabled})
     emit("notifications_init", {"notifications": _notifications[-50:]})
     emit("trading_settings", _settings_response())
     emit("ladder_update", {"ladder": _ladder_top20})
     # Replay recent engine activity so a fresh page / refresh isn't blank and the
     # feed reflects the backend's scan history instead of starting from nothing.
-    for _evt in list(_activity_buffer):
+    # Cap the replay so a reconnecting client doesn't get flooded each attempt.
+    for _evt in list(_activity_buffer)[-40:]:
         emit("engine_activity", _evt)
 
 
@@ -4546,7 +4557,7 @@ def _internal_heartbeat(eng: TradingEngine, lad: PortfolioLadderScanner) -> None
                 _ladder_top20 = top20
                 socketio.emit("ladder_update", {"ladder": _ladder_top20})
 
-            socketio.emit("worker_status", _worker_status)
+            socketio.emit("worker_status", _client_status())
         except Exception:
             pass
         time.sleep(_HEARTBEAT_SECS)
@@ -4748,7 +4759,7 @@ def _wait_for_market_open() -> None:
         if time.time() - announced >= 1800:
             announced = time.time()
             print(f"[ENGINE] {msg}")
-        socketio.emit("worker_status", _worker_status)
+        socketio.emit("worker_status", _client_status())
         time.sleep(30)
     print("[ENGINE] Market open — starting trading session.")
 
@@ -4863,7 +4874,7 @@ def _heartbeat_watchdog() -> None:
                         "last_heartbeat": int(time.time()),
                     })
                     try:
-                        socketio.emit("worker_status", _worker_status)
+                        socketio.emit("worker_status", _client_status())
                     except Exception:
                         pass
                     print("[ENGINE] Supervisor was not alive; restarting supervisor thread.")
@@ -4896,7 +4907,7 @@ def _engine_supervisor() -> None:
                     "last_heartbeat": int(time.time()),
                 })
                 try:
-                    socketio.emit("worker_status", _worker_status)
+                    socketio.emit("worker_status", _client_status())
                 except Exception:
                     pass
                 now = time.time()
@@ -4933,7 +4944,7 @@ def _engine_supervisor() -> None:
                     "last_heartbeat": int(time.time()),
                 })
                 try:
-                    socketio.emit("worker_status", _worker_status)
+                    socketio.emit("worker_status", _client_status())
                 except Exception:
                     pass
                 try:
@@ -4956,7 +4967,7 @@ def _engine_supervisor() -> None:
                 "last_heartbeat": int(time.time()),
             })
             try:
-                socketio.emit("worker_status", _worker_status)
+                socketio.emit("worker_status", _client_status())
             except Exception:
                 pass
             time.sleep(15)
