@@ -1509,7 +1509,10 @@
     let unreadAlerts  = 0;
     let marketDataSeen = false;
     const barsDiagBySymbol = {}; // symbol -> last GOOD bars diag from /api/bars/diag
-    const BARS_DIAG_TTL_MS = 60000;
+    const BARS_DIAG_TTL_MS = 300000;  // 5 min — bar availability barely changes; a
+                                      // 60s probe was hammering the Alpaca rate limit
+                                      // (a live 100-bar pull per symbol) for a mere
+                                      // UI indicator, competing with the engine.
     const BARS_DIAG_BATCH  = 5;   // symbols probed per cycle — each is a live Alpaca bars pull
     let engineTrackedSymbols = new Set();
     const DEFAULT_TRADE_HEALTH_THRESHOLD_MINUTES = 20;

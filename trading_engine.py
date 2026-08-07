@@ -443,6 +443,10 @@ class TradingEngine:
         self._market_candidates_cache: Tuple[List[str], float] = ([], 0.0)
         self._market_candidates_ttl = int(os.environ.get("MARKET_CANDIDATES_TTL", "600"))  # 10 min
         self._market_candidate_cursor = 0   # rotation position within the pool
+        # Hard max age: even mid-pass, rebuild a pool older than this so brand-new
+        # movers can eventually enter. Normally the pool rebuilds when a FULL PASS
+        # completes (every qualified stock scanned once) — see _get_market_candidates.
+        self._market_pool_max_age = max(600, int(os.environ.get("MARKET_POOL_MAX_AGE", "3600")))  # 1h
         # Per-cycle scan stats, surfaced in the cycle summary so the live feed and
         # the Render logs report the same breadth. (universe swept, rotation window)
         self._last_universe_count = 0
@@ -1200,12 +1204,15 @@ class TradingEngine:
         10-minute cache: list_assets returns ~10k symbols and barely changes
         during a session — no need to re-fetch every scan cycle.
         """
-        # The qualified POOL is refreshed at most once per TTL. Between refreshes we
-        # hand out a ROTATING WINDOW of it (see _rotate_candidates) so a different
-        # slice of the market is evaluated each cycle — whole-market coverage over
-        # time — without ever raising the per-cycle API burst that trips the limit.
+        # Rotate a window of the qualified POOL each cycle so EVERY qualified stock
+        # is scanned once before any repeat. Rebuild (re-sweep + re-rank) only when a
+        # FULL PASS has completed (cursor past the end) or the pool exceeds a hard
+        # max age. The old code rebuilt on a 10-min timer and reset the cursor, so it
+        # re-scanned only the top ~100 forever and never reached the rest.
         pool, cached_ts = self._market_candidates_cache
-        if cached_ts > 0 and (time.time() - cached_ts) < self._market_candidates_ttl:
+        age = (time.time() - cached_ts) if cached_ts > 0 else 1e9
+        pass_complete = (not pool) or (self._market_candidate_cursor >= len(pool))
+        if pool and not pass_complete and age < self._market_pool_max_age:
             return self._rotate_candidates(pool, max_candidates)
 
         try:
@@ -1284,21 +1291,21 @@ class TradingEngine:
         return self._rotate_candidates(pool, max_candidates)
 
     def _rotate_candidates(self, pool: List[str], count: int) -> List[str]:
-        """Return the next `count` symbols from the ranked candidate pool, advancing
-        a cursor so successive scan cycles cover DIFFERENT names (whole-market
-        coverage over time) instead of re-scanning the same top movers. Symbols on
-        the temporary skip list (recent data issues) are filtered out here, so a bad
-        symbol is skipped without forcing a full pool rebuild."""
-        now = time.time()
-        live = [s for s in pool if self._symbol_skip_until.get(s, 0.0) <= now]
-        if not live:
+        """Return the next `count` symbols from the ranked pool, advancing a
+        NON-wrapping cursor. When the cursor reaches the end a full pass is done and
+        the caller rebuilds the pool — so every qualified stock is scanned once
+        before any repeats. Skip-listed symbols (recent data issues) are filtered
+        from the returned window."""
+        if not pool:
             return []
-        n = min(max(1, count), len(live))
-        start = self._market_candidate_cursor % len(live)
-        window = [live[(start + i) % len(live)] for i in range(n)]
-        self._market_candidate_cursor = (start + n) % len(live)
-        self._last_window = (start, n, len(live))
-        return window
+        now = time.time()
+        start = self._market_candidate_cursor
+        if start >= len(pool):
+            start = 0   # defensive; the caller rebuilds on pass-complete
+        end = min(start + max(1, count), len(pool))
+        self._market_candidate_cursor = end   # advances toward len(pool) = pass complete
+        self._last_window = (start, end - start, len(pool))
+        return [s for s in pool[start:end] if self._symbol_skip_until.get(s, 0.0) <= now]
 
     # -----------------------------------------------
     # After-hours portfolio guard (runs 24/7)
