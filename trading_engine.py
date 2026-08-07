@@ -917,6 +917,15 @@ class TradingEngine:
         except Exception:
             pass
 
+        # Cooperative yield: under gevent (the web server's async model) this hands
+        # control back to the event loop after each symbol's CPU-heavy evaluate(),
+        # so the dashboard and WebSocket stay responsive during a full scan instead
+        # of the loop hogging the single worker. A no-op cost when nothing is waiting.
+        try:
+            time.sleep(0)
+        except Exception:
+            pass
+
     def _alert_data_issue(self, symbol: str, issue: str, detail: str) -> None:
         """Emit a throttled warning for data issues so users can diagnose skips."""
         key = f"{symbol}:{issue}"
