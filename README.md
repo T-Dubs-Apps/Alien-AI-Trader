@@ -433,27 +433,123 @@ If a stock drops more than X% from your buy price without ever rising, the AI ex
 
 ---
 
-## ⚙️ Adjusting the Settings (Trade Tab)
+## ⚙️ Complete Settings Reference & Trading Guide
 
-All settings can be changed live — no restart needed.
+All settings can be changed live from the Trade tab — no restart needed, and everything is saved automatically. This section explains **every setting, what it does, and how it affects your trading.** *(Also available as a printable standalone file: [`SETTINGS_GUIDE.md`](SETTINGS_GUIDE.md).)*
 
-| Setting | Default | What it does |
-|---------|---------|-------------|
-| Trailing Stop % | 3% | How far from the peak before the AI sells |
-| Stop-Loss % | 5% | Maximum loss from buy price before forced exit |
-| Scan Interval | 15s | How often the AI scans every stock |
-| Starting Capital $ | 0 | Total money the AI manages (0 = 1-share fixed mode) |
-| Risk Per Trade % | 2% | Max % of capital on any single trade |
-| Max Position % | 20% | Max % of capital in any single stock |
-| Min Positions | 5 | Capital is spread across at least this many stocks |
-| Max Trades/Hour | 30 | Rate limiter — prevents runaway trading |
-| Max Positions | 5 | Max number of stocks held at once |
-| RSI Buy Max | 50 | Only buy when RSI is below this number |
-| RSI Sell Min | 70 | Signal-based sell when RSI exceeds this |
-| Forecast Exit | ON | Sell early when forecast shows momentum reversing |
-| Scan Entire Market | OFF | Scan all 8,000+ US stocks, not just your watchlist |
+> **The one thing to remember:** the bot's job is to **buy stocks that are dipping inside an uptrend, protect them with automatic stop‑losses, and sell them near the top or at a profit target.** Every setting just tunes *how cautious or aggressive* it is at doing that. **No setting turns off the safety stops** — those always protect you.
 
-> **All settings are saved automatically.** If the app restarts, your settings are restored exactly as you left them.
+### How the bot works in 30 seconds
+
+1. **Scans** stocks on a timer (your watchlist, or the whole market).
+2. **Buys** when a stock looks like a good dip in an uptrend and passes your filters.
+3. **Watches** each holding continuously and tracks its highest price.
+4. **Sells** at a profit target, when momentum rolls over, or when a protective stop triggers.
+
+### ⭐ The Risk Slider (1–10) — your master control
+
+Moving it and pressing **Apply** overwrites **nine settings at once** — how picky it is about buying, how big each trade is, and how much of your cash it deploys. **Level 5 is the balanced default.**
+
+| Level | Name | Risk / trade | Max in one stock | Max invested | Cash held back |
+|------:|------|:-----------:|:---------------:|:------------:|:--------------:|
+| 1 | Very Conservative | 0.5% | 8% | 55% | 45% |
+| 2 | Conservative | 0.75% | 10% | 60% | 40% |
+| 3 | Cautious | 1.0% | 12% | 65% | 35% |
+| 4 | Moderate | 1.5% | 16% | 70% | 30% |
+| **5** | **Balanced (default)** | **2.0%** | **20%** | **75%** | **25%** |
+| 6 | Growth | 2.3% | 23% | 80% | 20% |
+| 7 | Assertive | 2.6% | 26% | 85% | 15% |
+| 8 | Aggressive | 3.0% | 29% | 90% | 10% |
+| 9 | Very Aggressive | 3.5% | 32% | 95% | 5% |
+| 10 | Maximum | 4.0% | 35% | 100% | 0% |
+
+Low numbers = fewer, smaller, safer trades with lots of cash in reserve. High numbers = more trades, bigger positions, nearly all your money invested. At **8+** it adds "buy the drastic dip" entries; at **9–10** it waives the forecast‑up requirement and the exposure guard stops blocking (it may deploy up to 100%).
+
+### 1. Master switches
+
+| Setting | Default | What it does & how it affects trading |
+|---|---|---|
+| **Auto‑Trade** | ON | Master on/off. ON = places real buy/sell orders. OFF = scans and shows signals but places no orders (watch‑only). |
+| **Paper / Live mode** | Paper | **Paper** = practice money, zero risk. **Live** = real brokerage money (license‑gated). Always start on Paper. |
+| **Market Hours Only** | ON | ON = trades only 9:30 AM–4:00 PM ET. OFF = also trades pre/after‑hours (thinner, riskier). |
+
+### 2. How it decides to BUY
+
+| Setting | Default | What it does & how it affects trading |
+|---|---|---|
+| **Scan Entire Market** | ON | ON = hunts the whole US market (rotating through all qualified stocks so it covers everything over time). OFF = only your watchlist. |
+| **RSI Buy Max** | 60 | RSI = overbought/oversold gauge (0–100). Only buys when RSI is **below** this — it buys **dips**, not tops. Lower = pickier. |
+| **SMA Spread Min** | 0.1% | Requires the fast 20‑day average to be this far above the slow 50‑day average before buying — confirms an uptrend. Higher = demands a stronger trend. |
+| **Max Positions** | 5 | Most stocks held at once. Higher = more diversification, smaller slices. |
+| **Min Positions** | 5 | Spreads capital: divides your money by this to cap how expensive one share can be. Higher = cheaper stocks, spread thinner. |
+| **Rocket Breakout Mode** | ON | Also chases **explosive momentum movers**, not just dips. Sub‑settings: Min Day Change % (12), Volume Surge × (1.5), Min Avg Volume (150k), Max % Above SMA20 (35), Lookback Bars (20). |
+| **Forecast filter** | ON | For **risky** stocks it won't buy unless the price forecast points **up** — the "don't catch a falling knife" guard. Waived at slider 9–10. |
+
+### 3. How MUCH it buys (position sizing)
+
+| Setting | Default | What it does & how it affects trading |
+|---|---|---|
+| **Starting Capital $** | 0 (auto) | The money pool it manages. **0 = auto** (sizes to your real balance). A number caps it to that amount. |
+| **Risk Per Trade %** | 2% | Share of capital per trade. 2% of $1,000 ≈ $20/trade. Higher = bigger bets. |
+| **Max Position %** | 20% | No single stock may exceed this share of capital — prevents over‑concentration. |
+| **Risk Per Trade $** | 0 | Optional **fixed dollar** amount per trade instead of a % (0 = use the %). |
+
+### 4. How it SELLS — protecting gains and taking profit
+
+Several exits work together; whichever triggers first wins.
+
+| Setting | Default | What it does & how it affects trading |
+|---|---|---|
+| **Trailing Stop %** | 6% | Rides **up** with the price and sells if it falls this % **from its peak** since you bought. Your main "let it run, then protect the gain" tool. Tighter (3%) = sells closer to the peak but exits on smaller wiggles. |
+| **Trailing Activation %** | 3% | The trailing stop only **switches on** after the stock is up this much, and its trigger is floored at your cost — so **the trailing stop never sells below what you paid.** |
+| **Stop‑Loss %** | 8% | The disaster floor: sells if a stock drops this % below your buy price. The **only** exit allowed to sell below cost. |
+| **Take‑Profit %** | 0 (off) | Auto‑sells once up this %. The most reliable "sell high" — locks in a set gain before any drop. Trade‑off: caps a bigger run. |
+| **Min Hold (min)** | Cash 5 / Margin 360 | Smallest time to hold before the **smart** exits (take‑profit, forecast, signal) may fire. Emergency stop‑loss/trailing always fire. Cash keeps it low for same‑day exits; margin high to avoid day‑trade (PDT) flags. |
+| **Forecast Exit** | ON | Sells **before** the trailing stop when the forecast says momentum peaked — aims to exit nearer the top. |
+| **RSI Sell Min** | 70 | Sells (while in profit) when RSI climbs above this — overbought, likely to pull back. |
+
+### 5. Safety guards (hard limits)
+
+| Setting | Default | What it does & how it affects trading |
+|---|---|---|
+| **Max Gross Exposure %** | slider (75% at L5) | The most of your capital that may be invested at once. Blocks new buys past this. Scales with the risk slider (100% at level 10). |
+| **Min Cash Reserve %** | slider (25% at L5) | Minimum cash kept un‑invested — the mirror of the above. |
+| **Portfolio Safety Shield** | Off (0) | Whole‑account circuit breaker: if your **total portfolio value** falls to this dollar amount, it **halts all new buys.** Set the dollar floor to enable; 0 = off. Resume Buffer $ (200) = how far it must recover before buying resumes. |
+| **Max Trades / Hour** | 30 | Rate limiter so it can never go on a runaway spree. |
+
+### 6. Range Trader (opt‑in "buy low, sell high")
+
+Buys near the **bottom** of a stock's daily range and sells near the **top**. **Always OFF by default** — it turns itself off on every restart, page refresh, and at market close, so it never runs unattended. Settings: Enable (off), Mode (auto/manual/both), Drop window (2 h, in 30‑min steps), Buy on drop # (4, adjustable), Drop size % (1%), Also run after‑hours (off).
+
+### 7. Scan & account
+
+| Setting | Default | What it does & how it affects trading |
+|---|---|---|
+| **Scan Interval (sec)** | 60 | How often it checks the market. Minimum 60s to stay under the data provider's rate limit. |
+| **Account Type** | Cash | **Cash** = no day‑trade limit, spends only settled funds (safer, fast same‑day exits). **Margin** = day‑trade rules under $25k, holds longer. Match your real brokerage account. |
+
+### 📖 Glossary — trading terms in plain English
+
+- **RSI (Relative Strength Index):** 0–100 gauge of overbought (high) vs oversold (low). The bot buys low RSI (dips), sells high RSI (overbought).
+- **SMA (Simple Moving Average):** average price over N days. SMA20 crossing above SMA50 = "golden cross" = uptrend; the reverse = "death cross."
+- **VWAP (Volume‑Weighted Average Price):** volume‑weighted "fair value" line. Buying at/below it = buying a discount, not chasing.
+- **MACD:** momentum indicator; line above its signal line = bullish momentum.
+- **Bollinger Bands:** a price envelope; near the lower band = cheap, near the upper = stretched.
+- **Trailing stop:** a sell trigger that rides **up** with price and fires when it falls a set % from the peak.
+- **Stop‑loss / Take‑profit:** a fixed floor below / target above your buy price.
+- **Exposure / Cash reserve:** the % of your money invested vs. held safe.
+- **PDT (Pattern Day Trader):** a US rule limiting frequent same‑day round‑trips on **margin** accounts under $25k. Cash accounts are exempt — which is why they can sell faster.
+- **Dip / pullback:** a temporary drop inside a larger uptrend — what the bot tries to buy.
+
+### ✅ A safe starting configuration
+
+- **Mode:** Paper until you trust it · **Risk Slider:** 5 (Balanced)
+- **Trailing Stop:** 6% · **Stop‑Loss:** 8% · **Take‑Profit:** 5% (optional)
+- **Min Hold:** 5 min (cash) · **Max Positions:** 5
+- **Scan Entire Market:** ON · **Auto‑Trade:** ON
+- **Portfolio Safety Shield:** set a dollar floor you won't drop below
+
+> **No setting can guarantee a profit** — markets move on their own. What these settings *do* guarantee is that the bot buys with discipline and always protects each position with automatic stops.
 
 ---
 
