@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<!-- ══════════════════════════════════════════════════════════════════════════
+     Alien AI Trader — New-User Setup Chooser
+     Built by Troy Walker of T-Dub's Apps
+
+     SELF-CONTAINED ON PURPOSE. No server, no build step, no external requests.
+     • Served by the app at /start, but also opens as a plain file:// page, from
+       any static host, or wrapped in a webview shell (Google Play / App Store /
+       Microsoft Store) later — nothing here depends on the Flask backend.
+     • Progress is saved in the browser (localStorage) so an unfinished setup can
+       be resumed. Nothing personal is stored — only which path + step you're on.
+     • Links can be overridden by a host that injects `window.AAT_CONFIG`
+       (see the CFG block in the script); otherwise the public defaults are used.
+     ═════════════════════════════════════════════════════════════════════════ -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Set Up Alien AI Trader</title>
+<style>
+  :root{
+    --green:#22c55e;--green2:#4ade80;--blue:#3b82f6;--blue2:#60a5fa;
+    --bg:#060c18;--card:#0d1626;--card2:#0a1220;--border:#1e3058;
+    --text:#e2e8f0;--muted:#94a3b8;--gold:#fbbf24;--radius:14px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{background:var(--bg);color:var(--text);
+    font-family:'Segoe UI',system-ui,-apple-system,sans-serif;line-height:1.6}
+  body{padding:max(20px,env(safe-area-inset-top)) 16px calc(40px + env(safe-area-inset-bottom))}
+  .wrap{max-width:660px;margin:0 auto;display:flex;flex-direction:column;gap:20px}
+  .hero{text-align:center}
+  .hero h1{font-size:clamp(1.7rem,5.5vw,2.5rem);font-weight:900;letter-spacing:.03em;
+    background:linear-gradient(135deg,#4ade80,#60a5fa);-webkit-background-clip:text;
+    -webkit-text-fill-color:transparent;background-clip:text}
+  .hero .sub{color:var(--muted);font-size:.95rem;margin-top:4px}
+
+  /* progress bar */
+  .pbar{height:8px;background:#0a1220;border:1px solid var(--border);border-radius:99px;overflow:hidden}
+  .pbar>i{display:block;height:100%;width:0;border-radius:99px;
+    background:linear-gradient(90deg,#4ade80,#22c55e);transition:width .35s ease}
+  .pstep{text-align:center;color:var(--muted);font-size:.8rem}
+
+  .card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:18px 20px}
+  .card h2{font-size:1.1rem;margin-bottom:6px;color:var(--green2)}
+  .card p.lead{color:var(--muted);font-size:.92rem}
+
+  /* choice cards */
+  .choices{display:flex;flex-direction:column;gap:14px}
+  .choice{width:100%;text-align:left;cursor:pointer;background:var(--card2);
+    border:1.5px solid var(--border);border-radius:var(--radius);padding:16px 18px;
+    color:var(--text);transition:transform .12s,border-color .2s,box-shadow .2s;position:relative}
+  .choice:hover{transform:translateY(-2px);border-color:#2e4a7a;box-shadow:0 10px 30px rgba(0,0,0,.35)}
+  .choice.rec{border-color:var(--green)}
+  .choice .ic{font-size:1.5rem}
+  .choice .t{font-weight:800;font-size:1.08rem;margin:6px 0 2px}
+  .choice .d{color:var(--muted);font-size:.88rem}
+  .badge{display:inline-block;font-size:.7rem;font-weight:800;letter-spacing:.04em;text-transform:uppercase;
+    padding:3px 9px;border-radius:99px;vertical-align:middle}
+  .badge.g{background:rgba(34,197,94,.15);color:var(--green2);border:1px solid rgba(34,197,94,.45)}
+  .badge.b{background:rgba(59,130,246,.15);color:var(--blue2);border:1px solid rgba(59,130,246,.45)}
+
+  /* steps */
+  .steps{list-style:none;display:flex;flex-direction:column;gap:10px}
+  .step{display:flex;gap:12px;align-items:flex-start;background:var(--card2);
+    border:1px solid var(--border);border-radius:12px;padding:12px 14px;transition:border-color .2s,opacity .2s}
+  .step.done{border-color:rgba(34,197,94,.5)}
+  .step .box{flex:0 0 24px;height:24px;margin-top:2px;border-radius:7px;border:2px solid #33507f;
+    background:transparent;cursor:pointer;display:flex;align-items:center;justify-content:center;
+    font-size:.9rem;color:#04120a;transition:.15s}
+  .step.done .box{background:var(--green);border-color:var(--green)}
+  .step .body{flex:1;min-width:0}
+  .step .st{font-weight:700}
+  .step .sd{color:var(--muted);font-size:.87rem}
+  .step .sd a{color:var(--blue2)}
+  .step.important{border-color:rgba(251,191,36,.55);background:rgba(251,191,36,.06)}
+
+  .btn{display:inline-block;text-align:center;text-decoration:none;font-weight:800;cursor:pointer;
+    border-radius:12px;padding:13px 18px;border:1px solid transparent;font-size:.98rem;transition:transform .12s,box-shadow .2s}
+  .btn:hover{transform:translateY(-2px)}
+  .btn.primary{color:#04120a;background:linear-gradient(135deg,#4ade80,#22c55e);
+    box-shadow:0 8px 26px rgba(34,197,94,.32);border-color:#16a34a}
+  .btn.blue{color:#04122a;background:linear-gradient(135deg,#60a5fa,#2563eb);
+    box-shadow:0 8px 26px rgba(37,99,235,.32);border-color:#1d4ed8}
+  .btn.ghost{background:var(--card2);border-color:var(--border);color:var(--text)}
+  .btn.wide{display:block;width:100%}
+  .row{display:flex;gap:10px;flex-wrap:wrap}
+  .row>*{flex:1 1 auto}
+
+  .note{background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.3);border-radius:10px;
+    padding:10px 14px;font-size:.85rem;color:var(--gold)}
+  .save-hint{color:var(--muted);font-size:.78rem;text-align:center}
+  .hidden{display:none!important}
+  footer{text-align:center;color:var(--muted);font-size:.76rem;padding-top:6px}
+  footer a{color:var(--blue2);text-decoration:none}
+  .resume{background:linear-gradient(135deg,rgba(74,222,128,.12),rgba(59,130,246,.12));
+    border:1px solid rgba(74,222,128,.4)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="hero">
+    <h1>&#128123; Set Up Alien AI Trader</h1>
+    <div class="sub">Pick how you want to run it — we'll walk you through the rest.</div>
+  </div>
+
+  <!-- RESUME banner (only if unfinished progress exists) -->
+  <div id="resume" class="card resume hidden">
+    <h2>&#9203; Pick up where you left off</h2>
+    <p class="lead" id="resumeText">You have a setup in progress.</p>
+    <div class="row" style="margin-top:12px">
+      <button class="btn primary" id="btnResume">Resume setup</button>
+      <button class="btn ghost" id="btnRestart">Start over</button>
+    </div>
+  </div>
+
+  <!-- progress -->
+  <div id="progressWrap" class="hidden" style="display:flex;flex-direction:column;gap:6px">
+    <div class="pbar"><i id="pbarFill"></i></div>
+    <div class="pstep" id="pbarText"></div>
+  </div>
+
+  <!-- SCREEN 1: choose a path -->
+  <section id="screenChoose">
+    <div class="card">
+      <h2>How do you want to run it?</h2>
+      <p class="lead">All options are free to start and begin in safe <b>paper mode</b> (practice money). You choose if and when to go live.</p>
+      <div class="choices" style="margin-top:14px">
+
+        <button class="choice rec" data-path="device">
+          <div class="ic">&#128187;</div>
+          <div class="t">On your device <span class="badge g">Best to start</span></div>
+          <div class="d">Easiest way to see it trade. Runs while your device is on, totally free, keys never leave your machine. <b>Recommended for paper trading.</b></div>
+        </button>
+
+        <button class="choice" data-path="online">
+          <div class="ic">&#9729;&#65039;</div>
+          <div class="t">Online, 24/7 <span class="badge b">Best for going live</span></div>
+          <div class="d">Runs around the clock in the cloud (Render) even with your device off. <b>Recommended if you want to start live</b> or leave it running long-term.</div>
+        </button>
+
+        <button class="choice" data-path="both">
+          <div class="ic">&#128241;&#43;&#9729;&#65039;</div>
+          <div class="t">Both</div>
+          <div class="d">Start on your device for paper trading, then add the 24/7 online version for live. We'll guide you through both, one at a time.</div>
+        </button>
+
+      </div>
+    </div>
+    <p class="save-hint">&#128274; Your choice and progress save automatically on this device — you can close this and come back.</p>
+  </section>
+
+  <!-- SCREEN 2: steps (rendered by JS) -->
+  <section id="screenSteps" class="hidden">
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:4px">
+        <h2 id="stepsTitle" style="margin:0"></h2>
+        <button class="btn ghost" id="btnBack" style="padding:7px 12px;font-size:.82rem;flex:0 0 auto">&#8592; Change</button>
+      </div>
+      <p class="lead" id="stepsLead"></p>
+      <ul class="steps" id="stepsList" style="margin-top:14px"></ul>
+      <div id="stepsCtaWrap" style="margin-top:16px"></div>
+    </div>
+    <p class="save-hint" id="stepsSaveHint">&#128274; Progress saved. Check off each step as you go — closing this won't lose your place.</p>
+  </section>
+
+  <!-- SCREEN 3: done -->
+  <section id="screenDone" class="hidden">
+    <div class="card" style="text-align:center;border-color:rgba(34,197,94,.5)">
+      <div style="font-size:2.4rem">&#127881;</div>
+      <h2 id="doneTitle">You're all set!</h2>
+      <p class="lead" id="doneLead"></p>
+      <div class="row" style="margin-top:16px">
+        <a class="btn primary" id="doneOpen" href="#">Open the app</a>
+        <button class="btn ghost" id="doneRestart">Set up another way</button>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    &#128123; Alien AI Trader &middot; T-Dub's Apps<br>
+    <a id="repoLink" href="#" target="_blank" rel="noopener">GitHub &amp; full guide</a>
+  </footer>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  // ── Config: a host (Flask, a webview shell, a static deploy) may inject
+  //    window.AAT_CONFIG to override these. Otherwise use the public defaults. ──
+  var CFG    = window.AAT_CONFIG || {};
+  var REPO   = CFG.repoUrl   || "https://github.com/T-Dubs-Apps/Alien-AI-Trader";
+  var ZIP    = CFG.zipUrl    || (REPO + "/archive/refs/heads/main.zip");
+  var RENDER = CFG.renderUrl || ("https://render.com/deploy?repo=" + REPO);
+  var APPURL = CFG.appUrl    || "/";        // where "Open the app" points for local runs
+  var ALPACA = "https://app.alpaca.markets/signup";
+  var AV     = "https://www.alphavantage.co/support/#api-key";
+
+  var KEY = "aat_setup_progress_v1";
+
+  // ── Step definitions per path ──────────────────────────────────────────────
+  var DEVICE_STEPS = [
+    {id:"d_dl",   t:"Download the app", d:"Get the free package for your device.",
+      cta:{label:"&#128190; Download for your device", href:ZIP, cls:"primary"}},
+    {id:"d_unzip",t:"Unzip it", d:"Right-click the downloaded file &rarr; <b>Extract All</b>. Keep the folder together."},
+    {id:"d_launch",t:"Launch it", d:"Open the folder and double-click <b>LAUNCH</b>. The app opens in your browser."},
+    {id:"d_keys", t:"Add your 2 free keys", d:"In the app: <b>Settings &rarr; Setup</b>. Paste your free "+
+      "<a href='"+ALPACA+"' target='_blank' rel='noopener'>Alpaca (paper)</a> and "+
+      "<a href='"+AV+"' target='_blank' rel='noopener'>Alpha Vantage</a> keys. Leave other boxes blank."},
+    {id:"d_watch",t:"Watch it paper-trade", d:"It starts in safe <b>paper mode</b> (practice money). That's it &mdash; you're running!"}
+  ];
+  var ONLINE_STEPS = [
+    {id:"o_open", t:"Open the Render deploy", d:"This gives you your own private copy in the cloud.",
+      cta:{label:"&#9729;&#65039; Deploy on Render (online)", href:RENDER, cls:"blue", blank:true}},
+    {id:"o_acct", t:"Sign in to a free Render account", d:"Create one when prompted &mdash; free."},
+    {id:"o_pw",   t:"Set a Dashboard Password", important:true,
+      d:"When Render asks, pick a <b>strong password</b>. This locks your public app so only you can reach the controls. "+
+        "<b>Skipping this is the #1 cause of a failed deploy</b> &mdash; don't leave it blank."},
+    {id:"o_deploy",t:"Click Deploy and wait a few minutes", d:"Your app opens at its own web address, already paper-trading."},
+    {id:"o_keys", t:"Add your 2 free keys", d:"In the app: <b>Settings &rarr; Setup</b>. Paste your free "+
+      "<a href='"+ALPACA+"' target='_blank' rel='noopener'>Alpaca (paper)</a> and "+
+      "<a href='"+AV+"' target='_blank' rel='noopener'>Alpha Vantage</a> keys."},
+    {id:"o_live", t:"Go live when you're ready (optional)", d:"Subscribe, add your live Alpaca keys, then flip the in-app <b>Paper &harr; Live</b> switch for real money."}
+  ];
+
+  // ── State ──────────────────────────────────────────────────────────────────
+  var state = load() || {path:null, checks:{}, completed:false, bothDone:{device:false}, updatedAt:0};
+
+  function load(){ try{ return JSON.parse(localStorage.getItem(KEY)); }catch(e){ return null; } }
+  function save(){ state.updatedAt = Date.now(); try{ localStorage.setItem(KEY, JSON.stringify(state)); }catch(e){} }
+  function reset(){ state = {path:null, checks:{}, completed:false, bothDone:{device:false}, updatedAt:0};
+    try{ localStorage.removeItem(KEY); }catch(e){} }
+
+  // For "both": run device steps first, then online steps.
+  function activeSteps(){
+    if(state.path==="device") return DEVICE_STEPS;
+    if(state.path==="online") return ONLINE_STEPS;
+    if(state.path==="both")   return state.bothDone.device ? ONLINE_STEPS : DEVICE_STEPS;
+    return [];
+  }
+  function pathTitle(){
+    if(state.path==="device") return "Run on your device";
+    if(state.path==="online") return "Run online, 24/7";
+    if(state.path==="both")   return state.bothDone.device ? "Now add the online version" : "Step 1 of 2: your device";
+    return "";
+  }
+  function pathLead(){
+    if(state.path==="device") return "Free, runs while your device is on. Best for paper trading.";
+    if(state.path==="online") return "Runs in the cloud around the clock. Best if you want to go live.";
+    if(state.path==="both")   return state.bothDone.device
+      ? "Nice &mdash; you're paper-trading on your device. Now set up the 24/7 online copy for live trading."
+      : "We suggest starting here for paper trading &mdash; it's the easiest way to see it work. You'll add the online version next.";
+    return "";
+  }
+
+  // ── DOM helpers ──────────────────────────────────────────────────────────
+  var $ = function(id){ return document.getElementById(id); };
+  function show(el){ el.classList.remove("hidden"); }
+  function hide(el){ el.classList.add("hidden"); }
+
+  $("repoLink").href = REPO;
+
+  // ── Progress bar ───────────────────────────────────────────────────────────
+  function updateProgress(){
+    var steps = activeSteps();
+    if(!state.path || !steps.length){ hide($("progressWrap")); return; }
+    var done = steps.filter(function(s){ return state.checks[s.id]; }).length;
+    var total = steps.length;
+    // For "both", weight across the two phases so the bar reflects the whole job.
+    var pct, label;
+    if(state.path==="both"){
+      var phaseBase = state.bothDone.device ? 50 : 0;
+      pct = phaseBase + Math.round((done/total)*50);
+      label = (state.bothDone.device ? "Online setup" : "Device setup") + " — step "+Math.min(done+1,total)+" of "+total;
+    } else {
+      pct = Math.round((done/total)*100);
+      label = "Step "+Math.min(done+1,total)+" of "+total+" — "+done+" done";
+    }
+    show($("progressWrap"));
+    $("pbarFill").style.width = pct+"%";
+    $("pbarText").textContent = label;
+  }
+
+  // ── Render the steps screen ─────────────────────────────────────────────────
+  function renderSteps(){
+    var steps = activeSteps();
+    $("stepsTitle").innerHTML = pathTitle();
+    $("stepsLead").innerHTML = pathLead();
+    var list = $("stepsList"); list.innerHTML = "";
+
+    steps.forEach(function(s){
+      var li = document.createElement("li");
+      li.className = "step" + (state.checks[s.id]?" done":"") + (s.important?" important":"");
+      var box = document.createElement("div");
+      box.className = "box"; box.innerHTML = state.checks[s.id] ? "&#10003;" : "";
+      box.setAttribute("role","checkbox");
+      box.setAttribute("aria-checked", state.checks[s.id] ? "true":"false");
+      box.onclick = function(){ toggle(s.id); };
+      var body = document.createElement("div");
+      body.className = "body";
+      var cta = s.cta ? '<div style="margin-top:8px"><a class="btn '+s.cta.cls+'" href="'+s.cta.href+'"'+
+        (s.cta.blank?' target="_blank" rel="noopener"':'')+' onclick="return window.__aatCta(\''+s.id+'\')">'+s.cta.label+'</a></div>' : '';
+      body.innerHTML = '<div class="st">'+s.t+'</div><div class="sd">'+s.d+'</div>'+cta;
+      li.appendChild(box); li.appendChild(body);
+      list.appendChild(li);
+    });
+
+    // CTA under the list: advance / finish
+    var allDone = steps.every(function(s){ return state.checks[s.id]; });
+    var wrap = $("stepsCtaWrap"); wrap.innerHTML = "";
+    if(state.path==="both" && !state.bothDone.device){
+      var b = document.createElement("button");
+      b.className = "btn primary wide";
+      b.innerHTML = allDone ? "Continue to the online setup &rarr;" : "I'll finish my device later — set up online now &rarr;";
+      b.onclick = function(){ state.bothDone.device = true; save(); renderSteps(); updateProgress(); window.scrollTo(0,0); };
+      wrap.appendChild(b);
+    } else {
+      var f = document.createElement("button");
+      f.className = "btn primary wide";
+      f.innerHTML = "&#10003; Finish";
+      f.disabled = !allDone;
+      f.style.opacity = allDone ? "1" : ".5";
+      f.style.cursor = allDone ? "pointer" : "not-allowed";
+      f.onclick = function(){ if(!allDone) return; finish(); };
+      wrap.appendChild(f);
+    }
+    updateProgress();
+  }
+
+  // clicking a CTA link marks that step done (and still follows the link)
+  window.__aatCta = function(id){ if(!state.checks[id]){ state.checks[id]=true; save(); renderSteps(); } return true; };
+
+  function toggle(id){ state.checks[id] = !state.checks[id]; save(); renderSteps(); }
+
+  // ── Screen switching ─────────────────────────────────────────────────────
+  function goChoose(){ hide($("screenSteps")); hide($("screenDone")); hide($("resume")); show($("screenChoose")); hide($("progressWrap")); }
+  function goSteps(){ hide($("screenChoose")); hide($("screenDone")); hide($("resume")); show($("screenSteps")); renderSteps(); }
+  function finish(){
+    state.completed = true; save();
+    hide($("screenSteps")); hide($("screenChoose"));
+    var online = (state.path!=="device");
+    $("doneTitle").textContent = "You're all set!";
+    $("doneLead").innerHTML = state.path==="both"
+      ? "You're paper-trading on your device and your 24/7 online copy is deploying. Open either one from its own address."
+      : (online ? "Your online copy is deploying and will open at its own web address, paper-trading right away."
+                : "The app is running on your device in safe paper mode. Open it any time from the LAUNCH file.");
+    $("doneOpen").href = online ? RENDER : APPURL;
+    $("doneOpen").textContent = online ? "Open Render dashboard" : "Open the app";
+    show($("screenDone")); updateProgress(); window.scrollTo(0,0);
+  }
+
+  // ── Wire up ────────────────────────────────────────────────────────────────
+  Array.prototype.forEach.call(document.querySelectorAll(".choice"), function(btn){
+    btn.onclick = function(){
+      state.path = btn.getAttribute("data-path");
+      state.checks = {}; state.completed = false; state.bothDone = {device:false};
+      save(); goSteps(); window.scrollTo(0,0);
+    };
+  });
+  $("btnBack").onclick = function(){ goChoose(); };
+  $("btnResume").onclick = function(){ state.completed ? finish() : goSteps(); };
+  $("btnRestart").onclick = function(){ reset(); goChoose(); };
+  $("doneRestart").onclick = function(){ reset(); goChoose(); };
+
+  // ── First paint: resume if there's unfinished progress ──────────────────────
+  (function init(){
+    if(state.path && !state.completed){
+      var label = state.path==="device"?"on your device":state.path==="online"?"online (24/7)":"on device + online";
+      $("resumeText").innerHTML = "You started setting up <b>"+label+"</b>. Continue where you left off?";
+      show($("resume")); hide($("screenChoose"));
+    } else if(state.path && state.completed){
+      goChoose(); // finished before; let them start fresh or pick another way
+    } else {
+      goChoose();
+    }
+  })();
+})();
+</script>
+</body>
+</html>

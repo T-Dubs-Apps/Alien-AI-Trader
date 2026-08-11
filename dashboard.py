@@ -347,6 +347,11 @@ ADMIN_API_TOKEN = _clean_env_value("ADMIN_API_TOKEN", "")
 SETTINGS_LOCKED_DEFAULT = os.environ.get("SETTINGS_LOCKED", "false").strip().lower() == "true"
 _settings_lock_lock = Lock()
 STRICT_PRODUCTION_GUARDS = os.environ.get("STRICT_PRODUCTION_GUARDS", "").strip().lower()
+# First-run safety net. When True, the app has booted in production WITHOUT a
+# dashboard password: every control is locked and only the /setup page is served,
+# so a new user's deploy comes up GREEN (port binds, /health passes) and shows a
+# clear "set your password" screen instead of crash-looping on a port-scan error.
+SETUP_REQUIRED = False
 TRUSTED_DEVICE_COOKIE = "aat_trusted_device"
 OWNER_REAUTH_DAYS_MIN = int(os.environ.get("OWNER_REAUTH_DAYS_MIN", "120"))
 OWNER_REAUTH_DAYS_MAX = int(os.environ.get("OWNER_REAUTH_DAYS_MAX", "180"))
@@ -385,11 +390,20 @@ def _enforce_production_security_baseline() -> None:
     # recommended for extra hardening but must NEVER block a new user's first
     # deploy — the blueprint promises "set a password and go", and this honors it.
     if not _normalize_dashboard_password(DASHBOARD_PASSWORD):
-        raise RuntimeError(
-            "Refusing to start in production without DASHBOARD_PASSWORD. Your Render "
-            "URL is public; set a dashboard password so only you can reach the "
-            "controls. (Disable STRICT_PRODUCTION_GUARDS only for local development.)"
+        # Do NOT crash the boot — that produces a cryptic "no open ports" failure
+        # for a new user and blocks the whole deploy. Instead boot in LOCKED setup
+        # mode: the port binds, /health passes (deploy goes green), and every
+        # control is gated to /setup until a password is set and the app redeploys.
+        # This is exactly as safe as refusing to start (nothing is reachable),
+        # but a new user sees a friendly "set your password" page, not a crash.
+        global SETUP_REQUIRED
+        SETUP_REQUIRED = True
+        print(
+            "[SETUP] No DASHBOARD_PASSWORD set — booting in LOCKED setup mode. "
+            "All controls are disabled and every page redirects to /setup until "
+            "you set a dashboard password in your host's environment and redeploy."
         )
+        return
 
     recommended: List[str] = []
     if not origins:
@@ -428,7 +442,7 @@ _enforce_production_security_baseline()
 # Path prefixes that must stay reachable WITHOUT logging in.
 _PUBLIC_PATH_PREFIXES = (
     "/login", "/logout", "/health", "/favicon", "/static",
-    "/get", "/store", "/thankyou",
+    "/get", "/store", "/thankyou", "/start", "/setup",
     "/api/license/",   # license server + in-app activation (validate/pricing/checkout/admin)
     "/api/stripe/",    # Stripe webhook
 )
@@ -1489,6 +1503,19 @@ QUOTE_CACHE_TTL = int(os.environ.get("QUOTE_CACHE_TTL", "60"))  # seconds — hi
 def _require_dashboard_login():
     """Gate the trading dashboard + control endpoints behind DASHBOARD_PASSWORD.
     No-op when no password is set (gate off) or the path is public."""
+    # First-run safety net: unconfigured production deploy. Lock EVERYTHING to the
+    # setup page — the opposite of the no-password branch below, because here the
+    # public URL exists and must not expose controls before a password is chosen.
+    if SETUP_REQUIRED:
+        p = request.path
+        if p == "/setup" or p == "/health" or p.startswith("/favicon") or p.startswith("/static"):
+            return None
+        if p.startswith("/api/"):
+            return jsonify({
+                "status": "error",
+                "message": "Setup required: set DASHBOARD_PASSWORD in your host environment and redeploy.",
+            }), 503
+        return redirect("/setup")
     if not DASHBOARD_PASSWORD:
         return None
     if _path_is_public(request.path):
@@ -1612,7 +1639,76 @@ def health():
     # role is reported so a deployment's identity can be confirmed from outside
     # without logging in. It reveals nothing sensitive — only which surface is
     # served, which is already observable from the routes themselves.
-    return jsonify({"status": "ok", "role": APP_ROLE}), 200
+    return jsonify({"status": "ok", "role": APP_ROLE, "setup_required": SETUP_REQUIRED}), 200
+
+
+@app.route("/setup", methods=["GET"])
+def setup_required_page():
+    """First-run gate. Shown when a production deploy has no dashboard password.
+    Once a password is set and the app redeploys, SETUP_REQUIRED is False and this
+    forwards to the app so the user never gets stuck here."""
+    if not SETUP_REQUIRED:
+        return redirect("/")
+    html = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Almost there — set your password</title><link rel="icon" href="/favicon.svg">
+<style>body{background:#060c18;color:#e2e8f0;font-family:'Segoe UI',system-ui,sans-serif;
+display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:16px}
+.card{background:#0d1626;border:1px solid #1e3058;border-radius:14px;max-width:520px;width:100%;padding:30px}
+h1{font-size:1.4rem;margin:.2rem 0 .6rem;background:linear-gradient(135deg,#4ade80,#60a5fa);
+-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+p{color:#cbd5e1;font-size:.95rem;line-height:1.6}
+ol{color:#cbd5e1;font-size:.95rem;line-height:1.7;padding-left:20px}
+b{color:#fff}.note{background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.3);
+border-radius:8px;padding:10px 14px;font-size:.86rem;color:#fbbf24;margin:14px 0}
+code{background:#0a1220;border:1px solid #1e3058;border-radius:6px;padding:2px 7px;color:#4ade80;font-size:.9em}
+button{width:100%;padding:12px;margin-top:12px;border:0;border-radius:8px;cursor:pointer;
+background:linear-gradient(135deg,#22c55e,#16a34a);color:#fff;font-weight:700;font-size:1rem}</style>
+</head><body><div class="card">
+<h1>&#128123; One step to go</h1>
+<p>Your Alien AI Trader is running &mdash; but it's <b>locked</b> until you set a dashboard
+password. That password is the only thing keeping strangers off your public web address,
+so nothing else works until it's in place.</p>
+<div class="note">&#128274; Every trading control is disabled right now. This is on purpose &mdash; your app is safe.</div>
+<p><b>Set it in your host, then redeploy:</b></p>
+<ol>
+<li>Open your service &rarr; <b>Environment</b> tab.</li>
+<li>Add a variable named <code>DASHBOARD_PASSWORD</code> with a strong password you don't reuse.</li>
+<li><b>Save</b>, then <b>Manual Deploy &rarr; Deploy latest commit</b>.</li>
+<li>When it finishes, this page unlocks automatically.</li>
+</ol>
+<button onclick="location.reload()">I've set it &mdash; check again</button>
+</div></body></html>"""
+    resp = app.make_response(html)
+    resp.headers["Content-Type"] = "text/html; charset=utf-8"
+    return resp
+
+
+ONBOARDING_FILE = os.path.join(base_dir, "onboarding", "index.html")
+
+
+@app.route("/start", methods=["GET"])
+def start_setup_chooser():
+    """The new-user 'how do you want to run it?' chooser (Render / device / both).
+    Self-contained page; we inject this instance's real URLs via window.AAT_CONFIG
+    so the same file also works standalone or wrapped for an app store."""
+    try:
+        with open(ONBOARDING_FILE, "r", encoding="utf-8") as fh:
+            page = fh.read()
+    except OSError:
+        return redirect("/get")
+    cfg = (
+        "<script>window.AAT_CONFIG={"
+        f"repoUrl:{json.dumps(GITHUB_REPO_URL)},"
+        f"zipUrl:{json.dumps(DOWNLOAD_ZIP_URL)},"
+        f"renderUrl:{json.dumps(RENDER_DEPLOY_URL)},"
+        f"appUrl:{json.dumps('/')}"
+        "};</script>"
+    )
+    page = page.replace("<body>", "<body>\n" + cfg, 1)
+    resp = app.make_response(page)
+    resp.headers["Content-Type"] = "text/html; charset=utf-8"
+    return resp
 
 
 @app.route("/api/audit/verify", methods=["GET"])
@@ -2261,6 +2357,9 @@ footer a{color:#60a5fa;text-decoration:none}
     <h1>&#128123; Alien AI Trader</h1>
     <div class="sub">AI-powered stock trading on autopilot &mdash; scans, buys the climb, sells the peak.</div>
   </div>
+
+  <a class="dl-btn" href="/start" style="background:linear-gradient(135deg,#4ade80,#22c55e)">&#9654;&#65039; Start Setup &mdash; Guided</a>
+  <div class="dl-sub">Answer one question &mdash; run it on your device, online 24/7, or both. Saves your place as you go.</div>
 
   <div class="card">
     <h2>Two ways to run it &mdash; which is right for you?</h2>
