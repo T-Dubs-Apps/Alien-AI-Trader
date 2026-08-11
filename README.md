@@ -238,12 +238,14 @@ When the app opens in your browser, you'll see several tabs:
 
 Paper trading is **free forever**. A subscription unlocks **live (real-money) trading**, and **Pro** adds power features.
 
-| Plan | Price | What you get |
-|------|-------|--------------|
-| **Free** | $0 | Full AI on **paper** (practice money), watchlist, backtesting |
-| **Trader** | **$19.99/mo** or **$199/yr** | Everything in Free **+ live real-money trading**, up to **5** open positions |
-| **Pro** | **$59/mo** or **$590/yr** | Everything in Trader **+ Scan Entire Market (~8,000 stocks), up to 15 positions, and Forecast Exit** |
+| Plan | What we charge | Alpaca market-data plan | **Your total cost** |
+|------|----------------|-------------------------|---------------------|
+| **Free** | $0 | Alpaca **free** data (real-time IEX, 30 symbols) | **$0** — full AI on **paper** (practice money), watchlist, backtesting |
+| **Trader** | **$19.99/mo** or **$199/yr** | Alpaca **free** data — real-time IEX, 30 symbols, 200 data calls/min, historical (15-min delayed) back to 2016 | **$19.99/mo** — everything in Free **+ live real-money trading**, up to **5** open positions |
+| **Pro** | **$59/mo** or **$590/yr** | Alpaca **Algo Trader Plus** — all US exchanges, unlimited live symbols, 10,000 data calls/min, no historical limits (back to 2016); **$99/mo, billed by Alpaca** | **$158/mo total** ($59 to us + $99 to Alpaca) — everything in Trader **+ Scan Entire Market (~8,000 stocks), up to 15 positions, and Forecast Exit** |
 
+> 💡 **Full transparency on cost.** We only ever charge our own subscription ($19.99 or $59) — **we never charge or collect the Alpaca fee.** **Trader** runs on Alpaca's **free** market data, so your total is just **$19.99/month**. **Pro's** full-market features need Alpaca's premium **Algo Trader Plus** data, which **Alpaca bills you directly at $99/month**, so your **total on Pro is $158/month** ($59 to us + $99 to Alpaca). You subscribe to Alpaca yourself and can cancel either part any time. *(Annual Pro is $590/yr to us; Alpaca's $99 data plan is billed monthly by Alpaca.)*
+>
 > 🛡️ The **Portfolio Safety Shield** (loss protection) is included on **every** plan, including Free — safety is never behind a paywall.
 
 **To subscribe:** in the app go to **Settings → License**, pick a plan, and check out (or use the store page at **`/get`** on your cloud dashboard). After payment you'll get an email — enter that email in **Settings → License → Activate** to unlock.
@@ -820,7 +822,7 @@ All six of the above must agree before the AI buys anything — it's an "all con
 No. The installer handles everything automatically. You just follow the on-screen prompts.
 
 **Q: Is this free?**
-**Paper trading is free forever** — full AI, no cost, no risk. **Live (real-money) trading** requires a subscription: **Trader** ($19.99/mo or $199/yr) or **Pro** ($59/mo or $590/yr) — see [Plans & Pricing](#-plans--pricing). The data services it uses (Alpaca, Alpha Vantage) have free tiers; Twilio/Pushover phone alerts are optional with small costs.
+**Paper trading is free forever** — full AI, no cost, no risk. **Live (real-money) trading** requires a subscription: **Trader** ($19.99/mo or $199/yr — runs on Alpaca's free data, so **$19.99/mo total**) or **Pro** ($59/mo or $590/yr **+ Alpaca's $99/mo Algo Trader Plus data, billed by Alpaca — $158/mo total**) — see [Plans & Pricing](#-plans--pricing). We never charge or collect the Alpaca fee; you subscribe to Alpaca directly. Alpha Vantage has a free tier; Twilio/Pushover phone alerts are optional with small costs.
 
 **Q: Can I lose real money?**
 Not in Paper Mode (the default). Paper trading uses fake money. You have to manually switch to Live Mode, which requires an approved Alpaca live trading account.

@@ -93,12 +93,20 @@ settings, place orders, or touch your keys without that password. **You pick and
 own the password** — it’s never shared with us or anyone else. Leave it unset and
 your dashboard is open to anyone who has the link (the app warns you at startup).
 
-### How much does the app itself cost?
+### How much does it cost — total, all-in?
 - **Paper trading (practice money): FREE forever.**
-- **Live (real-money) trading** needs a subscription:
-  - **Trader** — $19.99/month or $199/year
-  - **Pro** — $59/month or $590/year (adds full-market scanning, more positions, and
-    early “sell at the peak” exits)
+- **Live (real-money) trading** needs a subscription. Here is the **total** you'll pay, spelled out up front:
+  - **Trader — $19.99/month total** (or $199/year). Runs on Alpaca's **free** market data
+    (real-time IEX prices, 30 symbols, 200 data calls/min, and historical data — 15-minute
+    delayed — going back to 2016). Nothing extra to pay.
+  - **Pro — $158/month total** = **$59/month to us** + **$99/month to Alpaca**. The $99 is
+    Alpaca's **Algo Trader Plus** data plan (all US stock exchanges, unlimited symbols,
+    10,000 data calls/min, and no limits on historical data back to 2016). **Alpaca bills
+    you for that $99 directly — we never charge or collect it.** Pro adds full-market
+    scanning, more positions, and early “sell at the peak” exits, which is why it needs
+    Alpaca's premium data.
+  - *(Prefer yearly? Annual Pro is $590/year to us; Alpaca's $99 data plan is billed
+    monthly by Alpaca either way.)*
 
 ### Has anybody made money with it? Can you prove it?
 **Straight answer: this app is brand new, and there is no verified real-money track

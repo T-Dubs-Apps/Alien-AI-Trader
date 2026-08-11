@@ -2410,6 +2410,11 @@ footer a{color:#60a5fa;text-decoration:none}
     <h2>Unlock Live (Real-Money) Trading</h2>
     <p style="color:var(--muted);font-size:.9rem;margin-bottom:12px">Paper trading is free forever. A subscription unlocks the licensed live-trading switch inside the app.</p>
     <div class="price-grid" id="priceGrid">Loading prices&hellip;</div>
+    <div class="dl-sub" style="text-align:left;margin-top:14px;line-height:1.6">
+      <strong>Your total cost, up front:</strong><br>
+      &bull; <strong>Trader &mdash; $19.99/mo total.</strong> Runs on Alpaca's free market data (real-time IEX, 30 symbols, 200 data calls/min, historical 15-min delayed back to 2016).<br>
+      &bull; <strong>Pro &mdash; $158/mo total</strong> = $59/mo to Alien AI Trader + $99/mo to Alpaca. The $99 is Alpaca's Algo Trader Plus data plan (all US stock exchanges, unlimited symbols, 10,000 data calls/min, no historical limits) &mdash; <strong>Alpaca bills you the $99 directly; we never charge or collect it.</strong>
+    </div>
   </div>
 
   <div class="card">
