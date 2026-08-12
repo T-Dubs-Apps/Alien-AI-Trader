@@ -22,8 +22,10 @@ Yes. It’s about **10 minutes**, mostly waiting while it sets itself up. You’
 No installing programs, no code.
 
 ### What makes this trading app special?
-- **It trades for you, automatically.** The AI scans the market, buys stocks that
-  are climbing, and sells before they drop — then reinvests. This is the “ladder.”
+- **It automates your trades based on your settings.** The AI scans the market and,
+  using the rules and risk limits *you* choose, aims to buy stocks that are climbing
+  and take profits on the way up, then reinvest. This is the “ladder.” It follows your
+  configuration — it does not guarantee gains, and you can change or stop it any time.
 - **It runs 24/7 in the cloud** — your computer doesn’t need to be on.
 - **Safety first.** It starts in **paper mode** (fake money) so you risk nothing while
   you learn it. A built-in **Safety Shield** and **stop-losses** limit losses, and

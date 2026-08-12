@@ -2355,7 +2355,7 @@ footer a{color:#60a5fa;text-decoration:none}
 </style></head><body><div class="wrap">
   <div class="hero">
     <h1>&#128123; Alien AI Trader</h1>
-    <div class="sub">AI-powered stock trading on autopilot &mdash; scans, buys the climb, sells the peak.</div>
+    <div class="sub">AI-powered trading software that scans the market and places trades from your settings &mdash; you stay in control, and results are never guaranteed.</div>
   </div>
 
   <a class="dl-btn" href="/start" style="background:linear-gradient(135deg,#4ade80,#22c55e)">&#9654;&#65039; Start Setup &mdash; Guided</a>
@@ -4373,6 +4373,18 @@ def keys_setup():
     This is what lets the Render Blueprint ask for nothing up front: deploy
     first, get your keys second, paste them here, and the engine starts on the
     next supervisor cycle — no redeploy, no env vars, no Render dashboard.
+
+    ── Regulatory boundary (do not cross without Alpaca's approval) ──────────
+    This app is a Trading API tool: each user runs their OWN private copy and
+    enters their OWN Alpaca keys for their OWN account. The author never sees or
+    holds anyone's keys, funds, or account. That "bring-your-own-keys, self-
+    deployed" model is why raw keys are accepted here.
+
+    If this ever becomes a HOSTED, multi-user service (one deployment the author
+    runs, that many users connect their Alpaca accounts to), that changes the
+    classification: Alpaca then requires OAuth2 (users authorize, not paste keys)
+    AND written approval to enable live trading for other users. See
+    APP_CLASSIFICATION.md and https://alpaca.markets/oauth before building that.
     """
     blocked = _owner_freeze_block("API key setup")
     if blocked:
