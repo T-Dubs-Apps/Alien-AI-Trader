@@ -1575,7 +1575,11 @@ background:linear-gradient(135deg,#22c55e,#16a34a);color:#fff;font-weight:700;fo
 <input type="email" name="owner_email" placeholder="Owner email (required on new owner devices)">
 <input type="password" name="password" placeholder="Dashboard password" autofocus required>
 <button type="submit">Sign in</button>
-</form></div></body></html>"""
+</form>
+<p class="sub" style="margin-top:18px;border-top:1px solid #1e3058;padding-top:14px;line-height:1.5">
+New here? This is a private dashboard &mdash; each person runs their own copy.<br>
+<a href="/start" style="color:#4ade80;font-weight:700;text-decoration:none">Get your own Alien AI Trader &rarr;</a>
+</p></div></body></html>"""
 
 
 @app.route("/login", methods=["GET", "POST"])
