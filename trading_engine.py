@@ -162,6 +162,13 @@ class TradingEngine:
         # engine picks up on the next _poll_live_settings() call.
         self.auto_trade = True   # default ON; dashboard can override
 
+        # ── Candlesticks manual-override reservations ──────────────────────────
+        # Symbols the user has "armed" a Candlesticks plan on. The dashboard owns
+        # execution of those plans; the AI engine must NOT buy/sell a reserved
+        # symbol. Refreshed every cycle from /api/settings/trading. Empty by
+        # default, so if the dashboard never sends the field the AI is unchanged.
+        self._reserved_symbols: set = set()
+
         # ── Risk controls (live-updateable from dashboard UI) ──
         # Read as whole percent OR legacy fraction; always stored as a fraction.
         # (2.2 -> 0.022, 4 -> 0.04, 0.05 -> 0.05). See _pct_env for the rationale.
@@ -1149,6 +1156,11 @@ class TradingEngine:
             # effective mode of "live" after it has confirmed a valid license.
             if "trading_mode" in s: self._apply_trading_mode(s.get("trading_mode"))
             if "auto_trade"         in s: self.auto_trade          = bool(s["auto_trade"])
+            if "reserved_symbols"   in s:
+                try:
+                    self._reserved_symbols = {str(x).upper() for x in (s.get("reserved_symbols") or [])}
+                except Exception:
+                    self._reserved_symbols = set()
             if "poll_seconds"        in s: self.poll_seconds        = max(60, int(s["poll_seconds"]))
             if "trailing_stop_pct"   in s: self.trailing_stop_pct   = max(0.001, float(s["trailing_stop_pct"]) / 100.0)
             if "loss_threshold"      in s: self.loss_threshold       = max(0.001, float(s["loss_threshold"])    / 100.0)
@@ -1330,7 +1342,9 @@ class TradingEngine:
         end = min(start + max(1, count), len(pool))
         self._market_candidate_cursor = end   # advances toward len(pool) = pass complete
         self._last_window = (start, end - start, len(pool))
-        return [s for s in pool[start:end] if self._symbol_skip_until.get(s, 0.0) <= now]
+        reserved = getattr(self, "_reserved_symbols", set())
+        return [s for s in pool[start:end]
+                if self._symbol_skip_until.get(s, 0.0) <= now and s not in reserved]
 
     # -----------------------------------------------
     # After-hours portfolio guard (runs 24/7)
@@ -2105,6 +2119,11 @@ class TradingEngine:
         if price is None:
             return
 
+        # Candlesticks override: if the user has an armed plan on this symbol, the
+        # dashboard owns its buys/sells — the AI must not act on it at all.
+        if str(symbol).upper() in getattr(self, "_reserved_symbols", set()):
+            return
+
         signal = self._get_signal(symbol, price)
         if signal.get("data_issue"):
             self._alert_data_issue(
@@ -2329,6 +2348,9 @@ class TradingEngine:
         return len(self._trade_timestamps) < self.max_trades_per_hour
 
     def buy(self, symbol: str, price: float, signal: Optional[Dict[str, Any]] = None):
+        # Defense in depth: never let the AI buy a Candlesticks-reserved symbol.
+        if str(symbol).upper() in getattr(self, "_reserved_symbols", set()):
+            return
         with self._buy_lock:
             if not self._throttle_trades():
                 self._record_buy_decision(symbol, "BUY_BLOCKED", "trade_throttled", "max trades/hour reached", price)
@@ -2503,6 +2525,9 @@ class TradingEngine:
                 self.send_alert(f"BUY ERROR {symbol}: {e}", level="alert", symbol=symbol)
 
     def sell(self, symbol: str, price: float, reason: str = "profit"):
+        # Defense in depth: never let the AI sell a Candlesticks-reserved symbol.
+        if str(symbol).upper() in getattr(self, "_reserved_symbols", set()):
+            return
         with self.lock:
             holding = self.current_holdings.pop(symbol, None)
             peak    = self._peak_prices.pop(symbol, price)

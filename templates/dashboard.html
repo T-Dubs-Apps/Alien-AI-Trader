@@ -1481,6 +1481,13 @@
                   <button class="btn btn-outline-danger btn-sm py-0 px-2"  data-line="stop" disabled title="Sell Low — stop loss">+ Sell Low</button>
                   <button class="btn btn-outline-secondary btn-sm py-0 px-2" data-line="hold" disabled title="Marker only">+ Hold</button>
                 </div>
+                <!-- QTY sets how many shares the NEXT line you add will trade. Each
+                     line keeps its own qty (editable in the list below). -->
+                <div class="input-group input-group-sm mb-2" style="max-width:200px;" id="candleQtyGroup">
+                  <span class="input-group-text py-0"><i class="fa-solid fa-layer-group me-1"></i>QTY</span>
+                  <input type="number" id="candleLineQty" class="form-control py-0" value="1" min="1" step="1" disabled title="Shares for the next line you add">
+                  <button class="btn btn-outline-secondary py-0" type="button" id="candleLineQtyAll" disabled title="All — Buy: as much as your cash allows · Sell: your whole position">All</button>
+                </div>
                 <div id="candleLines" class="small text-muted">Turn on <b>Draw</b>, pick a tool above, then drag the line up/down on the chart to place it. Hover a line to see what it does.</div>
                 <hr class="my-2">
                 <div class="form-check form-switch">
@@ -4117,11 +4124,12 @@
       badge.textContent=sym; badge.classList.remove('d-none');
       ['candleBuy','candleSell','candleHold'].forEach(id=>{const b=document.getElementById(id); if(b) b.disabled=false;});
       document.querySelectorAll('[data-line]').forEach(b=>b.disabled=false);
-      if(typeof disarmAuto==='function') disarmAuto();   // never carry armed state to a new stock
-      clearLines();   // trigger lines are per-symbol
+      ['candleLineQty','candleLineQtyAll'].forEach(id=>{const b=document.getElementById(id); if(b) b.disabled=false;});
+      clearLines();   // trigger lines are per-symbol; server plan (if any) is restored below
       applyTimeframe(sym, currentTF);
       loadStockInfo(sym);
       loadHistory(sym);
+      restorePlan(sym);   // armed plans persist server-side — reflect them here
     });
 
     document.getElementById('candleFit')?.addEventListener('click',()=>{ if(chart) chart.timeScale().fitContent(); });
@@ -4130,9 +4138,10 @@
     document.querySelector('[data-bs-target="#tabCandles"]')?.addEventListener('shown.bs.tab', ()=>{
       initChart(); if(chart) chart.timeScale().fitContent();
     });
-    // Stop the Live poller AND disarm auto-execution when leaving the Candlesticks tab.
+    // Stop the Live poller when leaving the Candlesticks tab. Armed plans are
+    // SERVER-owned now, so they intentionally keep running — do not disarm here.
     document.querySelector('[data-bs-target="#tabCandles"]')?.addEventListener('hide.bs.tab', ()=>{
-      stopLive(); if(typeof disarmAuto==='function') disarmAuto();
+      stopLive();
     });
 
     // ── Trigger lines — Troy's strategy: Sell High / Warning / Buy / Sell Low ──
@@ -4156,18 +4165,41 @@
       if(!lines.length){ box.innerHTML='<span class="text-muted">No lines. Add one above, then drag on the chart in Draw/Move mode.</span>'; return; }
       box.innerHTML = lines.map(l=>{
         const s=LINE_STYLE[l.type];
+        const tradeable = !!s.side;
+        const isAll = String(l.qty).toLowerCase()==='all';
+        const qtyCtrl = tradeable ? `
+            <input type="number" class="form-control form-control-sm py-0 px-1 d-inline-block" style="width:48px" min="1"
+                   value="${isAll?1:(l.qty||1)}" data-qty="${l.id}" ${isAll?'disabled':''} title="Shares to trade">
+            <button class="btn btn-sm py-0 px-1 ${isAll?'btn-secondary':'btn-outline-secondary'}" data-qtyall="${l.id}"
+                    title="${l.type==='buy'?'All: as much as your cash allows':'All: your whole position'}">All</button>` : '';
         return `<div class="d-flex justify-content-between align-items-center py-1 border-bottom">
           <span><span class="badge" style="background:${s.color}">${s.title}</span> <b id="lp-${l.id}">$${Number(l.price).toFixed(2)}</b></span>
-          <button class="btn btn-sm btn-outline-danger py-0 px-1" data-del="${l.id}"><i class="fa-solid fa-xmark"></i></button>
+          <span class="d-flex align-items-center gap-1">${qtyCtrl}
+            <button class="btn btn-sm btn-outline-danger py-0 px-1" data-del="${l.id}"><i class="fa-solid fa-xmark"></i></button>
+          </span>
         </div>`;
       }).join('');
       box.querySelectorAll('[data-del]').forEach(b=>b.addEventListener('click',()=>removeLine(+b.dataset.del)));
+      box.querySelectorAll('[data-qty]').forEach(inp=>inp.addEventListener('change',()=>{
+        const l=lines.find(x=>x.id===+inp.dataset.qty); if(l) l.qty=Math.max(1, parseInt(inp.value||'1')||1);
+      }));
+      box.querySelectorAll('[data-qtyall]').forEach(btn=>btn.addEventListener('click',()=>{
+        const l=lines.find(x=>x.id===+btn.dataset.qtyall); if(!l) return;
+        l.qty = (String(l.qty).toLowerCase()==='all') ? 1 : 'all';
+        renderLines();
+      }));
     }
     function addLine(type){
       if(!candleSeries) return;
       const price=defaultLinePrice(), s=LINE_STYLE[type];
       const pl=candleSeries.createPriceLine({price, color:s.color, lineWidth:2, lineStyle:0, axisLabelVisible:true, title:s.title});
-      lines.push({id:lineSeq++, type, price, pl, fired:false});
+      let qty=1;
+      if(s.side){   // only tradeable lines carry a quantity
+        const allBtn=document.getElementById('candleLineQtyAll');
+        const qEl=document.getElementById('candleLineQty');
+        qty = (allBtn && allBtn.classList.contains('active')) ? 'all' : Math.max(1, parseInt(qEl && qEl.value || '1')||1);
+      }
+      lines.push({id:lineSeq++, type, price, pl, fired:false, qty});
       renderLines();
     }
     function removeLine(id){
@@ -4183,6 +4215,14 @@
       const c=document.getElementById('candleChart'); if(c) c.style.cursor = drawMode ? 'ns-resize' : '';
     });
     document.querySelectorAll('[data-line]').forEach(b=>b.addEventListener('click',()=>addLine(b.dataset.line)));
+    // "All" toggle for the qty applied to the NEXT line you add.
+    document.getElementById('candleLineQtyAll')?.addEventListener('click', function(){
+      this.classList.toggle('active');
+      const on=this.classList.contains('active');
+      this.classList.toggle('btn-secondary', on);
+      this.classList.toggle('btn-outline-secondary', !on);
+      const q=document.getElementById('candleLineQty'); if(q) q.disabled=on;
+    });
 
     (function(){
       const el=document.getElementById('candleChart'); if(!el) return;
@@ -4234,82 +4274,77 @@
       window.addEventListener('mouseup',()=>{ dragging=null; });
     })();
 
-    // ═══════ Phase 2b: auto-execution monitor (client-side, active only while armed + page open) ═══════
-    let armed=false, monitorTimer=null, lastPx=null;
+    // ═══════ Arm — SERVER-owned execution ═══════
+    // Arming saves a plan on the server, which reserves the symbol from the AI and
+    // fires each line's own quantity. The plan persists across tab-switch, reload,
+    // and browser close until it resolves (position sold) or the user disarms.
+    let armed=false;
 
     function setArmUI(){
       const lbl=document.querySelector('label[for="candleArm"]');
       if(!lbl) return;
-      lbl.textContent = armed ? 'ARMED — watching for line crossings' : 'Arm auto-execution';
+      lbl.textContent = armed ? 'ARMED — AI override active (server is watching)' : 'Arm auto-execution';
       lbl.classList.toggle('text-warning', !armed);
       lbl.classList.toggle('text-success', armed);
     }
-    function stopMonitor(){ if(monitorTimer){ clearInterval(monitorTimer); monitorTimer=null; } }
-    function startMonitor(){
-      stopMonitor(); lastPx=null;
-      lines.forEach(l=>l.fired=false);
-      monitorTimer=setInterval(checkTriggers, 4000);
-      checkTriggers();
-    }
-    function disarmAuto(){
-      const c=document.getElementById('candleArm'); if(c) c.checked=false;
-      armed=false; stopMonitor(); setArmUI();
-    }
 
-    document.getElementById('candleArm')?.addEventListener('change', function(){
+    async function armPlan(){
+      if(!currentSymbol) return false;
+      const tradeLines = lines.filter(l=>(LINE_STYLE[l.type]||{}).side);
+      if(!tradeLines.length){
+        alert('Add at least one trading line (Buy, Sell High, Warning or Sell Low) before arming.'); return false;
+      }
+      const payload={symbol:currentSymbol, lines: tradeLines.map(l=>({type:l.type, price:l.price, qty:(l.qty||1)}))};
+      try{
+        const r=await fetch('/api/candles/plan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+        const j=await r.json();
+        if(j.status==='ok') return true;
+        alert(j.message||'Could not arm this plan.'); return false;
+      }catch(e){ alert('Arm failed: '+e.message); return false; }
+    }
+    async function disarmPlan(){
+      if(!currentSymbol) return;
+      try{ await fetch('/api/candles/plan/disarm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol:currentSymbol})}); }catch(e){}
+    }
+    // Reflect a disarmed UI state without touching the server (used by legacy callers).
+    function disarmAuto(){ const c=document.getElementById('candleArm'); if(c) c.checked=false; armed=false; setArmUI(); }
+
+    document.getElementById('candleArm')?.addEventListener('change', async function(){
       if(this.checked){
-        if(!currentSymbol){ this.checked=false; return; }
-        if(!lines.some(l=>(LINE_STYLE[l.type]||{}).side)){
-          alert('Add at least one trading line (Buy, Sell High, Warning or Sell Low) before arming.'); this.checked=false; return;
-        }
-        armed=true; startMonitor();
-      } else { armed=false; stopMonitor(); }
-      setArmUI();
+        const ok=await armPlan();
+        if(!ok){ this.checked=false; armed=false; setArmUI(); return; }
+        armed=true; setArmUI();
+      } else {
+        await disarmPlan(); armed=false; setArmUI();
+      }
     });
 
-    async function checkTriggers(){
-      if(!armed || !currentSymbol) return;
-      let price=null;
+    // Restore armed state + lines for a symbol from the server (on load / reopen).
+    async function restorePlan(sym){
+      const armEl=document.getElementById('candleArm');
       try{
-        const r=await fetch('/api/quotes?symbols='+encodeURIComponent(currentSymbol));
-        const j=await r.json();
-        const q=j[currentSymbol];
-        price = (q && q.price!=null) ? Number(q.price) : null;
-      }catch(e){ return; }
-      if(price==null) return;
-      const lpEl=document.getElementById('candleLastPrice'); if(lpEl) lpEl.textContent='$'+price.toFixed(2);
-      const prev=lastPx; lastPx=price;
-      if(prev==null) return;                         // need two samples to detect a crossing
-      for(const l of lines){
-        if(l.fired) continue;
-        const crossed = (prev < l.price && price >= l.price) || (prev > l.price && price <= l.price);
-        if(crossed) fireLine(l, price);
-      }
-    }
-
-    async function fireLine(line, price){
-      line.fired=true;
-      const lp=document.getElementById('lp-'+line.id);
-      if(lp && !/fired/.test(lp.innerHTML)) lp.innerHTML += ' <span class="badge bg-secondary">fired</span>';
-      // side from the strategy map: Sell High / Warning / Sell Low -> sell; Buy -> buy; Hold -> marker
-      const side = (LINE_STYLE[line.type]||{}).side || null;
-      if(side){
-        try{
-          await fetch('/api/order',{method:'POST',headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({symbol:currentSymbol, side, qty:1, type:'market', tif:'day'})});
-          // the order emits a server notification -> shows in Live Feed + Alerts automatically
-          setTimeout(()=>{ try{ loadHistory(currentSymbol); }catch(e){} }, 1500);
-        }catch(e){}
-      }
-      // auto-disarm once every trade line has fired (prevents surprise repeats)
-      const tradeLines=lines.filter(l=>(LINE_STYLE[l.type]||{}).side);
-      if(tradeLines.length && tradeLines.every(l=>l.fired)) disarmAuto();
+        const r=await fetch('/api/candles/plans'); const j=await r.json();
+        const plan=(j.plans||{})[sym];
+        if(plan && plan.status==='armed'){
+          initChart(); clearLines();
+          (plan.lines||[]).forEach(pln=>{
+            const s=LINE_STYLE[pln.type]; if(!s || !candleSeries) return;
+            const priceLine=candleSeries.createPriceLine({price:pln.price, color:s.color, lineWidth:2, lineStyle:0, axisLabelVisible:true, title:s.title});
+            lines.push({id:lineSeq++, type:pln.type, price:pln.price, pl:priceLine, fired:!!pln.fired, qty:pln.qty});
+          });
+          renderLines();
+          armed=true; if(armEl) armEl.checked=true;
+        } else {
+          armed=false; if(armEl) armEl.checked=false;
+        }
+      }catch(e){ armed=false; if(armEl) armEl.checked=false; }
+      setArmUI();
     }
 
     buildTFButtons();
     window.__candles = { get chart(){return chart;}, get series(){return candleSeries;},
                          get lines(){return lines;}, get armed(){return armed;},
-                         addLine, clearLines, checkTriggers, _setPrev:(p)=>{lastPx=p;} }; // test hook
+                         addLine, clearLines, armPlan, disarmPlan, restorePlan }; // test hook
   })();
   </script>
 </body>

@@ -3703,6 +3703,71 @@ def license_pricing_proxy():
 # -----------------------------------------------
 # Manual Orders (Trade tab Buy/Sell buttons)
 # -----------------------------------------------
+def _submit_alpaca_order(symbol, side, qty, otype="market", tif="day",
+                         limit_price=None, actor="dashboard_user", source="manual"):
+    """Core Alpaca order submit shared by the /api/order endpoint and the
+    Candlesticks monitor. Returns (ok: bool, info: dict). Callers are responsible
+    for their own freeze / rate-limit gating; this does the submit, audit and
+    notification so both paths behave identically (paper vs live, logging, feed)."""
+    client = _active_alpaca()
+    if not client:
+        return False, {"status": "error", "code": 503,
+                       "message": "Alpaca keys are not configured. Run the Setup Wizard (LAUNCH.bat → option 3) first."}
+
+    symbol = str(symbol or "").strip().upper()
+    side   = str(side or "").strip().lower()
+    otype  = str(otype or "market").strip().lower()
+    tif    = str(tif or "day").strip().lower()
+    try:
+        qty = float(qty)
+    except (TypeError, ValueError):
+        qty = 0
+
+    if not symbol or side not in ("buy", "sell") or qty <= 0:
+        return False, {"status": "error", "code": 400,
+                       "message": "Symbol, side (buy/sell) and a positive quantity are required."}
+    if otype not in ("market", "limit"):
+        return False, {"status": "error", "code": 400, "message": "Order type must be 'market' or 'limit'."}
+
+    order_kwargs = {"symbol": symbol, "qty": qty, "side": side, "type": otype, "time_in_force": tif}
+    if otype == "limit":
+        try:
+            lp = float(limit_price or 0)
+        except (TypeError, ValueError):
+            lp = 0
+        if lp <= 0:
+            return False, {"status": "error", "code": 400,
+                           "message": "A positive limit price is required for limit orders."}
+        order_kwargs["limit_price"] = lp
+
+    is_paper = _effective_mode() != "live"
+    try:
+        order = client.submit_order(**order_kwargs)
+        _record_anomaly("manual_order")
+        _audit_event(
+            "manual_order_submit",
+            {"symbol": symbol, "side": side, "qty": qty, "type": otype, "tif": tif,
+             "paper": is_paper, "source": source,
+             "order_id": getattr(order, "id", None), "order_status": getattr(order, "status", None)},
+            actor=actor,
+        )
+        src_label = "Candlesticks" if source == "candles" else "Manual"
+        note = {
+            "time": int(time.time()), "level": "trade", "symbol": symbol,
+            "message": f"{src_label} {side.upper()} {qty:g}x {symbol} ({otype}) submitted — {'PAPER' if is_paper else 'LIVE'} account.",
+        }
+        _notifications.append(note)
+        socketio.emit("notification", note)
+        return True, {
+            "status": "ok", "paper": is_paper,
+            "order_id": getattr(order, "id", None), "order_status": getattr(order, "status", None),
+            "message": f"{side.upper()} order for {qty:g}x {symbol} accepted by Alpaca ({'paper' if is_paper else 'LIVE'} account).",
+        }
+    except Exception as e:
+        return False, {"status": "error", "code": 400, "paper": is_paper,
+                       "message": f"Alpaca rejected the order: {e}"}
+
+
 @app.route("/api/order", methods=["POST"])
 def submit_order():
     """Submit a real order through Alpaca. Paper or live follows the current
@@ -3713,80 +3778,359 @@ def submit_order():
     limited = _rate_limited("manual_order", limit=20, window_seconds=60)
     if limited:
         return limited
-    client = _active_alpaca()
-    if not client:
-        return jsonify({
-            "status": "error",
-            "message": "Alpaca keys are not configured. Run the Setup Wizard (LAUNCH.bat → option 3) first.",
-        }), 503
 
     payload = request.json or {}
-    symbol = str(payload.get("symbol", "")).strip().upper()
-    side   = str(payload.get("side", "")).strip().lower()
-    otype  = str(payload.get("type", "market")).strip().lower()
-    tif    = str(payload.get("tif", "day")).strip().lower()
+    ok, info = _submit_alpaca_order(
+        symbol=payload.get("symbol", ""),
+        side=payload.get("side", ""),
+        qty=payload.get("qty", 0),
+        otype=payload.get("type", "market"),
+        tif=payload.get("tif", "day"),
+        limit_price=payload.get("limit_price"),
+        actor="dashboard_user",
+        source="manual",
+    )
+    code = 200 if ok else int(info.pop("code", 400))
+    return jsonify(info), code
 
+
+# ==================================================================================
+# Candlesticks manual-override PLANS (server-owned execution)
+# ----------------------------------------------------------------------------------
+# A "plan" is a set of trigger lines the user armed on the Candlesticks page for one
+# stock. While armed, the symbol is RESERVED — the AI engine skips it (see
+# reserved_symbols in _settings_response + trading_engine._reserved_symbols). A
+# background monitor watches the live price and fires each line's own quantity
+# (a number, or "all"). When the position goes flat the plan RESOLVES (win/loss is
+# recorded here only), the reservation clears, and the symbol is handed back to the
+# Watchlist so the AI can trade it again. State is persisted so an armed plan
+# survives the browser closing and app restarts.
+# ==================================================================================
+CANDLE_PLANS_FILE = os.path.join(DATA_DIR, "candle_plans.json")
+_candle_plans: Dict[str, Any] = {}          # symbol -> plan dict
+_candle_plans_lock = threading.Lock()
+_candle_prev_px: Dict[str, float] = {}      # last price seen per armed symbol (crossing detection)
+_candle_watchlist_adds: "set[str]" = set()  # resolved symbols to surface on the Watchlist (client acks)
+_candle_monitor_started = False             # ensures the monitor thread starts only once
+_CANDLE_LINE_TYPES = ("buy", "sell", "warn", "stop")
+
+
+def _load_candle_plans() -> None:
+    global _candle_plans
     try:
-        qty = float(payload.get("qty", 0))
-    except (TypeError, ValueError):
-        qty = 0
+        if os.path.exists(CANDLE_PLANS_FILE):
+            with open(CANDLE_PLANS_FILE) as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                _candle_plans = data
+    except Exception:
+        _candle_plans = {}
 
-    if not symbol or side not in ("buy", "sell") or qty <= 0:
-        return jsonify({"status": "error", "message": "Symbol, side (buy/sell) and a positive quantity are required."}), 400
-    if otype not in ("market", "limit"):
-        return jsonify({"status": "error", "message": "Order type must be 'market' or 'limit'."}), 400
 
-    order_kwargs = {
-        "symbol": symbol,
-        "qty": qty,
-        "side": side,
-        "type": otype,
-        "time_in_force": tif,
-    }
-    if otype == "limit":
+def _save_candle_plans() -> None:
+    try:
+        with _candle_plans_lock:
+            snapshot = json.dumps(_candle_plans, indent=2)
+        with open(CANDLE_PLANS_FILE, "w") as f:
+            f.write(snapshot)
+    except Exception:
+        pass
+
+
+def _reserved_symbols_list() -> list:
+    """Symbols with an ARMED plan — the AI must skip these. Read by the engine
+    via _settings_response()."""
+    with _candle_plans_lock:
+        return sorted(sym for sym, p in _candle_plans.items() if p.get("status") == "armed")
+
+
+def _resolve_plan_qty(symbol: str, side: str, qty, price: float) -> int:
+    """Turn a line's qty (a number, or 'all') into a concrete share count.
+    Buy 'all'  -> as many shares as the account's CASH can afford at `price`.
+    Sell 'all' -> the entire current Alpaca position in that symbol."""
+    if isinstance(qty, (int, float)):
+        return int(qty) if qty > 0 else 0
+    q = str(qty or "").strip().lower()
+    if q not in ("all", "max", ""):
         try:
-            limit_price = float(payload.get("limit_price", 0))
+            return int(float(q))
         except (TypeError, ValueError):
-            limit_price = 0
-        if limit_price <= 0:
-            return jsonify({"status": "error", "message": "A positive limit price is required for limit orders."}), 400
-        order_kwargs["limit_price"] = limit_price
-
-    is_paper = _effective_mode() != "live"
+            return 0
+    client = _active_alpaca()
+    if not client:
+        return 0
     try:
-        order = client.submit_order(**order_kwargs)
-        _record_anomaly("manual_order")
-        _audit_event(
-            "manual_order_submit",
-            {
-                "symbol": symbol,
-                "side": side,
-                "qty": qty,
-                "type": otype,
-                "tif": tif,
-                "paper": is_paper,
-                "order_id": getattr(order, "id", None),
-                "order_status": getattr(order, "status", None),
-            },
-            actor="dashboard_user",
-        )
+        if side == "sell":
+            pos = client.get_position(symbol)
+            return int(float(getattr(pos, "qty", 0) or 0))
+        acct = client.get_account()
+        cash = float(getattr(acct, "cash", 0) or 0)
+        return int(cash // price) if price > 0 else 0
+    except Exception:
+        return 0
+
+
+def _candle_mark_line(symbol: str, line_id, note: str = "") -> None:
+    """Mark a line fired without a fill (e.g. insufficient qty / rejected) so the
+    monitor doesn't retry it every tick."""
+    with _candle_plans_lock:
+        plan = _candle_plans.get(symbol)
+        if not plan:
+            return
+        for ln in plan.get("lines", []):
+            if ln.get("id") == line_id:
+                ln["fired"] = True
+                if note:
+                    ln["note"] = note
+                break
+        plan["updated_at"] = int(time.time())
+    _save_candle_plans()
+
+
+def _candle_record_fill(symbol: str, line_id, side: str, qty: int, price: float) -> None:
+    """Record a filled line: update the plan's position + realized P/L, and if the
+    position is now flat, RESOLVE the plan (win/loss) and hand the symbol back."""
+    resolved = None
+    with _candle_plans_lock:
+        plan = _candle_plans.get(symbol)
+        if not plan:
+            return
+        line = next((l for l in plan.get("lines", []) if l.get("id") == line_id), None)
+        if line:
+            line["fired"] = True
+            line["fill_price"] = price
+            line["fill_qty"] = qty
+        pnl = 0.0
+        if side == "buy":
+            prev_qty = float(plan.get("entry_qty", 0) or 0)
+            prev_avg = float(plan.get("entry_avg", 0) or 0)
+            new_qty = prev_qty + qty
+            plan["entry_avg"] = ((prev_avg * prev_qty) + (price * qty)) / new_qty if new_qty else price
+            plan["entry_qty"] = new_qty
+        else:  # sell
+            avg = float(plan.get("entry_avg", 0) or 0)
+            pnl = (price - avg) * qty if avg else 0.0
+            plan["realized_pl"] = float(plan.get("realized_pl", 0) or 0) + pnl
+            plan["entry_qty"] = max(0.0, float(plan.get("entry_qty", 0) or 0) - qty)
+        plan.setdefault("events", []).append({
+            "ts": int(time.time()), "side": side, "qty": qty,
+            "price": round(price, 4), "pl": round(pnl, 2),
+            "line_type": (line or {}).get("type"),
+        })
+        plan["updated_at"] = int(time.time())
+        # Position flat after a sell -> resolve.
+        if side == "sell" and float(plan.get("entry_qty", 0) or 0) <= 0:
+            plan["status"] = "resolved"
+            plan["outcome"] = "win" if float(plan.get("realized_pl", 0) or 0) >= 0 else "loss"
+            plan["resolved_at"] = int(time.time())
+            resolved = symbol
+    _save_candle_plans()
+    if resolved:
+        _candle_prev_px.pop(resolved, None)
+        _candle_watchlist_adds.add(resolved)   # surface back on the Watchlist (client picks up)
+        pl = 0.0
+        with _candle_plans_lock:
+            pl = float(_candle_plans.get(resolved, {}).get("realized_pl", 0) or 0)
         note = {
-            "time": int(time.time()),
-            "level": "trade",
-            "symbol": symbol,
-            "message": f"Manual {side.upper()} {qty:g}x {symbol} ({otype}) submitted — {'PAPER' if is_paper else 'LIVE'} account.",
+            "time": int(time.time()), "level": "trade", "symbol": resolved,
+            "message": f"Candlesticks plan for {resolved} closed (P&L ${pl:+.2f}). "
+                       f"Returned to the AI Trader.",
         }
         _notifications.append(note)
         socketio.emit("notification", note)
-        return jsonify({
-            "status": "ok",
-            "paper": is_paper,
-            "order_id": getattr(order, "id", None),
-            "order_status": getattr(order, "status", None),
-            "message": f"{side.upper()} order for {qty:g}x {symbol} accepted by Alpaca ({'paper' if is_paper else 'LIVE'} account).",
-        }), 200
-    except Exception as e:
-        return jsonify({"status": "error", "paper": is_paper, "message": f"Alpaca rejected the order: {e}"}), 400
+
+
+def _candle_monitor_tick() -> None:
+    """One pass of the Candlesticks executor: price each armed plan, fire any line
+    whose price the market just crossed, at that line's own quantity."""
+    with _candle_plans_lock:
+        armed = [s for s, p in _candle_plans.items() if p.get("status") == "armed"]
+    if not armed:
+        return
+    try:
+        quotes = _fetch_quotes_uncached(armed)
+    except Exception:
+        quotes = {}
+
+    for sym in armed:
+        price = _safe_float((quotes.get(sym) or {}).get("price"))
+        if price is None:
+            continue
+        prev = _candle_prev_px.get(sym)
+        _candle_prev_px[sym] = price
+        if prev is None:
+            continue   # need two samples to detect a crossing
+
+        # Choose one fireable line under the lock (no network while holding it).
+        fire_id = fire_type = fire_qty = None
+        with _candle_plans_lock:
+            plan = _candle_plans.get(sym)
+            if not plan or plan.get("status") != "armed":
+                continue
+            holding = float(plan.get("entry_qty", 0) or 0)
+            for ln in plan.get("lines", []):
+                if ln.get("fired"):
+                    continue
+                lp = _safe_float(ln.get("price"))
+                if lp is None:
+                    continue
+                crossed = (prev < lp <= price) or (prev > lp >= price)
+                if not crossed:
+                    continue
+                is_buy = ln.get("type") == "buy"
+                if not is_buy and holding <= 0:
+                    continue          # nothing to sell yet
+                fire_id, fire_type, fire_qty = ln.get("id"), ln.get("type"), ln.get("qty")
+                break
+        if fire_id is None:
+            continue
+
+        side = "buy" if fire_type == "buy" else "sell"
+        qty = _resolve_plan_qty(sym, side, fire_qty, price)
+        if qty <= 0:
+            _candle_mark_line(sym, fire_id, note="no shares available (cash/position)")
+            continue
+        ok, info = _submit_alpaca_order(sym, side, qty, source="candles")
+        if not ok:
+            _candle_mark_line(sym, fire_id, note=info.get("message", "order rejected"))
+            continue
+        _candle_record_fill(sym, fire_id, side, qty, price)
+
+
+def _candle_monitor_loop() -> None:
+    """Background thread: run the executor every few seconds. Fully isolated from
+    the trading engine — one bad symbol can never take it (or the engine) down."""
+    while True:
+        try:
+            _candle_monitor_tick()
+        except Exception:
+            pass
+        time.sleep(5)
+
+
+@app.route("/api/candles/plan", methods=["POST"])
+def candles_plan_create():
+    """Create (or replace) and ARM a Candlesticks plan for one symbol. Body:
+    {symbol, lines:[{type: buy|sell|warn|stop, price, qty: number|'all'}]}."""
+    blocked = _owner_freeze_block("Candlesticks plans")
+    if blocked:
+        return blocked
+    limited = _rate_limited("candles_plan", limit=30, window_seconds=60)
+    if limited:
+        return limited
+    payload = request.json or {}
+    symbol = str(payload.get("symbol", "")).strip().upper()
+    raw_lines = payload.get("lines") or []
+    if not symbol:
+        return jsonify({"status": "error", "message": "symbol is required."}), 400
+
+    lines = []
+    for i, ln in enumerate(raw_lines):
+        typ = str((ln or {}).get("type", "")).strip().lower()
+        if typ not in _CANDLE_LINE_TYPES:
+            continue
+        price = _safe_float((ln or {}).get("price"))
+        if price is None or price <= 0:
+            continue
+        qraw = (ln or {}).get("qty", 1)
+        if isinstance(qraw, str) and qraw.strip().lower() in ("all", "max"):
+            qty = "all"
+        else:
+            try:
+                qty = max(1, int(float(qraw)))
+            except (TypeError, ValueError):
+                qty = 1
+        lines.append({"id": i + 1, "type": typ, "price": price, "qty": qty, "fired": False})
+
+    if not any(l["type"] in ("buy", "sell", "warn", "stop") for l in lines):
+        return jsonify({"status": "error", "message": "Add at least one Buy / Sell High / Warning / Sell Low line."}), 400
+
+    now = int(time.time())
+    with _candle_plans_lock:
+        existing = _candle_plans.get(symbol)
+        # Preserve an open position if the user re-arms while already holding.
+        entry_qty = float(existing.get("entry_qty", 0) or 0) if existing else 0.0
+        entry_avg = float(existing.get("entry_avg", 0) or 0) if existing else 0.0
+        realized = float(existing.get("realized_pl", 0) or 0) if (existing and existing.get("status") == "armed") else 0.0
+        _candle_plans[symbol] = {
+            "symbol": symbol, "status": "armed",
+            "lines": lines, "events": (existing or {}).get("events", []),
+            "entry_qty": entry_qty, "entry_avg": entry_avg, "realized_pl": realized,
+            "outcome": None, "created_at": (existing or {}).get("created_at", now),
+            "updated_at": now,
+        }
+    _candle_prev_px.pop(symbol, None)
+    _candle_watchlist_adds.discard(symbol)
+    _save_candle_plans()
+    _audit_event("candles_plan_arm", {"symbol": symbol, "lines": len(lines)}, actor="dashboard_user")
+    with _candle_plans_lock:
+        return jsonify({"status": "ok", "plan": _candle_plans[symbol]}), 200
+
+
+@app.route("/api/candles/plan/disarm", methods=["POST"])
+def candles_plan_disarm():
+    """User disarm: stop auto-executing and hand the symbol back to the AI. Any
+    open position is left as-is for the AI to manage."""
+    blocked = _owner_freeze_block("Candlesticks plans")
+    if blocked:
+        return blocked
+    payload = request.json or {}
+    symbol = str(payload.get("symbol", "")).strip().upper()
+    with _candle_plans_lock:
+        plan = _candle_plans.get(symbol)
+        if not plan:
+            return jsonify({"status": "error", "message": "No plan for that symbol."}), 404
+        plan["status"] = "disarmed"
+        plan["updated_at"] = int(time.time())
+    _candle_prev_px.pop(symbol, None)
+    _candle_watchlist_adds.add(symbol)
+    _save_candle_plans()
+    _audit_event("candles_plan_disarm", {"symbol": symbol}, actor="dashboard_user")
+    return jsonify({"status": "ok"}), 200
+
+
+@app.route("/api/candles/plans", methods=["GET"])
+def candles_plans_active():
+    """Active (armed) plans + any symbols pending hand-back to the Watchlist. The
+    Candlesticks page uses this to restore armed state after a reload/reopen."""
+    with _candle_plans_lock:
+        active = {s: p for s, p in _candle_plans.items() if p.get("status") == "armed"}
+    return jsonify({"plans": active, "handback": sorted(_candle_watchlist_adds)}), 200
+
+
+@app.route("/api/candles/handback/ack", methods=["POST"])
+def candles_handback_ack():
+    """Client acks that it added a resolved symbol to the Watchlist, so we stop
+    re-surfacing it."""
+    payload = request.json or {}
+    symbol = str(payload.get("symbol", "")).strip().upper()
+    _candle_watchlist_adds.discard(symbol)
+    return jsonify({"status": "ok"}), 200
+
+
+@app.route("/api/candles/history", methods=["GET"])
+def candles_history():
+    """All Candlesticks plans (active, resolved, disarmed) newest-first, for the
+    History panel at the bottom of the Candlesticks page."""
+    with _candle_plans_lock:
+        plans = sorted(_candle_plans.values(), key=lambda p: p.get("updated_at", 0), reverse=True)
+    return jsonify({"plans": plans}), 200
+
+
+@app.route("/api/candles/plan", methods=["DELETE"])
+def candles_plan_delete():
+    """Remove a plan record entirely (also clears any reservation)."""
+    payload = request.json or {}
+    symbol = str(payload.get("symbol", "")).strip().upper()
+    with _candle_plans_lock:
+        _candle_plans.pop(symbol, None)
+    _candle_prev_px.pop(symbol, None)
+    _candle_watchlist_adds.discard(symbol)
+    _save_candle_plans()
+    return jsonify({"status": "ok"}), 200
+
+
+_load_candle_plans()
 
 
 # -----------------------------------------------
@@ -3876,6 +4220,8 @@ def _settings_response() -> dict:
     resp["licensed"]          = _license_is_active()
     resp["live_block_reason"] = "" if allowed else reason
     resp["market_hours_only"] = bool(_MARKET_HOURS_ONLY)
+    # Symbols with an armed Candlesticks plan — the engine skips these entirely.
+    resp["reserved_symbols"] = _reserved_symbols_list()
     # Pro-tier feature gating (Safety Shield is deliberately NOT gated).
     _apply_pro_gating(resp)
     return resp
@@ -4785,6 +5131,14 @@ def _engine_session(session_num: int) -> None:
         daemon=True, name="TradingEngine"
     )
     engine_thread.start()
+
+    # Candlesticks manual-override executor — one shared monitor for all armed
+    # plans. Independent of the engine so it can never destabilize AI trading.
+    global _candle_monitor_started
+    if not _candle_monitor_started:
+        _candle_monitor_started = True
+        threading.Thread(target=_candle_monitor_loop, daemon=True, name="CandleMonitor").start()
+        print("[CANDLES] Manual-override monitor started.")
 
     start = time.time()
     last_summary = 0.0
