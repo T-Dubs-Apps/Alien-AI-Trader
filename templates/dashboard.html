@@ -1418,6 +1418,10 @@
           </div>
         </div>
 
+        <!-- Open stock pages: one chip per open stock. Click to switch, × to close.
+             A dot shows armed (green) vs draft (grey). Persisted across reloads. -->
+        <div id="candlePages" class="d-flex align-items-center gap-1 flex-wrap mb-2"></div>
+
         <div class="row g-3">
           <!-- Chart -->
           <div class="col-lg-9">
@@ -1504,6 +1508,12 @@
               </div>
             </div>
           </div>
+        </div>
+
+        <!-- Live status ticker: one tile per armed stock (price + position + P/L). -->
+        <div id="candleTickerWrap" class="mt-3 d-none">
+          <div class="small-muted mb-1"><i class="fa-solid fa-satellite-dish me-1"></i>Running plans</div>
+          <div id="candleTicker" class="d-flex align-items-stretch gap-2 flex-nowrap overflow-auto pb-1"></div>
         </div>
 
         <!-- Full-width Candlesticks transaction history (all plans) -->
@@ -4173,21 +4183,67 @@
     document.getElementById('candleSell')?.addEventListener('click',()=>candleOrder('sell'));
     document.getElementById('candleHold')?.addEventListener('click',()=>candleOrder('hold'));
 
-    document.getElementById('candleSearchForm')?.addEventListener('submit', function(e){
-      e.preventDefault();
-      const sym=(document.getElementById('candleSymbol').value||'').trim().toUpperCase();
-      if(!sym) return;
+    // ── Multi-stock pages: open/close, switch, per-symbol draft persistence ──
+    const LS_CANDLE_PAGES = "alien_candle_pages_v1";
+    let openSymbols = [];
+    const symbolDrafts = {};              // sym -> [{type,price,qty}] unarmed in-progress lines
+    const armedSet = new Set();           // symbols with an armed server plan (for chip dots)
+    window.__candleArmed = armedSet;
+
+    function loadOpenSymbols(){ try{ const a=JSON.parse(localStorage.getItem(LS_CANDLE_PAGES)); return Array.isArray(a)?a:[]; }catch(e){ return []; } }
+    function saveOpenSymbols(){ try{ localStorage.setItem(LS_CANDLE_PAGES, JSON.stringify(openSymbols)); }catch(e){} }
+    function currentLinesData(){ return lines.map(l=>({type:l.type, price:l.price, qty:l.qty})); }
+
+    function renderChips(){
+      const wrap=document.getElementById('candlePages'); if(!wrap) return;
+      if(!openSymbols.length){ wrap.innerHTML='<span class="small-muted">No open stocks. Search one above to open a page.</span>'; return; }
+      wrap.innerHTML = openSymbols.map(s=>{
+        const active=(s===currentSymbol), isArmed=armedSet.has(s);
+        const dot=`<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${isArmed?'#26a69a':'#888'};margin-right:5px;"></span>`;
+        return `<span class="badge ${active?'bg-primary':'bg-secondary'} d-inline-flex align-items-center" style="cursor:pointer;font-size:.8rem;padding:.4rem .5rem;" data-page="${s}">
+                  ${dot}${s}<i class="fa-solid fa-xmark ms-2" data-close="${s}" title="Close page" style="cursor:pointer;"></i>
+                </span>`;
+      }).join('');
+      wrap.querySelectorAll('[data-page]').forEach(el=>el.addEventListener('click',e=>{ if(e.target.closest('[data-close]')) return; switchToSymbol(el.dataset.page); }));
+      wrap.querySelectorAll('[data-close]').forEach(el=>el.addEventListener('click',e=>{ e.stopPropagation(); closeSymbol(el.dataset.close); }));
+    }
+
+    function openSymbol(sym){
+      sym=(sym||'').trim().toUpperCase(); if(!sym) return;
+      if(!openSymbols.includes(sym)){ openSymbols.push(sym); saveOpenSymbols(); }
+      switchToSymbol(sym);
+    }
+
+    function switchToSymbol(sym){
+      if(currentSymbol && currentSymbol!==sym && !armed){ symbolDrafts[currentSymbol]=currentLinesData(); }
       currentSymbol=sym;
-      const badge=document.getElementById('candleLoadedBadge');
-      badge.textContent=sym; badge.classList.remove('d-none');
+      const badge=document.getElementById('candleLoadedBadge'); if(badge){ badge.textContent=sym; badge.classList.remove('d-none'); }
       ['candleBuy','candleSell','candleHold'].forEach(id=>{const b=document.getElementById(id); if(b) b.disabled=false;});
       document.querySelectorAll('[data-line]').forEach(b=>b.disabled=false);
       ['candleLineQty','candleLineQtyAll'].forEach(id=>{const b=document.getElementById(id); if(b) b.disabled=false;});
-      clearLines();   // trigger lines are per-symbol; server plan (if any) is restored below
+      const inp=document.getElementById('candleSymbol'); if(inp) inp.value=sym;
+      clearLines();
       applyTimeframe(sym, currentTF);
       loadStockInfo(sym);
       loadHistory(sym);
-      restorePlan(sym);   // armed plans persist server-side — reflect them here
+      restorePlanOrDraft(sym);   // armed plan (server) or local draft
+      renderChips();
+    }
+
+    function closeSymbol(sym){
+      openSymbols = openSymbols.filter(s=>s!==sym); saveOpenSymbols();
+      delete symbolDrafts[sym];
+      if(sym===currentSymbol){
+        clearLines(); armed=false;
+        if(openSymbols.length){ switchToSymbol(openSymbols[openSymbols.length-1]); }
+        else { currentSymbol=null; setArmUI(); renderChips(); }
+      } else { renderChips(); }
+    }
+
+    document.getElementById('candleSearchForm')?.addEventListener('submit', function(e){
+      e.preventDefault();
+      const sym=(document.getElementById('candleSymbol').value||'').trim().toUpperCase();
+      if(sym) openSymbol(sym);
     });
 
     document.getElementById('candleFit')?.addEventListener('click',()=>{ if(chart) chart.timeScale().fitContent(); });
@@ -4195,11 +4251,16 @@
     // The chart needs a visible, sized container — (re)fit when the tab is shown.
     document.querySelector('[data-bs-target="#tabCandles"]')?.addEventListener('shown.bs.tab', ()=>{
       initChart(); if(chart) chart.timeScale().fitContent();
-      renderCandleHist();
+      renderCandleHist(); renderTicker();
     });
     document.getElementById('candleHistRefresh')?.addEventListener('click', renderCandleHist);
     // Light auto-refresh so server-side resolutions show up without a manual reload.
     setInterval(()=>{ const pane=document.getElementById('tabCandles'); if(pane && pane.classList.contains('active')) renderCandleHist(); }, 15000);
+    setInterval(()=>{ const pane=document.getElementById('tabCandles'); if(pane && pane.classList.contains('active')) renderTicker(); }, 6000);
+    // Restore open pages + running ticker on first load.
+    openSymbols = loadOpenSymbols();
+    renderChips();
+    renderTicker();
     // Stop the Live poller when leaving the Candlesticks tab. Armed plans are
     // SERVER-owned now, so they intentionally keep running — do not disarm here.
     document.querySelector('[data-bs-target="#tabCandles"]')?.addEventListener('hide.bs.tab', ()=>{
@@ -4376,38 +4437,85 @@
         const ok=await armPlan();
         if(!ok){ this.checked=false; armed=false; setArmUI(); return; }
         armed=true; setArmUI();
+        armedSet.add(currentSymbol); delete symbolDrafts[currentSymbol];
       } else {
         await disarmPlan(); armed=false; setArmUI();
+        armedSet.delete(currentSymbol);
       }
-      renderCandleHist();
+      renderChips(); renderCandleHist(); renderTicker();
     });
 
-    // Restore armed state + lines for a symbol from the server (on load / reopen).
-    async function restorePlan(sym){
+    // ── Bottom status ticker: one tile per running (armed) plan ──────────────
+    async function renderTicker(){
+      const wrap=document.getElementById('candleTickerWrap'), box=document.getElementById('candleTicker');
+      if(!wrap||!box) return;
+      let plans={};
+      try{ const j=await (await fetch('/api/candles/plans')).json(); plans=j.plans||{}; armedSet.clear(); Object.keys(plans).forEach(s=>armedSet.add(s)); }
+      catch(e){ return; }
+      const syms=Object.keys(plans);
+      if(!syms.length){ wrap.classList.add('d-none'); box.innerHTML=''; renderChips(); return; }
+      wrap.classList.remove('d-none');
+      let quotes={};
+      try{ quotes=await (await fetch('/api/quotes?symbols='+encodeURIComponent(syms.join(',')))).json(); }catch(e){}
+      box.innerHTML = syms.map(s=>{
+        const p=plans[s], q=quotes[s]||{};
+        const px=q.price!=null? '$'+Number(q.price).toFixed(2) : '—';
+        const held=+p.entry_qty||0, avg=+p.entry_avg||0;
+        let pl='—', plcls='text-muted';
+        if(held>0 && q.price!=null && avg){ const u=(q.price-avg)*held; pl=(u>=0?'+$':'-$')+Math.abs(u).toFixed(2); plcls=u>=0?'text-success':'text-danger'; }
+        else if(+p.realized_pl){ const r=+p.realized_pl; pl=(r>=0?'+$':'-$')+Math.abs(r).toFixed(2); plcls=r>=0?'text-success':'text-danger'; }
+        const pos = held>0? (held+' @ $'+avg.toFixed(2)) : 'flat · waiting';
+        return `<div class="border rounded px-2 py-1 flex-shrink-0" style="min-width:150px;cursor:pointer;" data-tick="${s}" title="Open ${s}">
+                  <div class="d-flex justify-content-between align-items-center"><b>${s}</b><span class="small">${px}</span></div>
+                  <div class="small-muted" style="font-size:.7rem;">${pos}</div>
+                  <div class="${plcls}" style="font-size:.75rem;">${pl}</div>
+                </div>`;
+      }).join('');
+      box.querySelectorAll('[data-tick]').forEach(el=>el.addEventListener('click',()=>openSymbol(el.dataset.tick)));
+      renderChips();
+    }
+
+    function _rebuildLinesFrom(defs){
+      initChart(); clearLines();
+      (defs||[]).forEach(d=>{
+        const s=LINE_STYLE[d.type]; if(!s || !candleSeries) return;
+        const priceLine=candleSeries.createPriceLine({price:d.price, color:s.color, lineWidth:2, lineStyle:0, axisLabelVisible:true, title:s.title});
+        lines.push({id:lineSeq++, type:d.type, price:d.price, pl:priceLine, fired:!!d.fired, qty:d.qty});
+      });
+      renderLines();
+    }
+
+    // Restore a symbol's state: an armed SERVER plan wins; else a local draft; else clear.
+    async function restorePlanOrDraft(sym){
       const armEl=document.getElementById('candleArm');
+      let plan=null;
       try{
-        const r=await fetch('/api/candles/plans'); const j=await r.json();
-        const plan=(j.plans||{})[sym];
-        if(plan && plan.status==='armed'){
-          initChart(); clearLines();
-          (plan.lines||[]).forEach(pln=>{
-            const s=LINE_STYLE[pln.type]; if(!s || !candleSeries) return;
-            const priceLine=candleSeries.createPriceLine({price:pln.price, color:s.color, lineWidth:2, lineStyle:0, axisLabelVisible:true, title:s.title});
-            lines.push({id:lineSeq++, type:pln.type, price:pln.price, pl:priceLine, fired:!!pln.fired, qty:pln.qty});
-          });
-          renderLines();
-          armed=true; if(armEl) armEl.checked=true;
-        } else {
-          armed=false; if(armEl) armEl.checked=false;
-        }
-      }catch(e){ armed=false; if(armEl) armEl.checked=false; }
+        const j=await (await fetch('/api/candles/plans')).json();
+        armedSet.clear(); Object.keys(j.plans||{}).forEach(s=>armedSet.add(s));
+        plan=(j.plans||{})[sym];
+      }catch(e){}
+      renderChips();
+      // If the user switched pages while this fetch was in flight, don't stomp the
+      // now-current symbol's lines with this (stale) symbol's restore.
+      if(currentSymbol !== sym) return;
+      if(plan && plan.status==='armed'){
+        _rebuildLinesFrom(plan.lines);
+        armed=true; if(armEl) armEl.checked=true;
+      } else if(symbolDrafts[sym] && symbolDrafts[sym].length){
+        _rebuildLinesFrom(symbolDrafts[sym]);
+        armed=false; if(armEl) armEl.checked=false;
+      } else {
+        armed=false; if(armEl) armEl.checked=false;
+      }
       setArmUI();
     }
 
     buildTFButtons();
     window.__candles = { get chart(){return chart;}, get series(){return candleSeries;},
                          get lines(){return lines;}, get armed(){return armed;},
-                         addLine, clearLines, armPlan, disarmPlan, restorePlan }; // test hook
+                         get openSymbols(){return openSymbols;},
+                         addLine, clearLines, armPlan, disarmPlan,
+                         restorePlanOrDraft, openSymbol, switchToSymbol, closeSymbol, renderTicker }; // test hook
   })();
   </script>
 </body>
