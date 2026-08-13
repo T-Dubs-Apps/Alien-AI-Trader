@@ -3812,7 +3812,22 @@ _candle_plans_lock = threading.Lock()
 _candle_prev_px: Dict[str, float] = {}      # last price seen per armed symbol (crossing detection)
 _candle_watchlist_adds: "set[str]" = set()  # resolved symbols to surface on the Watchlist (client acks)
 _candle_monitor_started = False             # ensures the monitor thread starts only once
+_candle_trades = {"day": "", "n": 0}        # Candlesticks fills counted into "Trades Today"
 _CANDLE_LINE_TYPES = ("buy", "sell", "warn", "stop")
+
+
+def _bump_candle_trades() -> None:
+    """Count a Candlesticks fill toward the dashboard's 'Trades Today' stat.
+    Rolls over at midnight (local date)."""
+    today = time.strftime("%Y-%m-%d")
+    if _candle_trades["day"] != today:
+        _candle_trades["day"] = today
+        _candle_trades["n"] = 0
+    _candle_trades["n"] += 1
+
+
+def _candle_trades_today() -> int:
+    return _candle_trades["n"] if _candle_trades["day"] == time.strftime("%Y-%m-%d") else 0
 
 
 def _load_candle_plans() -> None:
@@ -3924,6 +3939,7 @@ def _candle_record_fill(symbol: str, line_id, side: str, qty: int, price: float)
             plan["outcome"] = "win" if float(plan.get("realized_pl", 0) or 0) >= 0 else "loss"
             plan["resolved_at"] = int(time.time())
             resolved = symbol
+    _bump_candle_trades()   # reflect this fill in the "Trades Today" stat
     _save_candle_plans()
     if resolved:
         _candle_prev_px.pop(resolved, None)
@@ -5016,8 +5032,14 @@ def _internal_heartbeat(eng: TradingEngine, lad: PortfolioLadderScanner) -> None
             trade_count = len(eng.trade_log)
             trade_count_source = "engine_session"
             if broker_snapshot.get("available"):
+                # Broker fill_count already counts ALL of today's Alpaca fills,
+                # including Candlesticks orders (same account) — no double count.
                 trade_count = int(broker_snapshot.get("fill_count") or 0)
                 trade_count_source = "broker_today"
+            else:
+                # Fallback path: the engine log doesn't include Candlesticks fills
+                # (those are placed by the dashboard monitor) — add them in.
+                trade_count += _candle_trades_today()
 
             _worker_status.update({
                 "running":              eng.running,

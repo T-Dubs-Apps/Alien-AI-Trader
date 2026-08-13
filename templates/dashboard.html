@@ -1499,9 +1499,32 @@
             </div>
             <div class="card">
               <div class="card-body">
-                <div class="fw-bold mb-2"><i class="fa-solid fa-clock-rotate-left me-1"></i>History</div>
-                <div id="candleHistory" class="small text-muted">No trades yet for this stock.</div>
+                <div class="fw-bold mb-2"><i class="fa-solid fa-receipt me-1"></i>Recent Orders</div>
+                <div id="candleHistory" class="small text-muted">Broker orders for the loaded stock.</div>
               </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Full-width Candlesticks transaction history (all plans) -->
+        <div class="card mt-3" id="candleHistoryCard">
+          <div class="card-body">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+              <div class="fw-bold"><i class="fa-solid fa-clock-rotate-left me-1"></i>Candlesticks History</div>
+              <button id="candleHistRefresh" class="btn btn-outline-secondary btn-sm py-0 px-2" title="Refresh history"><i class="fa-solid fa-rotate"></i></button>
+            </div>
+            <div class="table-responsive">
+              <table class="table table-sm align-middle mb-0" style="font-size:.8rem;">
+                <thead>
+                  <tr class="small-muted">
+                    <th>Stock</th><th>Status</th><th>Bought</th><th>Sold</th>
+                    <th class="text-end">Realized P/L</th><th>Opened</th><th>Updated</th><th>Notes</th>
+                  </tr>
+                </thead>
+                <tbody id="candleHistBody">
+                  <tr><td colspan="8" class="text-muted text-center py-3">No Candlesticks plans yet. Arm a stock above to start.</td></tr>
+                </tbody>
+              </table>
             </div>
           </div>
         </div>
@@ -4092,6 +4115,41 @@
       }catch(e){ box.innerHTML='<span class="text-danger">History unavailable.</span>'; }
     }
 
+    // Full Candlesticks transaction history (all plans) — bottom-of-page table.
+    async function renderCandleHist(){
+      const body=document.getElementById('candleHistBody'); if(!body) return;
+      try{
+        const j=await (await fetch('/api/candles/history')).json();
+        const plans=j.plans||[];
+        if(!plans.length){ body.innerHTML='<tr><td colspan="8" class="text-muted text-center py-3">No Candlesticks plans yet. Arm a stock above to start.</td></tr>'; return; }
+        const fmt=t=> t? new Date(t*1000).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) : '—';
+        const agg=arr=>{ const q=arr.reduce((a,e)=>a+(+e.qty||0),0); const v=arr.reduce((a,e)=>a+(+e.qty||0)*(+e.price||0),0); return q? (q+' @ $'+(v/q).toFixed(2)) : '—'; };
+        body.innerHTML=plans.map(p=>{
+          const ev=p.events||[];
+          const buys=ev.filter(e=>e.side==='buy'), sells=ev.filter(e=>e.side==='sell');
+          const rp=+p.realized_pl||0;
+          let st, cls;
+          if(p.status==='armed'){ st='Active'; cls='bg-warning text-dark'; }
+          else if(p.status==='resolved'){ st = p.outcome==='win'?'Closed · win':'Closed · loss'; cls = p.outcome==='win'?'bg-success':'bg-danger'; }
+          else { st='Disarmed'; cls='bg-secondary'; }
+          const LT={buy:'buy', sell:'sell high', warn:'warning', stop:'sell low'};
+          const note = (p.lines||[]).map(l=>l.note).filter(Boolean).join('; ')
+                       || (sells.length? (LT[sells[sells.length-1].line_type]||'') : '');
+          const plTxt = rp ? ((rp>=0?'+$':'-$')+Math.abs(rp).toFixed(2)) : '—';
+          return `<tr>
+            <td class="fw-bold">${p.symbol}</td>
+            <td><span class="badge ${cls}">${st}</span></td>
+            <td>${agg(buys)}</td>
+            <td>${agg(sells)}</td>
+            <td class="text-end ${rp>=0?'text-success':'text-danger'}">${plTxt}</td>
+            <td class="small-muted">${fmt(p.created_at)}</td>
+            <td class="small-muted">${fmt(p.updated_at)}</td>
+            <td class="small-muted">${note||''}</td>
+          </tr>`;
+        }).join('');
+      }catch(e){ body.innerHTML='<tr><td colspan="8" class="text-danger text-center py-3">History unavailable.</td></tr>'; }
+    }
+
     async function candleOrder(side){
       const msg=document.getElementById('candleActionMsg');
       if(!currentSymbol){ return; }
@@ -4137,7 +4195,11 @@
     // The chart needs a visible, sized container — (re)fit when the tab is shown.
     document.querySelector('[data-bs-target="#tabCandles"]')?.addEventListener('shown.bs.tab', ()=>{
       initChart(); if(chart) chart.timeScale().fitContent();
+      renderCandleHist();
     });
+    document.getElementById('candleHistRefresh')?.addEventListener('click', renderCandleHist);
+    // Light auto-refresh so server-side resolutions show up without a manual reload.
+    setInterval(()=>{ const pane=document.getElementById('tabCandles'); if(pane && pane.classList.contains('active')) renderCandleHist(); }, 15000);
     // Stop the Live poller when leaving the Candlesticks tab. Armed plans are
     // SERVER-owned now, so they intentionally keep running — do not disarm here.
     document.querySelector('[data-bs-target="#tabCandles"]')?.addEventListener('hide.bs.tab', ()=>{
@@ -4317,6 +4379,7 @@
       } else {
         await disarmPlan(); armed=false; setArmUI();
       }
+      renderCandleHist();
     });
 
     // Restore armed state + lines for a symbol from the server (on load / reopen).
