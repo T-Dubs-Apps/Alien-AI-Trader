@@ -297,6 +297,18 @@
     .hr-dark { border-color: var(--border); }
     .text-muted-custom { color: var(--muted) !important; }
     .small-muted { font-size: 0.82rem; color: var(--muted); }
+
+    /* Candlesticks fullscreen (maximize) mode */
+    #candleChartCard.candle-maxed {
+      position: fixed !important; inset: 0 !important; z-index: 2000 !important;
+      margin: 0 !important; border-radius: 0 !important; background: var(--card, #12161c);
+    }
+    #candleChartCard.candle-maxed .card-body { height: 100vh; display: flex; flex-direction: column; }
+    #candleChartCard.candle-maxed #candleChart { flex: 1 1 auto; height: auto !important; }
+    /* the minimize (–) button, shown top-right of the screen only when maximized */
+    #candleChartCard.candle-maxed #candleMaximize {
+      position: fixed; top: 12px; right: 14px; z-index: 2001;
+    }
   </style>
 </head>
 
@@ -1425,14 +1437,16 @@
         <div class="row g-3">
           <!-- Chart -->
           <div class="col-lg-9">
-            <div class="card">
+            <div class="card" id="candleChartCard">
               <div class="card-body p-2">
                 <div class="d-flex justify-content-between align-items-center mb-1 px-1">
                   <div id="candleTitle" class="fw-bold small">No stock loaded</div>
                   <div class="d-flex align-items-center gap-2">
                     <span id="candleLastPrice" class="fw-bold"></span>
                     <span id="candleDayChange" class="small"></span>
-                    <button id="candleFit" class="btn btn-outline-secondary btn-sm" title="Fit / reset zoom"><i class="fa-solid fa-expand"></i></button>
+                    <button id="candleFit" class="btn btn-outline-secondary btn-sm" title="Fit to data (keeps your zoom otherwise)"><i class="fa-solid fa-arrows-left-right-to-line"></i></button>
+                    <button id="candleReset" class="btn btn-outline-secondary btn-sm" title="Reset chart to default view"><i class="fa-solid fa-arrows-rotate"></i></button>
+                    <button id="candleMaximize" class="btn btn-outline-secondary btn-sm" title="Maximize chart to full screen"><i class="fa-solid fa-plus"></i></button>
                   </div>
                 </div>
                 <div id="candleChart" style="width:100%;height:460px;position:relative;">
@@ -3953,9 +3967,10 @@
       {id:'live',label:'LIVE', bars:'1-minute bars, auto-refreshing'}
     ];
     let chart=null, candleSeries=null, currentTF='1y', currentSymbol=null, inited=false, liveTimer=null;
-    // Remembers the last symbol|timeframe we auto-fit, so live refreshes DON'T
-    // snap the user's zoom/scroll back to "fit all" every cycle.
-    let _lastFitKey=null;
+    // Per symbol|timeframe saved visible range, so a user-adjusted graph is never
+    // snapped back to default on refresh, tab-switch, or page-switch. Updated live
+    // as the user zooms/pans; restored on (re)load. Cleared only by the Reset button.
+    const _savedViews = {};
 
     // Intraday bars arrive as UTC epoch seconds, and Lightweight Charts renders
     // epochs in UTC -- so the 9:30am market open was being drawn at 13:30/14:30.
@@ -4014,6 +4029,10 @@
         upColor:'#26a69a', downColor:'#ef5350', borderVisible:false,
         wickUpColor:'#26a69a', wickDownColor:'#ef5350',
       });
+      // Continuously remember the user's zoom/scroll for the current symbol+timeframe.
+      chart.timeScale().subscribeVisibleLogicalRangeChange(r=>{
+        if(r && currentSymbol) _savedViews[currentSymbol+'|'+currentTF] = r;
+      });
       inited=true;
     }
 
@@ -4033,14 +4052,17 @@
           const data = j.intraday
             ? j.candles.map(c => ({...c, time: toMarketTime(c.time)}))
             : j.candles;
-          candleSeries.setData(data);
-          // Only auto-fit on a genuinely new load (symbol or timeframe changed).
-          // On a live auto-refresh of the SAME symbol+timeframe, leave the user's
-          // current zoom/scroll untouched so the graph keeps the size they're viewing.
+          // Preserve the user's zoom/scroll per symbol+timeframe. Capture the saved
+          // range BEFORE setData (which resets it), then restore it. Only auto-fit
+          // when this symbol+timeframe has never been viewed (or after a Reset).
           const _fitKey = symbol + '|' + tf;
-          if (_lastFitKey !== _fitKey) {
+          const _prevView = _savedViews[_fitKey];
+          candleSeries.setData(data);
+          if (_prevView) {
+            try { chart.timeScale().setVisibleLogicalRange(_prevView); }
+            catch(e){ chart.timeScale().fitContent(); }
+          } else {
             chart.timeScale().fitContent();
-            _lastFitKey = _fitKey;
           }
           document.getElementById('candleChartEmpty')?.classList.add('d-none');
           const last = data[data.length-1];
@@ -4248,9 +4270,34 @@
 
     document.getElementById('candleFit')?.addEventListener('click',()=>{ if(chart) chart.timeScale().fitContent(); });
 
+    // Reset: forget the saved view for this stock+timeframe and snap back to default.
+    document.getElementById('candleReset')?.addEventListener('click',()=>{
+      if(!chart) return;
+      if(currentSymbol) delete _savedViews[currentSymbol+'|'+currentTF];
+      chart.timeScale().fitContent();
+    });
+
+    // Maximize / minimize the chart to full screen. '+' expands; while maximized a
+    // '–' sits at the top-right of the screen to return to the default size.
+    document.getElementById('candleMaximize')?.addEventListener('click',function(){
+      const card=document.getElementById('candleChartCard'); if(!card) return;
+      const maxed=card.classList.toggle('candle-maxed');
+      const icon=this.querySelector('i');
+      if(icon) icon.className = maxed ? 'fa-solid fa-minus' : 'fa-solid fa-plus';
+      this.title = maxed ? 'Minimize chart' : 'Maximize chart to full screen';
+      // Let the chart reflow to the new container size (autoSize picks it up).
+      setTimeout(()=>{ try{ window.dispatchEvent(new Event('resize')); }catch(e){} }, 60);
+    });
+    document.addEventListener('keydown',e=>{
+      if(e.key==='Escape'){
+        const card=document.getElementById('candleChartCard');
+        if(card && card.classList.contains('candle-maxed')) document.getElementById('candleMaximize')?.click();
+      }
+    });
+
     // The chart needs a visible, sized container — (re)fit when the tab is shown.
     document.querySelector('[data-bs-target="#tabCandles"]')?.addEventListener('shown.bs.tab', ()=>{
-      initChart(); if(chart) chart.timeScale().fitContent();
+      initChart();   // preserve the user's current zoom/scroll — no auto-fit here
       renderCandleHist(); renderTicker();
     });
     document.getElementById('candleHistRefresh')?.addEventListener('click', renderCandleHist);
@@ -4514,6 +4561,7 @@
     window.__candles = { get chart(){return chart;}, get series(){return candleSeries;},
                          get lines(){return lines;}, get armed(){return armed;},
                          get openSymbols(){return openSymbols;},
+                         get savedViews(){return _savedViews;},
                          addLine, clearLines, armPlan, disarmPlan,
                          restorePlanOrDraft, openSymbol, switchToSymbol, closeSymbol, renderTicker }; // test hook
   })();
