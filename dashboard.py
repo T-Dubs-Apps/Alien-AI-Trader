@@ -2552,6 +2552,20 @@ padding:12px;min-height:44px;color:var(--text)}
     <button class="b-red" onclick="revoke()">Revoke License</button>
   </div>
 
+  <div class="card">
+    <h2>&#128266; Send Update Notice</h2>
+    <label>Version</label>
+    <input id="u_version" placeholder="2026.08.17">
+    <label>Title</label>
+    <input id="u_title" placeholder="New version ready">
+    <label>Message</label>
+    <input id="u_message" placeholder="Open Settings to review and apply the latest.">
+    <label>Send to (email &mdash; blank = all active users)</label>
+    <input id="u_email" type="email" placeholder="person@example.com" autocomplete="off">
+    <button class="b-green" onclick="sendUpdate()">Create &amp; Send Update</button>
+    <div class="small">Turns on the pulsing update light on that user's dashboard. Notice only &mdash; it never changes their settings or keys.</div>
+  </div>
+
   <div class="card"><h2>Result</h2><div id="result">Ready.</div></div>
   <div class="small" style="text-align:center">&#128123; Alien AI Trader &middot; T-Dub's Apps</div>
 </div>
@@ -2588,6 +2602,29 @@ async function grant(){
     headers:{'Content-Type':'application/json','Authorization':'Bearer '+s},
     body:JSON.stringify({email:email,appId:APP_ID,tier:tier})});
   if(d)show(pretty(d),'ok');
+}
+async function sendUpdate(){
+  var s=secret();if(!s)return show('Enter your admin secret first.','err');
+  var version=(document.getElementById('u_version').value.trim()||'update');
+  var title=document.getElementById('u_title').value.trim();
+  var message=document.getElementById('u_message').value.trim();
+  if(!title||!message)return show('Enter a title and a message.','err');
+  var email=document.getElementById('u_email').value.trim();
+  show('Creating update…');
+  var c=await call('/api/updates/admin/create',{method:'POST',
+    headers:{'Content-Type':'application/json','Authorization':'Bearer '+s},
+    body:JSON.stringify({appId:APP_ID,version:version,title:title,message:message})});
+  if(!c)return;
+  var cid=c.campaign&&c.campaign.id;
+  if(!cid)return show('Created but no campaign id returned:\\n'+JSON.stringify(c,null,2),'err');
+  var body={appId:APP_ID,campaignId:cid};
+  if(email)body.emails=[email];
+  var d=await call('/api/updates/admin/send',{method:'POST',
+    headers:{'Content-Type':'application/json','Authorization':'Bearer '+s},
+    body:JSON.stringify(body)});
+  var who=email?('to '+email):'to all active users';
+  var mailed=d?(' · emailed '+(d.sent||0)+'/'+(d.targeted||0)):' · email step skipped (light still shows)';
+  show('UPDATE SENT \\u2713\\ncampaign #'+cid+' '+who+mailed+'\\nTheir pulsing light appears within ~1 min.','ok');
 }
 async function revoke(){
   var s=secret();if(!s)return show('Enter your admin secret first.','err');
