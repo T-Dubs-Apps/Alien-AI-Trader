@@ -444,6 +444,7 @@ _PUBLIC_PATH_PREFIXES = (
     "/login", "/logout", "/health", "/favicon", "/static",
     "/get", "/store", "/thankyou", "/start", "/setup",
     "/api/license/",   # license server + in-app activation (validate/pricing/checkout/admin)
+    "/api/updates/",   # update campaigns: client poll (pending/respond) + admin (admin self-protects with LICENSE_SECRET via _admin_check)
     "/api/stripe/",    # Stripe webhook
 )
 
