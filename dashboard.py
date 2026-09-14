@@ -16,7 +16,7 @@ import requests
 from collections import deque
 from datetime import datetime, timedelta, timezone
 from threading import Lock
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from audit_stream import AuditStream
 
 try:
@@ -3563,6 +3563,256 @@ def api_orders():
     except Exception as e:
         return jsonify({"status": "error", "orders": [], "message": str(e)[:160]}), 200
     return jsonify({"status": "ok", "count": len(orders), "orders": orders}), 200
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Realized P&L / trade-history export + performance summary
+#
+# Source of truth is the BROKER'S order history (Alpaca), NOT eng.trade_log:
+# the engine's log resets every session and only sees engine-placed trades,
+# whereas the broker record survives restarts and includes manual + Candlesticks
+# orders on the same account. Closed lots are matched FIFO (first shares bought
+# are the first sold), the same default the IRS and most brokers use.
+#
+# This is an informational record-keeping report to help a user SEE what they
+# made and hand clean numbers to a preparer. It is NOT an official tax document —
+# the broker's 1099-B is authoritative, and this report does not compute
+# wash-sale adjustments. That caveat is surfaced in the UI and the CSV header.
+# ═══════════════════════════════════════════════════════════════════════════
+
+_LONG_TERM_DAYS = 365   # holding period > 1 year = long-term for US cap gains
+
+
+def _parse_order_epoch(raw: Any) -> Optional[int]:
+    """Best-effort epoch seconds from an Alpaca timestamp (datetime or str)."""
+    if raw is None:
+        return None
+    try:
+        return int(raw.timestamp())
+    except Exception:
+        pass
+    try:
+        return int(datetime.fromisoformat(str(raw).replace("Z", "+00:00")).timestamp())
+    except Exception:
+        return None
+
+
+def _fifo_match_lots(orders: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Pair buys and sells into closed lots using FIFO, per symbol.
+
+    Pure function — takes a list of normalized fill dicts, returns closed lots
+    plus bookkeeping. Kept free of any Alpaca/Flask dependency so it can be unit
+    tested directly.
+
+    Each input order: {symbol, side ('buy'|'sell'), qty, price, epoch}.
+    Orders may arrive in any order; they are sorted by epoch (then buys before
+    sells at the same instant so a same-timestamp round trip matches).
+
+    Returns:
+      {
+        "lots": [ {symbol, qty, buy_price, buy_epoch, sell_price, sell_epoch,
+                   cost_basis, proceeds, gain, holding_days, term}, ... ],
+        "unmatched_sell_qty": float,   # sells with no prior buy in the window
+        "open_qty": {symbol: qty},     # buys still open (unsold) at window end
+      }
+    """
+    def _key(o: Dict[str, Any]):
+        # buys ahead of sells when the timestamp ties, so an intraday buy→sell
+        # round trip is paired instead of the sell being treated as unmatched.
+        return (o.get("epoch") or 0, 0 if o.get("side") == "buy" else 1)
+
+    from collections import defaultdict, deque
+    open_lots: Dict[str, "deque"] = defaultdict(deque)   # symbol -> deque of [qty, price, epoch]
+    closed: List[Dict[str, Any]] = []
+    unmatched_sell_qty = 0.0
+
+    for o in sorted(orders, key=_key):
+        sym = o["symbol"]
+        side = o["side"]
+        qty = float(o.get("qty") or 0)
+        price = float(o.get("price") or 0)
+        epoch = o.get("epoch")
+        if qty <= 0:
+            continue
+        if side == "buy":
+            open_lots[sym].append([qty, price, epoch])
+            continue
+        # SELL: consume open buy lots FIFO
+        remaining = qty
+        q = open_lots[sym]
+        while remaining > 1e-9 and q:
+            lot = q[0]
+            take = min(remaining, lot[0])
+            cost_basis = take * lot[1]
+            proceeds = take * price
+            buy_epoch = lot[2]
+            holding_days = None
+            if buy_epoch and epoch:
+                holding_days = max(0, int((epoch - buy_epoch) // 86400))
+            term = "—"
+            if holding_days is not None:
+                term = "long" if holding_days > _LONG_TERM_DAYS else "short"
+            closed.append({
+                "symbol": sym,
+                "qty": round(take, 6),
+                "buy_price": round(lot[1], 4),
+                "buy_epoch": buy_epoch,
+                "sell_price": round(price, 4),
+                "sell_epoch": epoch,
+                "cost_basis": round(cost_basis, 2),
+                "proceeds": round(proceeds, 2),
+                "gain": round(proceeds - cost_basis, 2),
+                "holding_days": holding_days,
+                "term": term,
+            })
+            lot[0] -= take
+            remaining -= take
+            if lot[0] <= 1e-9:
+                q.popleft()
+        if remaining > 1e-9:
+            # A sell with no matching buy inside the fetched window (e.g. the
+            # buy predates our history page). Counted, not silently dropped.
+            unmatched_sell_qty += remaining
+
+    open_qty = {sym: round(sum(l[0] for l in q), 6) for sym, q in open_lots.items() if sum(l[0] for l in q) > 1e-9}
+    return {"lots": closed, "unmatched_sell_qty": round(unmatched_sell_qty, 6), "open_qty": open_qty}
+
+
+def _realized_report(max_orders: int = 3000) -> Dict[str, Any]:
+    """Fetch the account's filled orders from the broker and build the FIFO
+    closed-lot report + a performance summary. Read-only."""
+    client = _active_alpaca()
+    if not client:
+        return {"available": False, "message": "Broker client not configured. Add your Alpaca keys in Setup."}
+
+    normalized: List[Dict[str, Any]] = []
+    try:
+        # Page backwards through history using `until` = oldest fill seen so far.
+        until = None
+        pages = 0
+        seen = 0
+        while seen < max_orders and pages < 20:
+            pages += 1
+            kw: Dict[str, Any] = {"status": "closed", "limit": 500, "direction": "desc"}
+            if until:
+                kw["until"] = until
+            batch = client.list_orders(**kw)
+            if not batch:
+                break
+            oldest_epoch = None
+            for o in batch:
+                seen += 1
+                if str(getattr(o, "status", "") or "").lower() != "filled":
+                    continue
+                side = str(getattr(o, "side", "") or "").lower()
+                if side not in ("buy", "sell"):
+                    continue
+                qty = _safe_float(getattr(o, "filled_qty", None) or getattr(o, "qty", None)) or 0.0
+                price = _safe_float(getattr(o, "filled_avg_price", None)) or 0.0
+                if qty <= 0 or price <= 0:
+                    continue
+                ep = _parse_order_epoch(getattr(o, "filled_at", None) or getattr(o, "submitted_at", None))
+                normalized.append({
+                    "symbol": str(getattr(o, "symbol", "") or "").upper(),
+                    "side": side, "qty": qty, "price": price, "epoch": ep,
+                })
+                if ep and (oldest_epoch is None or ep < oldest_epoch):
+                    oldest_epoch = ep
+            if len(batch) < 500:
+                break
+            # Step the cursor just before the oldest fill in this page.
+            if oldest_epoch:
+                until = datetime.fromtimestamp(oldest_epoch - 1, tz=timezone.utc).isoformat()
+            else:
+                break
+    except Exception as e:
+        return {"available": False, "message": f"Could not read broker order history: {str(e)[:160]}"}
+
+    matched = _fifo_match_lots(normalized)
+    lots = matched["lots"]
+
+    wins = [l for l in lots if l["gain"] > 0]
+    losses = [l for l in lots if l["gain"] < 0]
+    gross_profit = round(sum(l["gain"] for l in wins), 2)
+    gross_loss = round(sum(l["gain"] for l in losses), 2)   # negative
+    total_realized = round(gross_profit + gross_loss, 2)
+    n = len(lots)
+    summary = {
+        "closed_trades": n,
+        "total_realized": total_realized,
+        "win_count": len(wins),
+        "loss_count": len(losses),
+        "win_rate": round(100.0 * len(wins) / n, 1) if n else 0.0,
+        "avg_win": round(gross_profit / len(wins), 2) if wins else 0.0,
+        "avg_loss": round(gross_loss / len(losses), 2) if losses else 0.0,
+        "best_trade": round(max((l["gain"] for l in lots), default=0.0), 2),
+        "worst_trade": round(min((l["gain"] for l in lots), default=0.0), 2),
+        # profit factor = gross win / gross loss magnitude; >1 is net-profitable.
+        "profit_factor": round(gross_profit / abs(gross_loss), 2) if gross_loss < 0 else None,
+        "unmatched_sell_qty": matched["unmatched_sell_qty"],
+        "mode": _effective_mode(),
+    }
+    return {"available": True, "lots": lots, "summary": summary}
+
+
+@app.route("/api/performance", methods=["GET"])
+def api_performance():
+    """Realized-P&L performance summary computed from broker order history."""
+    rep = _realized_report()
+    if not rep.get("available"):
+        return jsonify({"status": "error", "message": rep.get("message", "Unavailable")}), 200
+    return jsonify({"status": "ok", "summary": rep["summary"], "trade_count": len(rep["lots"])}), 200
+
+
+@app.route("/api/export/realized.csv", methods=["GET"])
+def api_export_realized_csv():
+    """Download closed trades as CSV (cost basis, proceeds, gain, holding period).
+    A record-keeping aid — the broker's 1099-B is the authoritative tax document
+    and this report does not apply wash-sale adjustments."""
+    import csv as _csv
+    import io as _io
+
+    rep = _realized_report()
+    if not rep.get("available"):
+        return jsonify({"status": "error", "message": rep.get("message", "Unavailable")}), 200
+
+    def _fmt_date(ep: Optional[int]) -> str:
+        if not ep:
+            return ""
+        try:
+            return datetime.fromtimestamp(ep, tz=timezone.utc).strftime("%Y-%m-%d")
+        except Exception:
+            return ""
+
+    buf = _io.StringIO()
+    w = _csv.writer(buf)
+    w.writerow(["# Alien AI Trader — Realized trade history (informational, not an official tax document)"])
+    w.writerow([f"# Generated {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')} | account mode: {rep['summary'].get('mode')}"])
+    w.writerow(["# Cost basis matched FIFO. Wash-sale rules NOT applied. Your broker 1099-B is authoritative."])
+    w.writerow(["Symbol", "Qty", "Date Acquired", "Date Sold", "Cost Basis", "Proceeds",
+                "Gain/Loss", "Holding Days", "Term"])
+    for l in rep["lots"]:
+        w.writerow([
+            l["symbol"], f'{l["qty"]:g}', _fmt_date(l["buy_epoch"]), _fmt_date(l["sell_epoch"]),
+            f'{l["cost_basis"]:.2f}', f'{l["proceeds"]:.2f}', f'{l["gain"]:.2f}',
+            "" if l["holding_days"] is None else l["holding_days"], l["term"],
+        ])
+    s = rep["summary"]
+    w.writerow([])
+    w.writerow(["TOTALS", "", "", "", "", "", f'{s["total_realized"]:.2f}', "", ""])
+    w.writerow([f'# {s["closed_trades"]} closed trades | win rate {s["win_rate"]}% | '
+                f'{s["win_count"]} wins / {s["loss_count"]} losses'])
+    if s.get("unmatched_sell_qty"):
+        w.writerow([f'# NOTE: {s["unmatched_sell_qty"]:g} share(s) sold had no matching buy in the '
+                    f'fetched history window; those rows are omitted. Older history may be incomplete.'])
+
+    fname = f"alien-trader-realized-{datetime.now(timezone.utc).strftime('%Y%m%d')}.csv"
+    from flask import Response as _Response
+    return _Response(
+        buf.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
 
 
 @app.route("/api/quotes/diag", methods=["GET"])

@@ -453,6 +453,11 @@
         </button>
       </li>
       <li class="nav-item">
+        <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tabPerformance" id="tabPerformanceBtn">
+          <i class="fa-solid fa-trophy me-1"></i>Performance
+        </button>
+      </li>
+      <li class="nav-item">
         <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tabSettings">
           <i class="fa-solid fa-sliders me-1"></i>Settings
         </button>
@@ -1411,6 +1416,93 @@
               <ul id="cloudFileList" class="list-group mb-2"></ul>
             </div>
           </div>
+        </div>
+      </div>
+
+      <!-- ══ PERFORMANCE TAB ══ -->
+      <div class="tab-pane fade" id="tabPerformance">
+        <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+          <div>
+            <h5 class="mb-0"><i class="fa-solid fa-trophy me-1"></i>Realized Performance</h5>
+            <div class="stat-sub" id="perfMode">Closed trades from your broker history</div>
+          </div>
+          <div class="d-flex gap-2">
+            <button class="btn btn-sm btn-outline-light" id="perfRefreshBtn">
+              <i class="fa-solid fa-rotate me-1"></i>Refresh
+            </button>
+            <a class="btn btn-sm btn-success" id="perfExportBtn" href="/api/export/realized.csv">
+              <i class="fa-solid fa-file-csv me-1"></i>Download trade history (CSV)
+            </a>
+          </div>
+        </div>
+
+        <div id="perfMsg" class="stat-sub mb-2"></div>
+
+        <div class="row g-3 mb-3" id="perfStats">
+          <div class="col-6 col-md-3">
+            <div class="stat-card">
+              <div class="stat-label">Total Realized P&amp;L</div>
+              <div class="stat-value" id="perfTotal">—</div>
+              <div class="stat-sub">Closed trades only</div>
+            </div>
+          </div>
+          <div class="col-6 col-md-3">
+            <div class="stat-card">
+              <div class="stat-label">Win Rate</div>
+              <div class="stat-value" id="perfWinRate">—</div>
+              <div class="stat-sub" id="perfWinLoss">— wins / — losses</div>
+            </div>
+          </div>
+          <div class="col-6 col-md-3">
+            <div class="stat-card">
+              <div class="stat-label">Closed Trades</div>
+              <div class="stat-value" id="perfCount">—</div>
+              <div class="stat-sub">Matched buy → sell lots</div>
+            </div>
+          </div>
+          <div class="col-6 col-md-3">
+            <div class="stat-card">
+              <div class="stat-label">Profit Factor</div>
+              <div class="stat-value" id="perfPF">—</div>
+              <div class="stat-sub">Gross win ÷ gross loss</div>
+            </div>
+          </div>
+          <div class="col-6 col-md-3">
+            <div class="stat-card">
+              <div class="stat-label">Avg Win</div>
+              <div class="stat-value up" id="perfAvgWin">—</div>
+              <div class="stat-sub">Per winning trade</div>
+            </div>
+          </div>
+          <div class="col-6 col-md-3">
+            <div class="stat-card">
+              <div class="stat-label">Avg Loss</div>
+              <div class="stat-value down" id="perfAvgLoss">—</div>
+              <div class="stat-sub">Per losing trade</div>
+            </div>
+          </div>
+          <div class="col-6 col-md-3">
+            <div class="stat-card">
+              <div class="stat-label">Best Trade</div>
+              <div class="stat-value up" id="perfBest">—</div>
+              <div class="stat-sub">Largest single gain</div>
+            </div>
+          </div>
+          <div class="col-6 col-md-3">
+            <div class="stat-card">
+              <div class="stat-label">Worst Trade</div>
+              <div class="stat-value down" id="perfWorst">—</div>
+              <div class="stat-sub">Largest single loss</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="stat-sub" style="line-height:1.5;border-top:1px solid var(--border,#1e3058);padding-top:10px">
+          <i class="fa-solid fa-circle-info me-1"></i>
+          Cost basis is matched <strong>FIFO</strong> (first shares bought are the first sold), the standard
+          broker/IRS default. This report is a <strong>record-keeping aid</strong> to help you see what you made and
+          hand clean numbers to a preparer &mdash; it is <strong>not an official tax document</strong>, does not apply
+          wash-sale adjustments, and your broker's 1099-B is authoritative.
         </div>
       </div>
 
@@ -4300,6 +4392,36 @@
       initChart();   // preserve the user's current zoom/scroll — no auto-fit here
       renderCandleHist(); renderTicker();
     });
+
+    // ══ PERFORMANCE TAB: realized-P&L summary from broker history ══
+    async function loadPerformance(){
+      const set=(id,v)=>{ const el=document.getElementById(id); if(el) el.textContent=v; };
+      const cls=(id,pos)=>{ const el=document.getElementById(id); if(el){ el.classList.remove('up','down'); el.classList.add(pos?'up':'down'); } };
+      const msg=document.getElementById('perfMsg');
+      if(msg) msg.textContent='Loading…';
+      try{
+        const r=await fetch('/api/performance');
+        const j=await r.json();
+        if(j.status!=='ok'){ if(msg) msg.textContent=j.message||'Performance data unavailable.'; return; }
+        if(msg) msg.textContent='';
+        const s=j.summary||{};
+        set('perfMode', 'Closed trades from your '+(s.mode==='live'?'LIVE':'paper')+' broker history');
+        set('perfTotal', fmtMoney(s.total_realized)); cls('perfTotal', (s.total_realized||0)>=0);
+        set('perfWinRate', (s.win_rate!=null? s.win_rate+'%':'—'));
+        set('perfWinLoss', (s.win_count||0)+' wins / '+(s.loss_count||0)+' losses');
+        set('perfCount', s.closed_trades!=null? s.closed_trades : '—');
+        set('perfPF', s.profit_factor!=null? s.profit_factor : (s.loss_count? '—':'∞'));
+        set('perfAvgWin', fmtMoney(s.avg_win));
+        set('perfAvgLoss', fmtMoney(s.avg_loss));
+        set('perfBest', fmtMoney(s.best_trade));
+        set('perfWorst', fmtMoney(s.worst_trade));
+        if(s.unmatched_sell_qty && msg){
+          msg.textContent='Note: '+s.unmatched_sell_qty+' share(s) sold had no matching buy in the fetched history window and are omitted; older history may be incomplete.';
+        }
+      }catch(e){ if(msg) msg.textContent='Could not load performance ('+e+').'; }
+    }
+    document.querySelector('[data-bs-target="#tabPerformance"]')?.addEventListener('shown.bs.tab', loadPerformance);
+    document.getElementById('perfRefreshBtn')?.addEventListener('click', loadPerformance);
     document.getElementById('candleHistRefresh')?.addEventListener('click', renderCandleHist);
     // Light auto-refresh so server-side resolutions show up without a manual reload.
     setInterval(()=>{ const pane=document.getElementById('tabCandles'); if(pane && pane.classList.contains('active')) renderCandleHist(); }, 15000);
