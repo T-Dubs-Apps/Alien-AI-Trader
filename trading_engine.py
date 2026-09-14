@@ -2351,6 +2351,16 @@ class TradingEngine:
         # Defense in depth: never let the AI buy a Candlesticks-reserved symbol.
         if str(symbol).upper() in getattr(self, "_reserved_symbols", set()):
             return
+        # Defense in depth: the irreversible action re-checks the master
+        # kill-switch itself, so NO caller (evaluate, a future code path, or a
+        # direct call) can place a buy while auto-trade is OFF — whether it was
+        # turned off by the dashboard toggle or auto-halted by the safety shield
+        # on a drawdown. evaluate() already checks this, but the guard belongs at
+        # the money-spending action too. Note: sell() intentionally has NO such
+        # guard — exits must still run during a halt so losers can be closed.
+        if not self.auto_trade:
+            self._record_buy_decision(symbol, "BUY_BLOCKED", "auto_trade_disabled", "master switch OFF (re-checked at buy)", price)
+            return
         with self._buy_lock:
             if not self._throttle_trades():
                 self._record_buy_decision(symbol, "BUY_BLOCKED", "trade_throttled", "max trades/hour reached", price)
